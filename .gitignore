@@ -27,3 +27,5 @@ build/
 # Local secrets
 .env
 .env.*
+# Agent worktrees
+.claude/worktrees/
