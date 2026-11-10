@@ -25,15 +25,23 @@ _Avoid_: Generation (one generation can contain several Game Families)
 ### Encounters and Links
 
 **Area**:
-A place in the game that counts as one encounter location for the Run's first-encounter rule, such as a route, cave or town.
-_Avoid_: Route (too narrow), map, location
+A place in the game that counts as one encounter location for the Run's first-encounter rule, such as a route, cave or town. It is the game's own region-map section, the place name the game records as a Pokémon's met location, so every floor of a cave and every zone of the Safari Zone is one Area. Grass, surfing, fishing and rock smash in an Area all share its one Encounter.
+_Avoid_: Route (too narrow), map (one Area can span many maps), location
 
 **Encounter**:
-The first wild Pokémon a Player meets in an Area, whether or not it is caught.
+A Player's one chance at a Pokémon from a given source, whether or not it is caught. There are three kinds of source: an Area (the first wild Pokémon the Player battles there, not merely entering it), a Gift, or a Static.
 _Avoid_: Catch (a catch is only one possible outcome of an Encounter)
 
+**Gift**:
+A Pokémon the game hands a Player rather than one met in battle, such as the starter, a fossil or an egg. Where the game offers a choice, each Player's pick is still the same Gift. The starter is always allowed; other Gifts only if the Ruleset allows them.
+_Avoid_: Freebie
+
+**Static**:
+A scripted, one-off battle with a specific Pokémon, such as a legendary, Kecleon or Snorlax. Depending on the Ruleset it is either its own bonus Encounter or simply counts as the Area's Encounter if it comes first there.
+_Avoid_: Special encounter, legendary (too narrow)
+
 **Link**:
-The set of each Player's Encounter from the same Area. If any member faints, every member of the Link dies. If any Player misses or loses their Encounter in an Area, that Area is closed to everyone.
+The set of each Player's Encounter from the same source: the same Area, the same Gift, or the same Static. If any member faints, every member of the Link dies. If any Player misses, skips or loses their Encounter from a source, that source is closed to everyone.
 _Avoid_: Pair (Links can have three members), soul link (that is the name of the challenge)
 
 ### Playing together
