@@ -67,8 +67,24 @@ The lead Pokémon in a Player's party, shown walking behind that Player's charac
 _Avoid_: Walking Pokémon, pet
 
 **Dead**:
-The permanent state of a Pokémon that fainted, or whose Link-mate fainted. It can never be used again in the Run.
+The permanent state of a Pokémon that fainted, or whose Link-mate fainted. It can never be used again in the Run, unless a Retry rewinds the Run to before it happened.
 _Avoid_: Fainted (fainting is temporary in the game itself), released
+
+**Host**:
+The Player whose app puts the Run's events in order. Hosting passes to the next Player who joined if the Host leaves. The Host cannot change or invent other Players' events.
+_Avoid_: Server, admin, owner
+
+**Shadow Game**:
+A copy of another Player's game that your app runs in the background from their button presses alone, so it matches theirs exactly. Spectate shows it.
+_Avoid_: Mirror, replay (a replay is after the fact), ghost
+
+**Run Checkpoint**:
+A moment every Player's game is captured together, taken whenever any Player saves in-game and at every Sync Gate. It is what a Retry returns to.
+_Avoid_: Save (a save belongs to one Player), savestate (that is the emulator mechanism)
+
+**Retry**:
+An optional Ruleset rule: a small shared number of times the group may vote to send every Player back to the latest Run Checkpoint, undoing everything since.
+_Avoid_: Reset (one Player alone), rewind, reload
 
 ### Games and hacks
 
