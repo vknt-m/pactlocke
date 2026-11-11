@@ -14,6 +14,8 @@
 
 /* Room for several frames of audio, so 4x speed can't overflow between drains. */
 #define PACT_AUDIO_BUFFER_FRAMES 8192
+/* libmgba's GBA_AUDIO_VOLUME_MAX: the game's own mix, unscaled. */
+#define PACT_MASTER_VOLUME 0x100
 
 struct PactCore {
 	struct mCore* core;
@@ -62,6 +64,9 @@ PactCore* pact_core_new(void) {
 	mCoreInitConfig(pc->core, NULL);
 	/* Always the HLE BIOS: never load a BIOS file. */
 	mCoreConfigSetIntValue(&pc->core->config, "useBios", 0);
+	/* Full volume. Loading a config with no "volume" option sets the core's
+	 * master volume to 0, which silences every sample. */
+	mCoreConfigSetIntValue(&pc->core->config, "volume", PACT_MASTER_VOLUME);
 	mCoreLoadConfig(pc->core);
 
 	pc->core->baseVideoSize(pc->core, &pc->width, &pc->height);

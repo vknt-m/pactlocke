@@ -146,6 +146,26 @@ fn restoring_the_same_checkpoint_twice_gives_the_same_game() {
 }
 
 #[test]
+fn a_tone_the_game_plays_is_audible() {
+    let mut core = powered_on();
+    // What a game does: switch the sound chip on, route channel 1 to both
+    // speakers at full volume, and start a square wave on it.
+    core.write16(0x0400_0084, 0x0080); // SOUNDCNT_X: master enable
+    core.write16(0x0400_0080, 0x1177); // SOUNDCNT_L: channel 1 left and right, volume 7
+    core.write16(0x0400_0082, 0x0002); // SOUNDCNT_H: PSG at 100%
+    core.write16(0x0400_0062, 0xF080); // SOUND1CNT_H: envelope 15, 50% duty
+    core.write16(0x0400_0064, 0x8600); // SOUND1CNT_X: restart at a middle frequency
+
+    let mut audio = Vec::new();
+    for _ in 0..10 {
+        core.run_frame(Keys::NONE);
+        core.drain_audio(&mut audio);
+    }
+    let peak = audio.iter().map(|s| i32::from(*s).abs()).max().unwrap_or(0);
+    assert!(peak > 1000, "the square wave should be audible, peak was {peak}");
+}
+
+#[test]
 fn a_corrupt_checkpoint_is_refused() {
     let mut core = powered_on();
     let mut checkpoint = core.checkpoint();
