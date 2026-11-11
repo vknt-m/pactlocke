@@ -70,6 +70,10 @@ _Avoid_: Walking Pokémon, pet
 The permanent state of a Pokémon that fainted, or whose Link-mate fainted. It can never be used again in the Run, unless a Retry rewinds the Run to before it happened.
 _Avoid_: Fainted (fainting is temporary in the game itself), released
 
+**Violation**:
+A Ruleset rule broken in a way the app could not stop. It is shown to every Player, flagged in red in the live feed.
+_Avoid_: Strike, cheat (cheating is tampering with the game, not breaking a rule)
+
 **Host**:
 The Player whose app puts the Run's events in order. Hosting passes to the next Player who joined if the Host leaves. The Host cannot change or invent other Players' events.
 _Avoid_: Server, admin, owner
