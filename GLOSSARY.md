@@ -96,9 +96,9 @@ _Avoid_: Reset (one Player alone), rewind, reload
 A patched, fan-made game built on one of the supported Game Families. A Run can be played on a Romhack in place of the original game.
 _Avoid_: Mod, fan game, hack (alone)
 
-**Hack Profile**:
-Everything Pactlocke needs to know about one exact version of a Romhack so a Run can be played on it, such as its places, Gifts, Statics and level caps. A Romhack without one is either Untested or not supported.
-_Avoid_: Mod config, hack pack
+**Game Profile**:
+Everything Pactlocke needs to know about one exact game, an original or a Romhack, so a Run can be played on it, such as its places, Gifts, Statics and level caps. A Romhack without one is either Untested or not supported.
+_Avoid_: Hack Profile (original games have one too), mod config, hack pack
 
 **Shared Seed**:
 An optional Ruleset rule that gives every Player the same randomized game. Without it, each Player's randomized game is different.
