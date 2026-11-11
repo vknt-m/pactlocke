@@ -1,0 +1,18 @@
+[package]
+name = "pactlocke-app"
+description = "Pactlocke: play GBA Pokemon challenge runs together."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "pactlocke"
+path = "src/main.rs"
+
+[dependencies]
+cpal = "0.18.2"
+eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "default_fonts", "accesskit", "x11", "wayland"] }
+pactlocke-emu = { path = "../pactlocke-emu" }
+pactlocke-mgba = { path = "../pactlocke-mgba" }
+rfd = "0.18.0"
