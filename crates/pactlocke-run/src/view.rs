@@ -1,6 +1,6 @@
 //! What the side panel shows of a Run. The UI only displays it.
 
-use crate::event::{AreaRef, DeathCause, Recorded, RunEvent};
+use crate::event::{AreaRef, DeathCause, DeclineReason, Recorded, RunEvent};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RunView {
@@ -46,6 +46,20 @@ impl Grave {
     }
 }
 
+/// "Route 1: …", or the text alone outside a listed Area.
+fn at(area: Option<&AreaRef>, text: String) -> String {
+    match area {
+        Some(area) => format!("{}: {text}", area.name),
+        None => {
+            let mut chars = text.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().chain(chars).collect())
+                .unwrap_or_default()
+        }
+    }
+}
+
 fn killed_by(cause: &DeathCause, area: Option<&AreaRef>) -> String {
     let what = match cause {
         DeathCause::Wild { foe } => format!("a wild {foe}"),
@@ -79,6 +93,8 @@ pub enum FeedKind {
     Problem,
     /// A Death, or a Dead Pokémon moved to the Dead box.
     Death,
+    /// A Gift or trade received, declined or released.
+    Gift,
     /// A rule broken in a way the app couldn't stop; shown in red.
     Violation,
 }
@@ -128,7 +144,82 @@ impl FeedEntry {
             ),
             RunEvent::BlockFailed { area, reason } => (
                 FeedKind::Problem,
-                format!("{}: couldn't block catching: {reason}", area.name),
+                at(area.as_ref(), format!("couldn't block catching: {reason}")),
+            ),
+            RunEvent::Gift {
+                species_name,
+                area,
+                source,
+                starter,
+                ..
+            } => (
+                FeedKind::Gift,
+                at(
+                    area.as_ref(),
+                    match (source, starter) {
+                        (Some(source), true) => format!("received {species_name}, the {}", source.name),
+                        (Some(source), false) => format!("received {species_name} from the {}", source.name),
+                        (None, _) => {
+                            format!("received {species_name}, an unknown Gift (the Game Profile doesn't list it)")
+                        }
+                    },
+                ),
+            ),
+            RunEvent::Traded {
+                gave,
+                species_name,
+                area,
+                ..
+            } => (
+                FeedKind::Gift,
+                at(area.as_ref(), format!("traded {gave} for {species_name}, a Gift")),
+            ),
+            RunEvent::GiftDeclined {
+                species_name, reason, ..
+            } => (
+                FeedKind::Gift,
+                match reason {
+                    DeclineReason::GiftsOff => format!(
+                        "{species_name} can't be kept: this Ruleset allows no Gifts but the starter, so it is released"
+                    ),
+                    DeclineReason::SourceUsed => {
+                        format!("{species_name} can't be kept: that Gift's Encounter is used, so it is released")
+                    }
+                },
+            ),
+            RunEvent::Released { species_name, .. } => (FeedKind::Gift, format!("Released {species_name}")),
+            RunEvent::ReleaseFailed {
+                species_name, reason, ..
+            } => (
+                FeedKind::Violation,
+                format!("Violation: {species_name} should have been released but couldn't be: {reason}"),
+            ),
+            RunEvent::StaticEncounter {
+                area,
+                source,
+                species_name,
+                ..
+            } => (
+                FeedKind::Encounter,
+                at(
+                    area.as_ref(),
+                    format!("{species_name}, the {}: a bonus Static Encounter", source.name),
+                ),
+            ),
+            RunEvent::StaticBlocked {
+                area,
+                source,
+                species_name,
+                ..
+            } => (
+                FeedKind::Block,
+                at(
+                    area.as_ref(),
+                    format!(
+                        "{species_name}, the {}: this Static's Encounter is used, so no catching it (running is fine)",
+                        source.name
+                    ),
+                ),
             ),
             RunEvent::Died { name, area, cause, .. } => {
                 let how = match cause {

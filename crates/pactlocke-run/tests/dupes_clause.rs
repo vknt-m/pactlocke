@@ -170,11 +170,15 @@ fn the_same_species_is_a_dupe_with_random_evolutions_too() {
 }
 
 #[test]
-fn a_scripted_battle_with_a_dupe_is_left_alone() {
+fn a_static_is_never_a_dupe() {
+    // With the Statics rule off, a Static is the Area's Encounter if it comes first, dupe or not.
     let mut player = player_with_a_pidgey(dupes_clause());
     player.meets_scripted(PIDGEOTTO);
     assert!(!player.game.catches_blocked);
-    assert!(player.feed(FeedKind::Encounter).is_empty());
+    assert_eq!(
+        player.feed(FeedKind::Encounter)[0],
+        "Route 1: a wild PIDGEOTTO, this Area's Encounter"
+    );
 }
 
 #[test]

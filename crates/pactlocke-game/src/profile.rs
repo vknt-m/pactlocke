@@ -44,6 +44,9 @@ pub struct GameProfile {
     /// Sections that count as another section's Area.
     #[serde(default, deserialize_with = "hex_keys")]
     pub area_merges: BTreeMap<u16, u16>,
+    /// The Gift and Static catalogue.
+    #[serde(default)]
+    pub sources: Vec<crate::SourceDef>,
 }
 
 impl GameProfile {
@@ -134,11 +137,16 @@ pub struct Layout {
     pub battle_mon_hp: u32,
     pub battle_type_trainer: u32,
     pub battle_type_double: u32,
+    /// Battle types nobody can catch in (catching demos, ghosts): no one's Encounter.
+    pub battle_type_uncatchable: u32,
     pub perish_song_status3: u32,
     pub disable_struct_size: u32,
     pub perish_timer: u32,
     /// The current script instruction's offset in the script context.
     pub script_context_pointer: u32,
+    /// The script context's call depth (a byte) and its stack of return addresses.
+    pub script_context_stack_depth: u32,
+    pub script_context_stack: u32,
     pub species_info_size: u32,
     pub species_name_length: u32,
     /// Species in the species tables, counting species 0.

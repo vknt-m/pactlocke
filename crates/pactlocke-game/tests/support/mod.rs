@@ -96,10 +96,13 @@ battle_mon_size = 0x58
 battle_mon_hp = 0x28
 battle_type_trainer = 0x08
 battle_type_double = 0x01
+battle_type_uncatchable = 0x18200
 perish_song_status3 = 0x20
 disable_struct_size = 0x1C
 perish_timer = 0x0F
 script_context_pointer = 0x08
+script_context_stack_depth = 0x00
+script_context_stack = 0x0C
 species_info_size = 28
 species_name_length = 11
 species_count = 412
@@ -165,6 +168,30 @@ battle_communication = 0x02023E82
 
 [area_renames]
 0x8C = "Pokémon Tower"
+
+[[sources]]
+key = "starter"
+name = "Starter"
+kind = "starter"
+at = [0x08006000]
+
+[[sources]]
+key = "snorlax_route_12"
+name = "Snorlax on Route 12"
+kind = "static"
+at = [0x08006100]
+
+[[sources]]
+key = "mt_moon_fossil"
+name = "Mt. Moon fossil"
+kind = "gift"
+at = [0x08006200, 0x08006240]
+
+[[sources]]
+key = "togepi_egg"
+name = "Togepi egg"
+kind = "egg"
+at = [0x08006300]
 "#;
 
 /// A GBA address space in memory: EWRAM, IWRAM and a ROM, for driving the

@@ -4,8 +4,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use pactlocke_game::{Area, BattleKind};
+use pactlocke_game::{Area, BattleKind, Source, SourceKind};
 
+use crate::event::DeclineReason;
 use crate::families::EvolutionFamilies;
 use crate::{Ruleset, RunEvent};
 
@@ -19,6 +20,23 @@ pub(crate) struct BattleStart<'a> {
     pub foe: u16,
     /// The PID and species of every Pokémon in the Player's party and PC as it began.
     pub owned: &'a [(u32, u16)],
+    /// For a battle a script started: the Static source it is, listed or not.
+    pub static_key: Option<&'a str>,
+}
+
+/// Where a Gift came from.
+pub(crate) enum GiftOrigin {
+    /// A source the Game Profile lists.
+    Listed(Source),
+    /// A script gave it, but the Game Profile doesn't list the instruction.
+    Unknown,
+    Trade,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GiftVerdict {
+    Keep,
+    Decline(DeclineReason),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +52,10 @@ pub(crate) enum Verdict {
     /// The dupes clause: the Player has a living Pokémon of this species'
     /// family (`of`), so it isn't the Encounter, and can't be caught.
     Dupe { of: u16 },
+    /// The Statics rule: a bonus Encounter of the Static's own; catching is allowed.
+    StaticEncounter,
+    /// A Static whose Encounter is used: ball throws are refused.
+    StaticUsed,
 }
 
 pub(crate) struct Rules {
@@ -46,6 +68,10 @@ pub(crate) struct Rules {
     dead: BTreeMap<u32, DeadState>,
     /// The loaded game's evolution families, once the dupes clause needs them.
     families: Option<EvolutionFamilies>,
+    /// Gift and Static sources whose one Encounter is used.
+    used_sources: BTreeSet<String>,
+    /// Declined Gifts not yet released.
+    to_release: BTreeSet<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,13 +98,18 @@ impl Rules {
             had_poke_balls: false,
             dead: BTreeMap::new(),
             families: None,
+            used_sources: BTreeSet::new(),
+            to_release: BTreeSet::new(),
         }
     }
 
     /// What a battle that just began means.
     pub fn battle_started(&self, start: &BattleStart) -> Verdict {
-        if !self.ruleset.first_encounter || start.kind != BattleKind::Wild || !start.script_idle {
+        if !self.ruleset.first_encounter || start.kind != BattleKind::Wild {
             return Verdict::Nothing;
+        }
+        if !start.script_idle {
+            return self.static_started(start);
         }
         match start.area {
             None => Verdict::Nothing,
@@ -89,6 +120,49 @@ impl Rules {
                 None => Verdict::Encounter,
             },
         }
+    }
+
+    /// A Static: with the Statics rule a bonus Encounter of its own, without
+    /// it only the Area's first Encounter (never a dupe).
+    fn static_started(&self, start: &BattleStart) -> Verdict {
+        if self.statics() {
+            return match start.static_key {
+                Some(key) if self.used_sources.contains(key) => Verdict::StaticUsed,
+                _ => Verdict::StaticEncounter,
+            };
+        }
+        match start.area {
+            None => Verdict::Nothing,
+            Some(_) if !self.had_poke_balls => Verdict::NotCounted,
+            Some(area) if self.closed.contains(&area.id) => Verdict::BlockCatches,
+            Some(_) => Verdict::Encounter,
+        }
+    }
+
+    fn statics(&self) -> bool {
+        self.ruleset.statics_available() && self.ruleset.statics
+    }
+
+    /// Whether a Gift may be kept. The starter always may, and so may an
+    /// unknown Gift, which can't be told apart from a Pokémon the Ruleset allows.
+    pub fn gift_received(&self, origin: &GiftOrigin) -> GiftVerdict {
+        match origin {
+            GiftOrigin::Listed(source) if source.kind == SourceKind::Starter => GiftVerdict::Keep,
+            GiftOrigin::Unknown => GiftVerdict::Keep,
+            _ if !self.ruleset.gifts => GiftVerdict::Decline(DeclineReason::GiftsOff),
+            GiftOrigin::Listed(source) if self.used_sources.contains(&source.key) => {
+                GiftVerdict::Decline(DeclineReason::SourceUsed)
+            }
+            _ => GiftVerdict::Keep,
+        }
+    }
+
+    pub fn to_release(&self, pid: u32) -> bool {
+        self.to_release.contains(&pid)
+    }
+
+    pub fn any_to_release(&self) -> bool {
+        !self.to_release.is_empty()
     }
 
     fn dupes_clause(&self) -> bool {
@@ -147,6 +221,18 @@ impl Rules {
                 self.closed.insert(area.id);
             }
             RunEvent::PokeBallsObtained => self.had_poke_balls = true,
+            RunEvent::Gift {
+                source: Some(source), ..
+            }
+            | RunEvent::StaticEncounter { source, .. } => {
+                self.used_sources.insert(source.key.clone());
+            }
+            RunEvent::GiftDeclined { pid, .. } => {
+                self.to_release.insert(*pid);
+            }
+            RunEvent::Released { pid, .. } => {
+                self.to_release.remove(pid);
+            }
             RunEvent::Died { pid, .. } => {
                 self.dead.insert(*pid, DeadState::NotMovedYet);
             }

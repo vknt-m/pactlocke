@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use pactlocke_emu::{CoreAdapter, Keys};
-use pactlocke_game::{Capability, Game, ProfileGame, ProfileStore, RomIdentity, Rule, ScriptStatus};
+use pactlocke_game::{Capability, Game, ProfileGame, ProfileStore, RomIdentity, Rule, ScriptStatus, SourceKind};
 use pactlocke_mgba::MgbaCore;
 
 const FIRERED_FILE: &str = "Pokemon - FireRed Version (USA).gba";
@@ -191,4 +191,29 @@ fn evolutions_read_from_the_real_rom_match_the_games_families() {
     assert_eq!(evolutions[290].len(), 2, "Nincada to Ninjask, and Shedinja");
     let evolving = evolutions.iter().filter(|into| !into.is_empty()).count();
     assert!(evolving < 200, "fewer than half evolve in the real game: {evolving}");
+}
+
+#[test]
+fn every_catalogued_gift_and_static_is_its_script_instruction_in_the_real_rom() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        return;
+    };
+    let store = ProfileStore::bundled().unwrap();
+    let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
+        panic!("FireRed should be profiled");
+    };
+    assert!(profile.sources.iter().any(|s| s.kind == SourceKind::Starter));
+    for source in &profile.sources {
+        // givemon, giveegg and setwildbattle in the game's script language.
+        let opcode = match source.kind {
+            SourceKind::Starter | SourceKind::Gift => 0x79,
+            SourceKind::Egg => 0x7A,
+            SourceKind::Static => 0xB6,
+        };
+        for &at in &source.at {
+            let byte = rom[(at - 0x0800_0000) as usize];
+            assert_eq!(byte, opcode, "{} at {at:#010X}", source.key);
+        }
+    }
 }

@@ -46,7 +46,53 @@ pub enum RunEvent {
         species_name: String,
     },
     /// A block the rules called for couldn't be applied.
-    BlockFailed { area: AreaRef, reason: String },
+    BlockFailed { area: Option<AreaRef>, reason: String },
+    /// A script gave the Player a Pokémon. `source` is the catalogued Gift it
+    /// matched, or `None` for an unknown Gift the Game Profile doesn't list.
+    Gift {
+        pid: u32,
+        species: u16,
+        species_name: String,
+        area: Option<AreaRef>,
+        source: Option<SourceRef>,
+        starter: bool,
+    },
+    /// An in-game trade: the Player gave `gave` and received this Pokémon, a Gift.
+    Traded {
+        gave: String,
+        pid: u32,
+        species: u16,
+        species_name: String,
+        area: Option<AreaRef>,
+    },
+    /// The Ruleset doesn't let the Player keep this Gift, so it is to be released.
+    GiftDeclined {
+        pid: u32,
+        species_name: String,
+        reason: DeclineReason,
+    },
+    /// A declined Gift was released.
+    Released { pid: u32, species_name: String },
+    /// A Violation: a declined Gift couldn't be released.
+    ReleaseFailed {
+        pid: u32,
+        species_name: String,
+        reason: String,
+    },
+    /// The Statics rule: a Static is a bonus Encounter of its own.
+    StaticEncounter {
+        area: Option<AreaRef>,
+        source: SourceRef,
+        species: u16,
+        species_name: String,
+    },
+    /// A Static whose Encounter is used already: ball throws are refused for it.
+    StaticBlocked {
+        area: Option<AreaRef>,
+        source: SourceRef,
+        species: u16,
+        species_name: String,
+    },
     /// A Pokémon fainted, so it is Dead for the rest of the Run.
     Died {
         pid: u32,
@@ -65,6 +111,33 @@ pub enum RunEvent {
     DeadBoxFull { pid: u32, name: String, box_number: u8 },
     /// A Violation: a Dead Pokémon couldn't be moved out of the party.
     DeadBoxFailed { pid: u32, name: String, reason: String },
+}
+
+/// A Gift or Static source, as the log keeps it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceRef {
+    /// The same in every Player's game for the same Gift or Static.
+    pub key: String,
+    pub name: String,
+}
+
+impl From<pactlocke_game::Source> for SourceRef {
+    fn from(source: pactlocke_game::Source) -> Self {
+        Self {
+            key: source.key,
+            name: source.name,
+        }
+    }
+}
+
+/// Why a Gift isn't kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclineReason {
+    /// The Ruleset allows no Gifts but the starter.
+    GiftsOff,
+    /// The Gift's source has given its one Encounter already.
+    SourceUsed,
 }
 
 /// What made a Pokémon faint.

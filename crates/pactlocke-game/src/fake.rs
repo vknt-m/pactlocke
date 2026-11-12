@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use crate::game::{
     Actions, Badges, Battle, Change, Game, GameError, Pokemon, ScriptContext, ScriptStatus, StoredPokemon,
 };
-use crate::{Area, text};
+use crate::{Area, Source, SourceDef, text};
 
 /// The fake's changes are addressed here, where no real game has memory, with
 /// the action in the low bits and its arguments as the bytes.
@@ -22,6 +22,8 @@ const FAINT_BENCHED: u32 = 6;
 const MOVE_TO_BOX: u32 = 7;
 const NICKNAME: u32 = 8;
 const SET_OPTION: u32 = 9;
+const RELEASE_FROM_PARTY: u32 = 10;
+const RELEASE_FROM_PC: u32 = 11;
 
 const PC_BOXES: u8 = 14;
 const PC_BOX_SLOTS: u8 = 30;
@@ -36,6 +38,8 @@ pub struct FakeGame {
     pub battle: Option<Battle>,
     pub opponent_party: Vec<Pokemon>,
     pub script: ScriptContext,
+    /// The running script's return addresses, innermost first.
+    pub script_calls: Vec<u32>,
     pub badges: Badges,
     /// Option settings by name, such as `battle_style = "shift"`.
     pub options: BTreeMap<String, String>,
@@ -48,6 +52,8 @@ pub struct FakeGame {
     pub species_names: BTreeMap<u16, String>,
     /// What each species can evolve into; a species not listed doesn't evolve.
     pub evolutions: BTreeMap<u16, Vec<u16>>,
+    /// The Gift and Static catalogue, as a Game Profile lists it.
+    pub sources: Vec<SourceDef>,
     pub safe_point: bool,
     pub holds_poke_balls: bool,
 
@@ -75,6 +81,7 @@ impl Default for FakeGame {
                 status: ScriptStatus::Idle,
                 position: None,
             },
+            script_calls: Vec::new(),
             badges: Badges::default(),
             options: BTreeMap::from([("battle_style".to_owned(), "shift".to_owned())]),
             option_values: BTreeMap::from([("battle_style".to_owned(), vec!["shift".to_owned(), "set".to_owned()])]),
@@ -82,6 +89,7 @@ impl Default for FakeGame {
             primary_types: BTreeMap::new(),
             species_names: BTreeMap::new(),
             evolutions: BTreeMap::new(),
+            sources: Vec::new(),
             safe_point: true,
             holds_poke_balls: true,
             catches_blocked: false,
@@ -138,6 +146,12 @@ impl FakeGame {
                         pokemon,
                     });
                 }
+                RELEASE_FROM_PARTY => {
+                    self.party.remove(usize::from(bytes[0]));
+                }
+                RELEASE_FROM_PC => {
+                    self.pc.retain(|s| (s.box_number, s.slot) != (bytes[0], bytes[1]));
+                }
                 NICKNAME => {
                     self.party[usize::from(bytes[0])].nickname = String::from_utf8(bytes[1..].to_vec()).unwrap();
                 }
@@ -185,6 +199,10 @@ impl Game for FakeGame {
         self.script
     }
 
+    fn script_calls(&mut self) -> Vec<u32> {
+        self.script_calls.clone()
+    }
+
     fn badges(&mut self) -> Badges {
         self.badges
     }
@@ -221,6 +239,10 @@ impl Game for FakeGame {
                 self.evolutions.get(&species).cloned().unwrap_or_default()
             })
             .collect()
+    }
+
+    fn source_before(&mut self, position: u32) -> Option<Source> {
+        crate::source::source_before(&self.sources, position)
     }
 
     fn at_safe_overworld_point(&mut self) -> bool {
@@ -272,6 +294,21 @@ impl Game for FakeGame {
             .find(|slot| !self.pc.iter().any(|s| s.box_number == box_number && s.slot == *slot))
             .ok_or(GameError::BoxFull(box_number))?;
         Ok(vec![fake_write(MOVE_TO_BOX, vec![party_slot, box_number, free])])
+    }
+
+    fn release_from_party(&mut self, party_slot: u8) -> Actions {
+        self.check_party_slot(party_slot)?;
+        Ok(vec![fake_write(RELEASE_FROM_PARTY, vec![party_slot])])
+    }
+
+    fn release_from_pc(&mut self, box_number: u8, slot: u8) -> Actions {
+        if !(1..=PC_BOXES).contains(&box_number) {
+            return Err(GameError::NoSuchBox(box_number));
+        }
+        if !self.pc.iter().any(|s| (s.box_number, s.slot) == (box_number, slot)) {
+            return Err(GameError::NoSuchSlot(slot));
+        }
+        Ok(vec![fake_write(RELEASE_FROM_PC, vec![box_number, slot])])
     }
 
     fn move_to_dead_box(&mut self, party_slot: u8) -> Actions {

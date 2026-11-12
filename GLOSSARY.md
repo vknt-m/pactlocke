@@ -41,7 +41,7 @@ Under the dupes clause, a wild Pokémon from an evolution family the Player has 
 _Avoid_: Duplicate encounter, repeat
 
 **Gift**:
-A Pokémon the game hands a Player rather than one met in battle, such as the starter, a fossil or an egg. Where the game offers a choice, each Player's pick is still the same Gift. The starter is always allowed; other Gifts only if the Ruleset allows them.
+A Pokémon the game hands a Player rather than one met in battle, such as the starter, a fossil or an egg. Where the game offers a choice, each Player's pick is still the same Gift. The starter is always allowed; other Gifts only if the Ruleset allows them, and a Gift not allowed is released. An in-game trade is a Gift too.
 _Avoid_: Freebie
 
 **Static**:

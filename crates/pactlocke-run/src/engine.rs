@@ -1,9 +1,11 @@
+mod gifts;
+
 use std::collections::BTreeSet;
 
 use pactlocke_emu::Keys;
 use pactlocke_game::{Area, Battle, BattleKind, Change, Game, GameError, Pokemon, ScriptStatus, Side};
 
-use crate::event::{AreaRef, DeathCause};
+use crate::event::{AreaRef, DeathCause, SourceRef};
 use crate::families::EvolutionFamilies;
 use crate::rules::{BattleStart, DeadMove, Rules, Verdict};
 use crate::storage::{InputBatch, RunInfo, RunStorage, Stamped, StorageError};
@@ -41,12 +43,18 @@ pub struct RunEngine {
     /// Dead PIDs that couldn't be moved to the Dead box since the game was booted;
     /// they aren't tried again until it is booted afresh.
     dead_box_failed: BTreeSet<u32>,
+    /// What the engine has seen of the Player's Pokémon, once a game is loaded.
+    known: Option<gifts::SeenPokemon>,
+    /// Declined Gifts that couldn't be released since the game was booted.
+    release_failed: BTreeSet<u32>,
 }
 
 /// A battle in progress, as the engine saw it begin.
 struct BattleWatch {
     kind: BattleKind,
     script_idle: bool,
+    /// Where the script that started it was, for a Static.
+    script_position: Option<u32>,
     area: Option<Area>,
     /// The PID and species of every Pokémon in the party and PC when it began.
     owned_before: Vec<(u32, u16)>,
@@ -125,6 +133,8 @@ impl RunEngine {
             view_version: 0,
             write_failure_shown: false,
             dead_box_failed: BTreeSet::new(),
+            known: None,
+            release_failed: BTreeSet::new(),
         }
     }
 
@@ -180,9 +190,11 @@ impl RunEngine {
         let battle = game.battle();
         match (self.battle.is_some(), battle.clone()) {
             (false, Some(battle)) => {
+                let script = game.script();
                 self.battle = Some(BattleWatch {
                     kind: battle.kind,
-                    script_idle: game.script().status == ScriptStatus::Idle,
+                    script_idle: script.status == ScriptStatus::Idle,
+                    script_position: script.position,
                     area: game.area(),
                     owned_before: owned(game),
                     decided: false,
@@ -192,7 +204,11 @@ impl RunEngine {
             }
             (true, Some(_)) => self.decide(game),
             (true, None) => self.battle_ended(game),
-            (false, None) => {}
+            (false, None) => self.watch_gifts(game),
+        }
+
+        if battle.is_none() && game.at_safe_overworld_point() && game.script().status == ScriptStatus::Idle {
+            self.release_the_declined(game);
         }
 
         if self.rules.faint_is_dead() {
@@ -273,12 +289,23 @@ impl RunEngine {
                 .set_families(EvolutionFamilies::from_evolutions(&game.evolutions()));
         }
         let watch = self.battle.as_ref().expect("a battle is being watched");
+        let static_source = (!watch.script_idle).then(|| {
+            let listed = gifts::source_of(game, watch.script_position);
+            match listed {
+                Some(source) => SourceRef::from(source),
+                None => SourceRef {
+                    key: format!("unknown_static_{}_{species}", watch.area.as_ref().map_or(0, |a| a.id)),
+                    name: "unknown Static (the Game Profile doesn't list it)".to_owned(),
+                },
+            }
+        });
         let verdict = self.rules.battle_started(&BattleStart {
             kind: watch.kind,
             script_idle: watch.script_idle,
             area: watch.area.as_ref(),
             foe: species,
             owned: &watch.owned_before,
+            static_key: static_source.as_ref().map(|s| s.key.as_str()),
         });
         let area = watch.area.as_ref().map(AreaRef::from);
         self.battle.as_mut().unwrap().decided = true;
@@ -300,13 +327,31 @@ impl RunEngine {
                     species_name,
                 });
             }
+            (Verdict::StaticEncounter, area) => {
+                let source = static_source.expect("a Static has a source");
+                self.record(RunEvent::StaticEncounter {
+                    area,
+                    source,
+                    species,
+                    species_name: game.species_name(species),
+                });
+            }
+            (Verdict::StaticUsed, area) => {
+                let event = RunEvent::StaticBlocked {
+                    area: area.clone(),
+                    source: static_source.expect("a Static has a source"),
+                    species,
+                    species_name: game.species_name(species),
+                };
+                self.block_catches_then(game, area, event);
+            }
             (Verdict::BlockCatches, Some(area)) => {
                 let event = RunEvent::CatchesBlocked {
                     area: area.clone(),
                     species,
                     species_name: game.species_name(species),
                 };
-                self.block_catches_then(game, area, event);
+                self.block_catches_then(game, Some(area), event);
             }
             (Verdict::Dupe { of }, Some(area)) => {
                 let event = RunEvent::DupeSkipped {
@@ -315,14 +360,14 @@ impl RunEngine {
                     species_name: game.species_name(species),
                     dupe_of: game.species_name(of),
                 };
-                self.block_catches_then(game, area, event);
+                self.block_catches_then(game, Some(area), event);
             }
             _ => {}
         }
     }
 
     /// Refuses ball throws for this battle and records `event`, or records why it couldn't.
-    fn block_catches_then(&mut self, game: &mut impl LiveGame, area: AreaRef, event: RunEvent) {
+    fn block_catches_then(&mut self, game: &mut impl LiveGame, area: Option<AreaRef>, event: RunEvent) {
         match game.block_catches(true) {
             Ok(changes) => {
                 self.apply(changes, game);
@@ -337,6 +382,11 @@ impl RunEngine {
     }
 
     fn battle_ended(&mut self, game: &mut impl LiveGame) {
+        self.record_catches(game);
+        self.see_the_pokemon_after_battle(game);
+    }
+
+    fn record_catches(&mut self, game: &mut impl LiveGame) {
         let watch = self.battle.take().expect("a battle was being watched");
         if watch.catches_blocked {
             // The block applied, so lifting it can't fail.
@@ -379,7 +429,7 @@ impl RunEngine {
             Some(battle) => {
                 let foe = foe_name(battle, game);
                 match battle.kind {
-                    BattleKind::Wild => DeathCause::Wild { foe },
+                    BattleKind::Wild | BattleKind::Uncatchable => DeathCause::Wild { foe },
                     BattleKind::Trainer => DeathCause::Trainer { foe },
                 }
             }
@@ -524,7 +574,7 @@ fn foe_name(battle: &Battle, game: &mut impl Game) -> String {
 }
 
 /// Its nickname, or its species name if it has none.
-fn display_name(pokemon: &Pokemon, species_name: &str) -> String {
+pub(super) fn display_name(pokemon: &Pokemon, species_name: &str) -> String {
     if pokemon.nickname.is_empty() {
         species_name.to_owned()
     } else {

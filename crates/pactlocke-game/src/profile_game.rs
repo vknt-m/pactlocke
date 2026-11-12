@@ -8,7 +8,7 @@ use crate::game::{
     ScriptStatus, Side, StoredPokemon,
 };
 use crate::profile::{GameProfile, Method, PatchSite, ROM_BASE};
-use crate::{Area, text};
+use crate::{Area, Source, text};
 
 /// The order of the four substructures (Growth, Attacks, EVs, Misc) for each
 /// PID mod 24.
@@ -169,6 +169,28 @@ impl<M: Memory> ProfileGame<M> {
             .collect()
     }
 
+    /// The party slot's bytes, and the writes that take it out of the party:
+    /// the slots after it move up and the count goes down.
+    fn take_from_party(&mut self, party_slot: u8) -> (Vec<u8>, Vec<Change>) {
+        let count = self.party_count();
+        let slot_size = self.profile.layout.party_slot_size as usize;
+        let moved_from = self.party_slot_addr(party_slot);
+        let mut rest = self.bytes(moved_from, slot_size * usize::from(count - party_slot));
+        let moved: Vec<u8> = rest.drain(..slot_size).collect();
+        rest.resize(rest.len() + slot_size, 0);
+        let changes = vec![
+            Change::Write {
+                addr: moved_from,
+                bytes: rest,
+            },
+            Change::Write {
+                addr: self.profile.symbols.party_count,
+                bytes: vec![count - 1],
+            },
+        ];
+        (moved, changes)
+    }
+
     fn check_party_slot(&mut self, slot: u8) -> Result<(), GameError> {
         if slot < self.party_count() {
             Ok(())
@@ -235,7 +257,9 @@ impl<M: Memory> Game for ProfileGame<M> {
             })
             .collect();
         Some(Battle {
-            kind: if flags & layout.battle_type_trainer != 0 {
+            kind: if flags & layout.battle_type_uncatchable != 0 {
+                BattleKind::Uncatchable
+            } else if flags & layout.battle_type_trainer != 0 {
                 BattleKind::Trainer
             } else {
                 BattleKind::Wild
@@ -267,6 +291,20 @@ impl<M: Memory> Game for ProfileGame<M> {
         let position = (status != ScriptStatus::Idle)
             .then(|| self.u32(self.profile.symbols.script_context + self.profile.layout.script_context_pointer));
         ScriptContext { status, position }
+    }
+
+    fn script_calls(&mut self) -> Vec<u32> {
+        /// The game's script stack holds 20 return addresses.
+        const MAX_DEPTH: u8 = 20;
+        if self.script().status == ScriptStatus::Idle {
+            return Vec::new();
+        }
+        let (context, layout) = (self.profile.symbols.script_context, self.profile.layout.clone());
+        let depth = self.u8(context + layout.script_context_stack_depth).min(MAX_DEPTH);
+        (0..depth)
+            .rev()
+            .map(|i| self.u32(context + layout.script_context_stack + u32::from(i) * 4))
+            .collect()
     }
 
     fn badges(&mut self) -> Badges {
@@ -320,6 +358,10 @@ impl<M: Memory> Game for ProfileGame<M> {
                     .collect()
             })
             .collect()
+    }
+
+    fn source_before(&mut self, position: u32) -> Option<Source> {
+        crate::source::source_before(&self.profile.sources, position)
     }
 
     fn at_safe_overworld_point(&mut self) -> bool {
@@ -433,26 +475,38 @@ impl<M: Memory> Game for ProfileGame<M> {
         }
         let free = free.ok_or(GameError::BoxFull(box_number))?;
 
-        let count = self.party_count();
-        let slot_size = layout.party_slot_size as usize;
-        let moved_from = self.party_slot_addr(party_slot);
-        let mut rest = self.bytes(moved_from, slot_size * usize::from(count - party_slot));
-        let moved: Vec<u8> = rest.drain(..slot_size).collect();
-        rest.resize(rest.len() + slot_size, 0);
-        Ok(vec![
+        let (moved, mut changes) = self.take_from_party(party_slot);
+        changes.insert(
+            0,
             Change::Write {
                 addr: free,
                 bytes: moved[..layout.box_slot_size as usize].to_vec(),
             },
-            Change::Write {
-                addr: moved_from,
-                bytes: rest,
-            },
-            Change::Write {
-                addr: self.profile.symbols.party_count,
-                bytes: vec![count - 1],
-            },
-        ])
+        );
+        Ok(changes)
+    }
+
+    fn release_from_party(&mut self, party_slot: u8) -> Actions {
+        self.check_party_slot(party_slot)?;
+        Ok(self.take_from_party(party_slot).1)
+    }
+
+    fn release_from_pc(&mut self, box_number: u8, slot: u8) -> Actions {
+        let layout = self.profile.layout.clone();
+        if !(1..=layout.pc_boxes).contains(&box_number) {
+            return Err(GameError::NoSuchBox(box_number));
+        }
+        if !(1..=layout.pc_box_slots).contains(&slot) {
+            return Err(GameError::NoSuchSlot(slot));
+        }
+        let addr = self.box_slot_addr(box_number - 1, slot - 1);
+        if !self.has_species(addr) {
+            return Err(GameError::NoSuchSlot(slot));
+        }
+        Ok(vec![Change::Write {
+            addr,
+            bytes: vec![0; layout.box_slot_size as usize],
+        }])
     }
 
     fn move_to_dead_box(&mut self, party_slot: u8) -> Actions {

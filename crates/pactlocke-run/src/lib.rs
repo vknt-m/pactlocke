@@ -29,7 +29,7 @@ pub use view::{FeedEntry, FeedKind, Grave, RunView};
 use serde::{Deserialize, Serialize};
 
 /// The challenge rules chosen for a Run, locked for the rest of it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ruleset {
     /// Only the first wild battle in each Area may be caught.
     pub first_encounter: bool,
@@ -40,11 +40,41 @@ pub struct Ruleset {
     /// Needs `first_encounter`.
     #[serde(default)]
     pub dupes_clause: bool,
+    /// Gifts other than the starter may be kept; when off they are released.
+    /// Runs from before this rule kept every Gift.
+    #[serde(default = "allowed")]
+    pub gifts: bool,
+    /// A Static is a bonus Encounter of its own; when off it counts only as
+    /// the Area's first Encounter. Needs `first_encounter`.
+    #[serde(default)]
+    pub statics: bool,
+}
+
+fn allowed() -> bool {
+    true
+}
+
+impl Default for Ruleset {
+    /// No rules on, and so nothing held back: Gifts are kept.
+    fn default() -> Self {
+        Self {
+            first_encounter: false,
+            faint_is_dead: false,
+            dupes_clause: false,
+            gifts: true,
+            statics: false,
+        }
+    }
 }
 
 impl Ruleset {
     /// Whether the dupes clause can be chosen: it needs first Encounter.
     pub fn dupes_clause_available(&self) -> bool {
+        self.first_encounter
+    }
+
+    /// Whether the Statics rule can be chosen: it needs first Encounter.
+    pub fn statics_available(&self) -> bool {
         self.first_encounter
     }
 }

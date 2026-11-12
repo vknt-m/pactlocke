@@ -101,17 +101,18 @@ fn the_area_encounter_is_used_whether_or_not_it_is_caught() {
 }
 
 #[test]
-fn a_battle_a_script_started_is_not_the_areas_encounter() {
+fn a_battle_a_script_started_counts_as_the_areas_encounter_when_it_comes_first() {
+    // Without the Statics rule, a Static is only the Area's first Encounter.
     let mut player = Player::starts_a_run(first_encounter());
     player.walks_into(route_1());
     player.meets_scripted(PIDGEY);
     player.leaves_battle();
 
     player.meets_wild(RATTATA);
-    assert!(!player.game.catches_blocked);
+    assert!(player.game.catches_blocked);
     assert_eq!(
         player.feed(FeedKind::Encounter),
-        ["Route 1: a wild RATTATA, this Area's Encounter"]
+        ["Route 1: a wild PIDGEY, this Area's Encounter"]
     );
 }
 

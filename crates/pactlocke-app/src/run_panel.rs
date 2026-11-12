@@ -52,7 +52,7 @@ pub fn show(ui: &mut egui::Ui, view: &RunView) {
                         let colour = match entry.kind {
                             FeedKind::Run => visuals.weak_text_color(),
                             FeedKind::Encounter => visuals.text_color(),
-                            FeedKind::Catch => egui::Color32::from_rgb(0x3F, 0xA3, 0x5B),
+                            FeedKind::Catch | FeedKind::Gift => egui::Color32::from_rgb(0x3F, 0xA3, 0x5B),
                             FeedKind::Block => visuals.warn_fg_color,
                             FeedKind::Death => egui::Color32::from_rgb(0x9A, 0x7B, 0xC9),
                             FeedKind::Problem | FeedKind::Violation => visuals.error_fg_color,

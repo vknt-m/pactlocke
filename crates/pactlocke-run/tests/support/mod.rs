@@ -233,6 +233,57 @@ impl Player {
         self.plays(10);
     }
 
+    /// A script gives the Player a Pokémon into the party, at this script
+    /// position; then the script ends.
+    pub fn receives_gift(&mut self, pokemon: Pokemon, position: u32) {
+        self.script_at(position);
+        self.game.party.push(pokemon);
+        self.plays(10);
+        self.script_ends();
+    }
+
+    /// A script gives the Player a Pokémon that goes to the PC (the party is full).
+    pub fn receives_gift_in_pc(&mut self, pokemon: Pokemon, position: u32) {
+        self.script_at(position);
+        let slot = (1..=30)
+            .find(|s| !self.game.pc.iter().any(|p| p.box_number == 1 && p.slot == *s))
+            .unwrap();
+        self.game.pc.push(pactlocke_game::StoredPokemon {
+            box_number: 1,
+            slot,
+            pokemon,
+        });
+        self.plays(10);
+        self.script_ends();
+    }
+
+    /// An in-game trade: the party Pokémon in `slot` is swapped for `received`.
+    pub fn trades(&mut self, slot: usize, received: Pokemon) {
+        self.script_at(0x0816_0000);
+        self.game.party[slot] = received;
+        self.plays(10);
+        self.script_ends();
+    }
+
+    /// A Static: a script starts a wild battle and waits on it.
+    pub fn meets_static(&mut self, species: u16, position: u32) {
+        self.game.script = ScriptContext {
+            status: ScriptStatus::Waiting,
+            position: Some(position),
+        };
+        self.game.opponent_party = vec![wild_pokemon(species)];
+        self.game.battle = Some(battle(BattleKind::Wild, species));
+        self.plays(10);
+    }
+
+    fn script_at(&mut self, position: u32) {
+        self.game.script = ScriptContext {
+            status: ScriptStatus::Running,
+            position: Some(position),
+        };
+        self.plays(1);
+    }
+
     /// The Player takes the Pokémon with this PID out of the PC into the party.
     pub fn withdraws(&mut self, pid: u32) {
         let at = self

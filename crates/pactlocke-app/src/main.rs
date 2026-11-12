@@ -275,13 +275,21 @@ impl PactlockeApp {
             let RomIdentity::Profiled { profile, capabilities } = &identity else {
                 return Err("A Run needs a game Pactlocke has a Game Profile for, and this ROM has none.".to_owned());
             };
-            let unavailable: BTreeMap<Rule, String> = [Rule::FirstEncounter, Rule::DupesClause, Rule::FaintIsDead]
-                .into_iter()
-                .filter_map(|rule| unavailable_reason(capabilities.get(rule)).map(|why| (rule, why)))
-                .collect();
+            let unavailable: BTreeMap<Rule, String> = [
+                Rule::FirstEncounter,
+                Rule::DupesClause,
+                Rule::Gifts,
+                Rule::Statics,
+                Rule::FaintIsDead,
+            ]
+            .into_iter()
+            .filter_map(|rule| unavailable_reason(capabilities.get(rule)).map(|why| (rule, why)))
+            .collect();
             let mut ruleset = Ruleset {
                 first_encounter: !unavailable.contains_key(&Rule::FirstEncounter),
                 faint_is_dead: !unavailable.contains_key(&Rule::FaintIsDead),
+                // Without a catalogue no Gift can be told apart, so every one is kept.
+                gifts: true,
                 ..Ruleset::default()
             };
             ruleset.dupes_clause = ruleset.dupes_clause_available() && !unavailable.contains_key(&Rule::DupesClause);
@@ -494,20 +502,37 @@ impl PactlockeApp {
                 "First Encounter: only the first wild battle in each Area can be caught",
                 draft.unavailable.get(&Rule::FirstEncounter).cloned(),
             );
-            if !ruleset.dupes_clause_available() {
-                ruleset.dupes_clause = false;
-            }
-            let dupes_unavailable = if ruleset.dupes_clause_available() {
-                draft.unavailable.get(&Rule::DupesClause).cloned()
-            } else {
-                Some("it needs First Encounter on".to_owned())
+            let needs_first_encounter = |available: bool, rule: Rule| {
+                if available {
+                    draft.unavailable.get(&rule).cloned()
+                } else {
+                    Some("it needs First Encounter on".to_owned())
+                }
             };
+            let dupes_unavailable = needs_first_encounter(ruleset.dupes_clause_available(), Rule::DupesClause);
+            let statics_unavailable = needs_first_encounter(ruleset.statics_available(), Rule::Statics);
             rule_checkbox(
                 ui,
                 &mut ruleset.dupes_clause,
                 "Dupes clause: a wild Pokémon from a family you have alive doesn't count",
                 dupes_unavailable,
             );
+            rule_checkbox(
+                ui,
+                &mut ruleset.statics,
+                "Statics: a legendary or other Static is a bonus Encounter of its own",
+                statics_unavailable,
+            );
+            let gifts = ui.add_enabled(
+                !draft.unavailable.contains_key(&Rule::Gifts),
+                egui::Checkbox::new(
+                    &mut ruleset.gifts,
+                    "Gifts: keep Gifts besides the starter (when off, they are released)",
+                ),
+            );
+            if let Some(reason) = draft.unavailable.get(&Rule::Gifts) {
+                gifts.on_disabled_hover_text(format!("Every Gift is kept: {reason}"));
+            }
             rule_checkbox(
                 ui,
                 &mut ruleset.faint_is_dead,

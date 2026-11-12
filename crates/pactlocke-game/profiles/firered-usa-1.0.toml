@@ -52,10 +52,15 @@ max_hp = 0x58
 battle_mon_size = 0x58
 battle_mon_hp = 0x28
 battle_type_trainer = 0x08
+# BATTLE_TYPE_OLD_MAN_TUTORIAL, _GHOST and _POKEDUDE: the catching demo, the
+# Pokémon Tower ghost and the Pokédude's demos, which nobody can catch in.
+battle_type_uncatchable = 0x18200
 battle_type_double = 0x01
 perish_song_status3 = 0x20
 disable_struct_size = 0x1C
 perish_timer = 0x0F
+script_context_stack_depth = 0x00
+script_context_stack = 0x0C
 script_context_pointer = 0x08
 species_info_size = 28
 species_name_length = 11
@@ -246,3 +251,149 @@ battle_communication = 0x02023E82
 0x64 = 0x6E
 0x82 = 0x81
 0xB3 = 0xA7
+
+# The Gift and Static catalogue: each source's givemon, giveegg or
+# setwildbattle instruction (found in the ROM and checked by the local
+# acceptance test). A species from a script variable (the starter, the
+# Fighting Dojo and Game Corner prizes) is one instruction for every pick.
+# Not listed yet: in-game trades (detected as trades), and the event-ticket
+# islands' Lugia, Ho-Oh and Deoxys. The Pokémon Tower ghost isn't a Static:
+# nobody can catch it (see battle_type_uncatchable).
+
+[[sources]]
+key = "starter"
+name = "Starter"
+kind = "starter"
+at = [0x08169C8B]
+
+[[sources]]
+key = "magikarp_route_4"
+name = "Magikarp salesman on Route 4"
+kind = "gift"
+at = [0x0816F7C5]
+
+[[sources]]
+key = "mt_moon_fossil"
+name = "Mt. Moon fossil (Omanyte or Kabuto)"
+kind = "gift"
+at = [0x0816E769, 0x0816E7AE]
+
+[[sources]]
+key = "old_amber"
+name = "Old Amber (Aerodactyl)"
+kind = "gift"
+at = [0x0816E7F3]
+
+[[sources]]
+key = "eevee_celadon"
+name = "Eevee in Celadon Mansion"
+kind = "gift"
+at = [0x0816C474]
+
+[[sources]]
+key = "game_corner_prize_1"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CCD4]
+
+[[sources]]
+key = "game_corner_prize_2"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CCE9]
+
+[[sources]]
+key = "game_corner_prize_3"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CCFE]
+
+[[sources]]
+key = "game_corner_prize_4"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CD13]
+
+[[sources]]
+key = "game_corner_prize_5"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CD28]
+
+[[sources]]
+key = "game_corner_prize_6"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CD3D]
+
+[[sources]]
+key = "fighting_dojo"
+name = "Fighting Dojo prize (Hitmonlee or Hitmonchan)"
+kind = "gift"
+at = [0x0816EC83]
+
+[[sources]]
+key = "lapras_silph"
+name = "Lapras in Silph Co."
+kind = "gift"
+at = [0x08161AE0]
+
+[[sources]]
+key = "togepi_egg"
+name = "Togepi egg"
+kind = "egg"
+at = [0x081688C9]
+
+[[sources]]
+key = "snorlax_route_12"
+name = "Snorlax on Route 12"
+kind = "static"
+at = [0x08168048]
+
+[[sources]]
+key = "snorlax_route_16"
+name = "Snorlax on Route 16"
+kind = "static"
+at = [0x08168155]
+
+[[sources]]
+key = "electrode_power_plant_1"
+name = "Electrode in the Power Plant"
+kind = "static"
+at = [0x0816383F]
+
+[[sources]]
+key = "electrode_power_plant_2"
+name = "Electrode in the Power Plant"
+kind = "static"
+at = [0x0816389D]
+
+[[sources]]
+key = "zapdos"
+name = "Zapdos in the Power Plant"
+kind = "static"
+at = [0x081637CB]
+
+[[sources]]
+key = "articuno"
+name = "Articuno in the Seafoam Islands"
+kind = "static"
+at = [0x081631BF]
+
+[[sources]]
+key = "moltres"
+name = "Moltres on Mt. Ember"
+kind = "static"
+at = [0x08163B46]
+
+[[sources]]
+key = "hypno_berry_forest"
+name = "Hypno in Berry Forest"
+kind = "static"
+at = [0x08163CC1]
+
+[[sources]]
+key = "mewtwo"
+name = "Mewtwo in Cerulean Cave"
+kind = "static"
+at = [0x0816251D]

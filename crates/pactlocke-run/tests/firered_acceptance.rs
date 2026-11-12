@@ -522,6 +522,34 @@ fn a_route_1_pokemon_from_a_family_already_owned_is_skipped_as_a_dupe() {
     }
 }
 
+#[test]
+fn the_real_starter_is_the_starter_gift_and_kept_with_gifts_off() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        return;
+    };
+    let mut d = firered_run_with(
+        rom,
+        Ruleset {
+            first_encounter: true,
+            gifts: false,
+            ..Ruleset::default()
+        },
+    );
+    d.play(FR_STARTER);
+    d.play("w 120");
+
+    let gifts = d.feed(FeedKind::Gift);
+    assert_eq!(gifts.len(), 1, "{gifts:?}");
+    assert!(
+        ["BULBASAUR", "CHARMANDER", "SQUIRTLE"]
+            .iter()
+            .any(|starter| gifts[0] == format!("Pallet Town: received {starter}, the Starter")),
+        "{gifts:?}"
+    );
+    assert_eq!(d.game.game_mut().party().len(), 1, "the starter is always kept");
+}
+
 /// Writes the screen as a PPM under `target/acceptance/` for a person to look at.
 fn dump_screen(game: &Running, name: &str) {
     let frame = game.frame();

@@ -110,11 +110,25 @@ fn a_rule_the_profile_has_no_method_for_is_greyed_out() {
 }
 
 #[test]
-fn gifts_statics_and_sync_gates_wait_for_their_catalogues() {
+fn gifts_and_statics_are_enforceable_from_the_catalogue_and_sync_gates_wait_for_theirs() {
     let report = capabilities_of(&patchable_rom(b"BPRE"), |t| t);
-    for rule in [Rule::Gifts, Rule::Statics, Rule::SyncGates] {
-        assert!(matches!(report.get(rule), Capability::GreyedOut { .. }), "{rule:?}");
-    }
+    assert_eq!(report.get(Rule::Gifts), &Capability::Enforceable);
+    assert_eq!(report.get(Rule::Statics), &Capability::Enforceable);
+    assert!(matches!(report.get(Rule::SyncGates), Capability::GreyedOut { .. }));
+}
+
+#[test]
+fn a_catalogue_without_statics_greys_out_the_statics_rule() {
+    let report = capabilities_of(&patchable_rom(b"BPRE"), |t| {
+        t.replace(r#"kind = "static""#, r#"kind = "gift""#)
+    });
+    assert_eq!(report.get(Rule::Gifts), &Capability::Enforceable);
+    assert_eq!(
+        report.get(Rule::Statics),
+        &Capability::GreyedOut {
+            reason: "this Game Profile has no Statics in its catalogue yet".into()
+        }
+    );
 }
 
 #[test]

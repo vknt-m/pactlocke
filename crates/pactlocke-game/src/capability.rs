@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::SourceKind;
 use crate::profile::{GameProfile, HexBytes, Method, ROM_BASE};
 
 /// The Ruleset rules whose enforcement depends on the game.
@@ -92,7 +93,8 @@ impl CapabilityReport {
             .map(|rule| {
                 let capability = match rule {
                     Rule::FirstEncounter | Rule::DupesClause => catch.clone(),
-                    Rule::Gifts | Rule::Statics => no_catalogue("Gift and Static catalogue"),
+                    Rule::Gifts => catalogue_capability(profile, |kind| kind != SourceKind::Static, "Gifts"),
+                    Rule::Statics => catalogue_capability(profile, |kind| kind == SourceKind::Static, "Statics"),
                     Rule::SyncGates => no_catalogue("Sync Gate trainers"),
                     // Read and written in RAM through the profile's symbols and layout.
                     Rule::FaintIsDead | Rule::Links | Rule::TypeClause => Capability::Enforceable,
@@ -113,6 +115,17 @@ impl CapabilityReport {
 
     pub fn iter(&self) -> impl Iterator<Item = (Rule, &Capability)> {
         self.rules.iter().map(|(rule, capability)| (*rule, capability))
+    }
+}
+
+/// Enforceable when the catalogue lists any source of the kinds `wanted` picks.
+fn catalogue_capability(profile: &GameProfile, wanted: impl Fn(SourceKind) -> bool, what: &str) -> Capability {
+    if profile.sources.iter().any(|source| wanted(source.kind)) {
+        Capability::Enforceable
+    } else {
+        Capability::GreyedOut {
+            reason: format!("this Game Profile has no {what} in its catalogue yet"),
+        }
     }
 }
 

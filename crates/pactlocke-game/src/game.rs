@@ -7,7 +7,7 @@ use std::fmt;
 
 use pactlocke_emu::CoreAdapter;
 
-use crate::Area;
+use crate::{Area, Source};
 
 /// Read access to a game's address space.
 pub trait Memory {
@@ -63,6 +63,8 @@ pub struct StoredPokemon {
 pub enum BattleKind {
     Wild,
     Trainer,
+    /// A battle nobody can catch in, such as a catching demo or a ghost: no one's Encounter.
+    Uncatchable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +172,9 @@ pub trait Game {
     /// while the battlers still hold the last battle's Pokémon for a while.
     fn opponent_party(&mut self) -> Vec<Pokemon>;
     fn script(&mut self) -> ScriptContext;
+    /// Where a running script returns to from the scripts it has called,
+    /// innermost first: a Gift's own script may be a call or two up.
+    fn script_calls(&mut self) -> Vec<u32>;
     fn badges(&mut self) -> Badges;
     /// The named option's current setting, if the game has that option and
     /// it holds a known setting.
@@ -182,6 +187,9 @@ pub trait Game {
     /// For each species from 0, the species it can evolve into, from the
     /// loaded ROM (randomizers change evolutions).
     fn evolutions(&mut self) -> Vec<Vec<u16>>;
+    /// The catalogued Gift or Static whose instruction is nearest before this
+    /// script position, if one is close enough.
+    fn source_before(&mut self, position: u32) -> Option<Source>;
     /// On the overworld and out of battle: where Pokémon can be moved safely.
     fn at_safe_overworld_point(&mut self) -> bool;
     /// Whether the Bag holds any kind of Poké Ball.
@@ -203,6 +211,10 @@ pub trait Game {
     fn faint_benched(&mut self, party_slot: u8) -> Actions;
     /// Moves a party Pokémon to the first empty slot of a PC box (counting from 1).
     fn move_to_box(&mut self, party_slot: u8, box_number: u8) -> Actions;
+    /// Releases a party Pokémon: it leaves the game, and the party closes up.
+    fn release_from_party(&mut self, party_slot: u8) -> Actions;
+    /// Releases a Pokémon in the PC (box and slot counting from 1).
+    fn release_from_pc(&mut self, box_number: u8, slot: u8) -> Actions;
     /// Moves a party Pokémon to the Dead box.
     fn move_to_dead_box(&mut self, party_slot: u8) -> Actions;
     fn write_nickname(&mut self, party_slot: u8, name: &str) -> Actions;

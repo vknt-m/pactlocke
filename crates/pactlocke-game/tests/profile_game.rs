@@ -6,7 +6,7 @@ mod support;
 
 use pactlocke_game::{
     Area, Battle, BattleKind, Battler, Change, Game, GameError, PartyStats, Pokemon, ProfileGame, ProfileStore,
-    ScriptContext, ScriptStatus, Side, StoredPokemon, sha1_hex,
+    ScriptContext, ScriptStatus, Side, SourceKind, StoredPokemon, sha1_hex,
 };
 use support::*;
 
@@ -171,6 +171,29 @@ fn the_script_context_says_whether_a_script_runs_or_waits_and_where() {
 }
 
 #[test]
+fn a_running_scripts_calls_are_read_innermost_first() {
+    let mut game = at_overworld();
+    assert!(game.script_calls().is_empty(), "no script running");
+    game.memory_mut().put8(0x0300_0EA8, 0); // running
+    game.memory_mut().put8(0x0300_0EB0, 2); // two calls deep
+    game.memory_mut().put32(0x0300_0EB0 + 12, 0x0816_9CA0);
+    game.memory_mut().put32(0x0300_0EB0 + 16, 0x081A_5000);
+    assert_eq!(game.script_calls(), [0x081A_5000, 0x0816_9CA0]);
+}
+
+#[test]
+fn a_battle_nobody_can_catch_in_is_neither_wild_nor_a_trainers() {
+    let mut game = at_overworld();
+    game.memory_mut().put8(0x0300_3529, 0x02); // in battle
+    for flags in [0x0000_8000u32, 0x0000_0200, 0x0001_0000] {
+        game.memory_mut().put32(0x0202_2B4C, flags);
+        assert_eq!(game.battle().unwrap().kind, BattleKind::Uncatchable, "{flags:#x}");
+    }
+    game.memory_mut().put32(0x0202_2B4C, 0);
+    assert_eq!(game.battle().unwrap().kind, BattleKind::Wild);
+}
+
+#[test]
 fn badges_trainer_id_and_options_are_read_from_the_save_blocks() {
     let mut game = at_overworld();
     let image = game.memory_mut();
@@ -306,6 +329,69 @@ fn a_dead_pokemon_moves_from_the_party_to_the_dead_box() {
     assert_eq!((pc[0].box_number, pc[0].slot), (14, 1));
     assert_eq!(pc[0].pokemon.pid, 0x8765_4329);
     assert_eq!(pc[0].pokemon.nickname, "Rat 2");
+}
+
+#[test]
+fn a_script_position_is_matched_to_the_nearest_catalogued_instruction_before_it() {
+    let mut game = at_overworld();
+    let source = |game: &mut ProfileGame<MemoryImage>, at: u32| game.source_before(at).map(|s| (s.key, s.kind));
+
+    assert_eq!(
+        source(&mut game, 0x0800_601E),
+        Some(("starter".into(), SourceKind::Starter))
+    );
+    assert_eq!(
+        source(&mut game, 0x0800_6107),
+        Some(("snorlax_route_12".into(), SourceKind::Static))
+    );
+    assert_eq!(
+        source(&mut game, 0x0800_6210),
+        Some(("mt_moon_fossil".into(), SourceKind::Gift))
+    );
+    assert_eq!(
+        source(&mut game, 0x0800_6250),
+        Some(("mt_moon_fossil".into(), SourceKind::Gift)),
+        "two instructions, one source"
+    );
+    assert_eq!(
+        source(&mut game, 0x0800_6310),
+        Some(("togepi_egg".into(), SourceKind::Egg))
+    );
+    assert_eq!(game.source_before(0x0800_5FFF), None, "nothing catalogued before it");
+    assert_eq!(game.source_before(0x0800_6500), None, "too far past the last one");
+    assert_eq!(game.source_before(0x0800_6000).unwrap().name, "Starter");
+}
+
+#[test]
+fn a_party_pokemon_is_released_and_the_party_compacted() {
+    let mut game = at_overworld();
+    set_party(game.memory_mut(), &[rattata(), bulbasaur()]);
+
+    let changes = game.release_from_party(0).unwrap();
+    game.memory_mut().apply(&changes);
+
+    assert_eq!(game.party(), vec![bulbasaur_read()]);
+    assert!(game.pc().is_empty(), "gone, not boxed");
+    assert_eq!(game.release_from_party(1), Err(GameError::NoSuchSlot(1)));
+}
+
+#[test]
+fn a_pokemon_in_the_pc_is_released() {
+    let mut game = at_overworld();
+    let boxed = rattata().party_bytes();
+    game.memory_mut().put(PC_STORAGE + 4 + 30 * 80 + 80, &boxed[..80]); // box 2 slot 2
+    assert_eq!(game.pc().len(), 1);
+
+    let changes = game.release_from_pc(2, 2).unwrap();
+    game.memory_mut().apply(&changes);
+
+    assert!(game.pc().is_empty());
+    assert_eq!(
+        game.release_from_pc(2, 2),
+        Err(GameError::NoSuchSlot(2)),
+        "already empty"
+    );
+    assert_eq!(game.release_from_pc(15, 1), Err(GameError::NoSuchBox(15)));
 }
 
 #[test]
