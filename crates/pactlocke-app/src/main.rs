@@ -505,7 +505,7 @@ impl PactlockeApp {
             rule_checkbox(
                 ui,
                 &mut ruleset.dupes_clause,
-                "Dupes clause: a wild Pokémon from a family you've had doesn't count",
+                "Dupes clause: a wild Pokémon from a family you have alive doesn't count",
                 dupes_unavailable,
             );
             rule_checkbox(

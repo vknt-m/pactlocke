@@ -48,10 +48,8 @@ struct BattleWatch {
     kind: BattleKind,
     script_idle: bool,
     area: Option<Area>,
-    /// Every PID in the party and PC when it began.
-    pids_before: BTreeSet<u32>,
-    /// Their species.
-    species_before: Vec<u16>,
+    /// The PID and species of every Pokémon in the party and PC when it began.
+    owned_before: Vec<(u32, u16)>,
     /// Whether the rules have looked at it yet; they wait until the opponent is known.
     decided: bool,
     catches_blocked: bool,
@@ -182,13 +180,11 @@ impl RunEngine {
         let battle = game.battle();
         match (self.battle.is_some(), battle.clone()) {
             (false, Some(battle)) => {
-                let (pids_before, species_before) = owned(game);
                 self.battle = Some(BattleWatch {
                     kind: battle.kind,
                     script_idle: game.script().status == ScriptStatus::Idle,
                     area: game.area(),
-                    pids_before,
-                    species_before,
+                    owned_before: owned(game),
                     decided: false,
                     catches_blocked: false,
                 });
@@ -282,7 +278,7 @@ impl RunEngine {
             script_idle: watch.script_idle,
             area: watch.area.as_ref(),
             foe: species,
-            owned: &watch.species_before,
+            owned: &watch.owned_before,
         });
         let area = watch.area.as_ref().map(AreaRef::from);
         self.battle.as_mut().unwrap().decided = true;
@@ -355,7 +351,7 @@ impl RunEngine {
         let party = game.party();
         let pc = game.pc().into_iter().map(|stored| stored.pokemon);
         for pokemon in party.into_iter().chain(pc) {
-            if !watch.pids_before.contains(&pokemon.pid) {
+            if !watch.owned_before.iter().any(|&(pid, _)| pid == pokemon.pid) {
                 let species_name = game.species_name(pokemon.species);
                 self.record(RunEvent::Caught {
                     area: area.clone(),
@@ -536,9 +532,9 @@ fn display_name(pokemon: &Pokemon, species_name: &str) -> String {
     }
 }
 
-/// Every PID in the party and PC, and their species.
-fn owned(game: &mut impl Game) -> (BTreeSet<u32>, Vec<u16>) {
+/// The PID and species of every Pokémon in the party and PC.
+fn owned(game: &mut impl Game) -> Vec<(u32, u16)> {
     let party = game.party().into_iter();
     let pc = game.pc().into_iter().map(|s| s.pokemon);
-    party.chain(pc).map(|p| (p.pid, p.species)).unzip()
+    party.chain(pc).map(|p| (p.pid, p.species)).collect()
 }

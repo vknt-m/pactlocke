@@ -37,7 +37,7 @@ A species together with every species it evolves from or into, as the loaded gam
 _Avoid_: Family on its own, line
 
 **Dupe**:
-Under the dupes clause, a wild Pokémon from an evolution family the Player has already had in the Run (Dead, boxed and released included). Meeting one doesn't use the Area's Encounter, and it can't be caught.
+Under the dupes clause, a wild Pokémon from an evolution family the Player has alive right now, in the party or the PC. Meeting one doesn't use the Area's Encounter, and it can't be caught. Dead, released and traded-away Pokémon don't make dupes.
 _Avoid_: Duplicate encounter, repeat
 
 **Gift**:

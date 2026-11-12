@@ -17,8 +17,8 @@ pub(crate) struct BattleStart<'a> {
     pub area: Option<&'a Area>,
     /// The wild Pokémon's species.
     pub foe: u16,
-    /// The species in the Player's party and PC as it began.
-    pub owned: &'a [u16],
+    /// The PID and species of every Pokémon in the Player's party and PC as it began.
+    pub owned: &'a [(u32, u16)],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,8 +31,8 @@ pub(crate) enum Verdict {
     Encounter,
     /// The Area is closed: ball throws are refused for this battle.
     BlockCatches,
-    /// The dupes clause: the Player has had a Pokémon of this species' family
-    /// (`of`), so it isn't the Encounter, and can't be caught.
+    /// The dupes clause: the Player has a living Pokémon of this species'
+    /// family (`of`), so it isn't the Encounter, and can't be caught.
     Dupe { of: u16 },
 }
 
@@ -44,8 +44,6 @@ pub(crate) struct Rules {
     had_poke_balls: bool,
     /// Dead PIDs, each with where it has got to since the game was booted.
     dead: BTreeMap<u32, DeadState>,
-    /// Every species the Run log has seen caught or Dead, wherever it is now.
-    species_had: BTreeSet<u16>,
     /// The loaded game's evolution families, once the dupes clause needs them.
     families: Option<EvolutionFamilies>,
 }
@@ -73,7 +71,6 @@ impl Rules {
             closed: BTreeSet::new(),
             had_poke_balls: false,
             dead: BTreeMap::new(),
-            species_had: BTreeSet::new(),
             families: None,
         }
     }
@@ -107,8 +104,9 @@ impl Rules {
         self.families = Some(families);
     }
 
-    /// A species the Player has had from the same family as `foe`.
-    fn dupe_of(&self, foe: u16, owned: &[u16]) -> Option<u16> {
+    /// A species from the same family as `foe` that the Player has alive, in
+    /// the party or PC. Dead, released and traded-away Pokémon don't count.
+    fn dupe_of(&self, foe: u16, owned: &[(u32, u16)]) -> Option<u16> {
         if !self.dupes_clause() {
             return None;
         }
@@ -116,8 +114,8 @@ impl Rules {
         let family = families.of(foe);
         owned
             .iter()
-            .chain(&self.species_had)
-            .copied()
+            .filter(|(pid, _)| !self.is_dead(*pid))
+            .map(|&(_, species)| species)
             .find(|&species| families.of(species) == family)
     }
 
@@ -149,12 +147,8 @@ impl Rules {
                 self.closed.insert(area.id);
             }
             RunEvent::PokeBallsObtained => self.had_poke_balls = true,
-            RunEvent::Died { pid, species, .. } => {
+            RunEvent::Died { pid, .. } => {
                 self.dead.insert(*pid, DeadState::NotMovedYet);
-                self.species_had.insert(*species);
-            }
-            RunEvent::Caught { species, .. } => {
-                self.species_had.insert(*species);
             }
             RunEvent::MovedToDeadBox { pid, .. }
             | RunEvent::DeadReturned { pid, .. }

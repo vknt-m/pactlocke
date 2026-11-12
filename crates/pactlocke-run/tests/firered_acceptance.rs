@@ -471,7 +471,7 @@ fn a_route_1_pokemon_from_a_family_already_owned_is_skipped_as_a_dupe() {
     d.play(FR_TO_ROUTE_1);
 
     // Before Poké Balls nothing counts. Each wild Pokémon met is put in the
-    // PC as if caught earlier (test setup), until the Player has had both of
+    // PC as if caught earlier (test setup), until the Player has both of
     // Route 1's species.
     let mut owned = Vec::new();
     for _ in 0..20 {

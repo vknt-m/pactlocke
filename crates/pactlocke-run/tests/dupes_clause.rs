@@ -53,31 +53,81 @@ fn a_wild_pokemon_from_a_family_already_owned_is_skipped_and_the_next_one_counts
 }
 
 #[test]
-fn a_family_caught_earlier_still_counts_once_it_is_gone_from_party_and_pc() {
+fn a_released_pokemons_family_can_be_caught_again() {
     let mut player = player_with_a_pidgey(dupes_clause());
-    player.game.party.clear();
     player.walks_into(route_2());
     player.meets_wild(RATTATA);
     player.catches(RATTATA, 0x0000_0BAD);
-    // Released, or Dead and moved off: it is no longer in the game at all.
+    // The Pidgey and the Rattata are released: the Player doesn't have them any more.
     player.game.party.clear();
-    let (storage, clock) = (player.storage.clone(), player.clock.clone());
-    drop(player);
-
-    let mut player = Player::resumes(storage, clock);
-    player.game.species_names.insert(RATICATE, "RATICATE".into());
-    player.game.evolutions.insert(RATTATA, vec![RATICATE]);
     player.walks_into(route_1());
+
     player.meets_wild(RATICATE);
-    assert!(player.game.catches_blocked);
-    assert!(player.feed(FeedKind::Encounter)[0].contains("a dupe of your RATTATA"));
+    assert!(
+        !player.game.catches_blocked,
+        "the Rattata caught in this Run was released"
+    );
+    assert_eq!(
+        player.feed(FeedKind::Encounter)[0],
+        "Route 1: a wild RATICATE, this Area's Encounter"
+    );
 }
 
-/// Every species evolves into some other one, as a randomizer's "random every level" makes it.
-fn evolutions_random_every_level(player: &mut Player) {
-    for species in 1..=30 {
-        player.game.evolutions.insert(species, vec![(species % 30) + 1]);
-    }
+#[test]
+fn a_pokemon_in_the_pc_makes_a_dupe_like_one_in_the_party() {
+    let mut player = player_with_a_pidgey(dupes_clause());
+    let pidgey = player.game.party.remove(0);
+    player.game.pc.push(pactlocke_game::StoredPokemon {
+        box_number: 1,
+        slot: 1,
+        pokemon: pidgey,
+    });
+
+    player.meets_wild(PIDGEOTTO);
+    assert!(player.game.catches_blocked);
+}
+
+#[test]
+fn a_dead_pokemons_family_can_be_caught_again() {
+    let mut player = player_with_a_pidgey(Ruleset {
+        faint_is_dead: true,
+        ..dupes_clause()
+    });
+    player.walks_into(route_2());
+    player.meets_wild(RATTATA);
+    player.faints(OWNED_PIDGEY);
+    player.leaves_battle();
+    assert_eq!(
+        player.dead_box_pids(),
+        [OWNED_PIDGEY],
+        "the Pidgey is Dead, in the Dead box"
+    );
+    player.walks_into(route_1());
+
+    player.meets_wild(PIDGEOTTO);
+    assert!(!player.game.catches_blocked, "a Dead Pokémon isn't one the Player has");
+    assert_eq!(
+        player.feed(FeedKind::Encounter)[0],
+        "Route 1: a wild PIDGEOTTO, this Area's Encounter"
+    );
+}
+
+#[test]
+fn a_dead_pokemon_not_yet_moved_from_the_party_makes_no_dupe() {
+    let mut player = player_with_a_pidgey(Ruleset {
+        faint_is_dead: true,
+        ..dupes_clause()
+    });
+    player.walks_into(route_2());
+    player.meets_wild(RATTATA);
+    player.faints(OWNED_PIDGEY);
+    // Run away straight into another battle before the overworld moves it.
+    player.game.battle = None;
+    player.plays(1);
+    player.game.safe_point = false;
+    player.walks_into(route_1());
+    player.meets_wild(PIDGEOTTO);
+    assert!(!player.game.catches_blocked);
 }
 
 #[test]
@@ -162,4 +212,11 @@ fn a_closed_area_stays_closed_to_a_dupe() {
     player.meets_wild(PIDGEOTTO);
     assert!(player.game.catches_blocked);
     assert!(player.feed(FeedKind::Block)[0].starts_with("Route 1: Encounter already used"));
+}
+
+/// Every species evolves into some other one, as a randomizer's "random every level" makes it.
+fn evolutions_random_every_level(player: &mut Player) {
+    for species in 1..=30 {
+        player.game.evolutions.insert(species, vec![(species % 30) + 1]);
+    }
 }

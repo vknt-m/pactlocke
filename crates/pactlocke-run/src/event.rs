@@ -31,12 +31,12 @@ pub enum RunEvent {
         species_name: String,
     },
     /// The dupes clause: a wild battle with a Pokémon from a family the Player
-    /// has had doesn't use the Encounter, and ball throws are refused for it.
+    /// has alive doesn't use the Encounter, and ball throws are refused for it.
     DupeSkipped {
         area: AreaRef,
         species: u16,
         species_name: String,
-        /// The species of that family the Player has had.
+        /// The species of that family the Player has alive.
         dupe_of: String,
     },
     /// A wild battle in a closed Area: ball throws are refused for it.
