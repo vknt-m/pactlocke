@@ -18,12 +18,12 @@ mod view;
 
 pub use clock::{RunClock, SystemRunClock};
 pub use engine::RunEngine;
-pub use event::{AreaRef, Recorded, RunEvent};
+pub use event::{AreaRef, DeathCause, Recorded, RunEvent};
 pub use file::{RunFile, RunId, RunLibrary, RunSummary};
 pub use live::LiveGame;
 pub use running::RunningGame;
 pub use storage::{InputBatch, MemoryStorage, RunInfo, RunStorage, Stamped, StorageError, StoredRun};
-pub use view::{FeedEntry, FeedKind, RunView};
+pub use view::{FeedEntry, FeedKind, Grave, RunView};
 
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +32,9 @@ use serde::{Deserialize, Serialize};
 pub struct Ruleset {
     /// Only the first wild battle in each Area may be caught.
     pub first_encounter: bool,
+    /// A Pokémon that faints is Dead and goes to the Dead box.
+    #[serde(default)]
+    pub faint_is_dead: bool,
 }
 
 /// What a new Run is started with.

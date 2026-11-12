@@ -1,12 +1,12 @@
 use std::collections::BTreeSet;
 
 use pactlocke_emu::Keys;
-use pactlocke_game::{Area, BattleKind, Change, Game, ScriptStatus};
+use pactlocke_game::{Area, Battle, BattleKind, Change, Game, GameError, Pokemon, ScriptStatus, Side};
 
-use crate::event::AreaRef;
-use crate::rules::{BattleStart, Rules, Verdict};
+use crate::event::{AreaRef, DeathCause};
+use crate::rules::{BattleStart, DeadMove, Rules, Verdict};
 use crate::storage::{InputBatch, RunInfo, RunStorage, Stamped, StorageError};
-use crate::view::{FeedEntry, FeedKind, RunView};
+use crate::view::{FeedEntry, FeedKind, Grave, RunView};
 use crate::{LiveGame, NewRun, Recorded, RunClock, RunEvent};
 
 /// How often the input stream is flushed to storage, so a crash loses at most this much.
@@ -37,6 +37,9 @@ pub struct RunEngine {
     view_version: u64,
     /// Whether the feed has said the Run file can't be written.
     write_failure_shown: bool,
+    /// Dead PIDs that couldn't be moved to the Dead box since the game was booted;
+    /// they aren't tried again until it is booted afresh.
+    dead_box_failed: BTreeSet<u32>,
 }
 
 /// A battle in progress, as the engine saw it begin.
@@ -120,6 +123,7 @@ impl RunEngine {
             view,
             view_version: 0,
             write_failure_shown: false,
+            dead_box_failed: BTreeSet::new(),
         }
     }
 
@@ -172,7 +176,8 @@ impl RunEngine {
             self.record(RunEvent::PokeBallsObtained);
         }
 
-        match (self.battle.is_some(), game.battle()) {
+        let battle = game.battle();
+        match (self.battle.is_some(), battle.clone()) {
             (false, Some(battle)) => {
                 self.battle = Some(BattleWatch {
                     kind: battle.kind,
@@ -187,6 +192,21 @@ impl RunEngine {
             (true, Some(_)) => self.decide(game),
             (true, None) => self.battle_ended(game),
             (false, None) => {}
+        }
+
+        if self.rules.faint_is_dead() {
+            match &battle {
+                Some(battle) => self.record_faints(game, Some(battle)),
+                // Moved before the Player can heal it: the overworld is the first chance to.
+                None if game.at_safe_overworld_point() => {
+                    self.record_faints(game, None);
+                    // A running script may hold a party slot, such as a trade's or the Day Care's.
+                    if game.script().status == ScriptStatus::Idle {
+                        self.move_the_dead(game);
+                    }
+                }
+                None => {}
+            }
         }
 
         if self.clock.now_ms() - self.last_flush_ms >= FLUSH_EVERY_MS {
@@ -319,6 +339,85 @@ impl RunEngine {
         }
     }
 
+    /// Records a Death for each party Pokémon newly at 0 HP. Outside battle
+    /// only poison makes a Pokémon faint.
+    fn record_faints(&mut self, game: &mut impl LiveGame, battle: Option<&Battle>) {
+        let fainted: Vec<Pokemon> = game
+            .party()
+            .into_iter()
+            .filter(|p| !p.is_egg && p.stats.is_some_and(|s| s.hp == 0) && !self.rules.is_dead(p.pid))
+            .collect();
+        if fainted.is_empty() {
+            return;
+        }
+        let cause = match battle {
+            None => DeathCause::Poison,
+            Some(battle) => {
+                let foe = foe_name(battle, game);
+                match battle.kind {
+                    BattleKind::Wild => DeathCause::Wild { foe },
+                    BattleKind::Trainer => DeathCause::Trainer { foe },
+                }
+            }
+        };
+        let area = game.area().as_ref().map(AreaRef::from);
+        for pokemon in fainted {
+            let species_name = game.species_name(pokemon.species);
+            self.record(RunEvent::Died {
+                pid: pokemon.pid,
+                species: pokemon.species,
+                name: display_name(&pokemon, &species_name),
+                species_name,
+                area: area.clone(),
+                cause: cause.clone(),
+            });
+        }
+    }
+
+    /// Moves every Dead Pokémon in the party to the Dead box, one at a time,
+    /// since each move compacts the party.
+    fn move_the_dead(&mut self, game: &mut impl LiveGame) {
+        loop {
+            let party = game.party();
+            let Some((slot, pokemon, why)) = party.into_iter().enumerate().find_map(|(slot, p)| {
+                let why = self
+                    .rules
+                    .dead_move(p.pid)
+                    .filter(|_| !self.dead_box_failed.contains(&p.pid))?;
+                Some((slot, p, why))
+            }) else {
+                return;
+            };
+            let species_name = game.species_name(pokemon.species);
+            let name = display_name(&pokemon, &species_name);
+            let pid = pokemon.pid;
+            let slot = u8::try_from(slot).expect("a party has six slots");
+            match move_to_dead_box_or_another(game, slot) {
+                Ok((changes, dead_box_full)) => {
+                    self.apply(changes, game);
+                    let box_number = game
+                        .pc()
+                        .into_iter()
+                        .find(|stored| stored.pokemon.pid == pid)
+                        .map_or(0, |stored| stored.box_number);
+                    self.record(match (dead_box_full, why) {
+                        (true, _) => RunEvent::DeadBoxFull { pid, name, box_number },
+                        (false, DeadMove::First) => RunEvent::MovedToDeadBox { pid, name, box_number },
+                        (false, DeadMove::Returned) => RunEvent::DeadReturned { pid, name, box_number },
+                    });
+                }
+                Err(e) => {
+                    self.dead_box_failed.insert(pid);
+                    self.record(RunEvent::DeadBoxFailed {
+                        pid,
+                        name,
+                        reason: e.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
     /// Stamps each change with this frame boundary, then applies it.
     fn apply(&mut self, changes: Vec<Change>, game: &mut impl LiveGame) {
         for change in changes {
@@ -351,6 +450,9 @@ impl RunEngine {
         if let RunEvent::Encounter { area, .. } = &recorded.event {
             self.view.closed_areas.push(area.name.clone());
         }
+        if let Some(grave) = Grave::of(recorded) {
+            self.view.graveyard.insert(0, grave);
+        }
         self.view.feed.insert(0, FeedEntry::of(recorded));
         self.view_version += 1;
     }
@@ -359,6 +461,50 @@ impl RunEngine {
 impl Drop for RunEngine {
     fn drop(&mut self) {
         self.flush();
+    }
+}
+
+/// Moves a party Pokémon to the Dead box or, when that is full, to the
+/// nearest box below it with room, so it is out of the party either way.
+/// Says whether the Dead box was full.
+fn move_to_dead_box_or_another(game: &mut impl Game, slot: u8) -> Result<(Vec<Change>, bool), GameError> {
+    match game.move_to_dead_box(slot) {
+        Ok(changes) => Ok((changes, false)),
+        Err(GameError::BoxFull(dead_box)) => {
+            let mut last = GameError::BoxFull(dead_box);
+            for box_number in (1..dead_box).rev() {
+                match game.move_to_box(slot, box_number) {
+                    Ok(changes) => return Ok((changes, true)),
+                    Err(e) => last = e,
+                }
+            }
+            Err(last)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The opponent's Pokémon out in battle, by species name.
+fn foe_name(battle: &Battle, game: &mut impl Game) -> String {
+    let mut species: Vec<u16> = battle
+        .battlers
+        .iter()
+        .filter(|b| b.side == Side::Opponent && b.species != 0)
+        .map(|b| b.species)
+        .collect();
+    if species.is_empty() {
+        species.extend(game.opponent_party().first().map(|p| p.species));
+    }
+    let names: Vec<String> = species.into_iter().map(|s| game.species_name(s)).collect();
+    names.join(" and ")
+}
+
+/// Its nickname, or its species name if it has none.
+fn display_name(pokemon: &Pokemon, species_name: &str) -> String {
+    if pokemon.nickname.is_empty() {
+        species_name.to_owned()
+    } else {
+        pokemon.nickname.clone()
     }
 }
 

@@ -2,7 +2,7 @@
 //! the Run's state, it decides what a moment in the game means. It reads
 //! nothing and changes nothing itself.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use pactlocke_game::{Area, BattleKind};
 
@@ -34,6 +34,24 @@ pub(crate) struct Rules {
     closed: BTreeSet<u16>,
     /// Whether the Player has had Poké Balls; until then no wild battle counts.
     had_poke_balls: bool,
+    /// Dead PIDs, each with where it has got to since the game was booted.
+    dead: BTreeMap<u32, DeadState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeadState {
+    /// Not moved out of the party since it died, or since the game was booted.
+    NotMovedYet,
+    MovedOut,
+}
+
+/// Why a Dead Pokémon is being moved to the Dead box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeadMove {
+    /// It is in the party since it died, or since the game was booted.
+    First,
+    /// It was moved already and is back: a Violation.
+    Returned,
 }
 
 impl Rules {
@@ -42,6 +60,7 @@ impl Rules {
             ruleset,
             closed: BTreeSet::new(),
             had_poke_balls: false,
+            dead: BTreeMap::new(),
         }
     }
 
@@ -63,6 +82,22 @@ impl Rules {
         self.ruleset.first_encounter && !self.had_poke_balls
     }
 
+    pub fn faint_is_dead(&self) -> bool {
+        self.ruleset.faint_is_dead
+    }
+
+    pub fn is_dead(&self, pid: u32) -> bool {
+        self.dead.contains_key(&pid)
+    }
+
+    /// Why a Pokémon in the party must go to the Dead box, if it must.
+    pub fn dead_move(&self, pid: u32) -> Option<DeadMove> {
+        self.dead.get(&pid).map(|state| match state {
+            DeadState::NotMovedYet => DeadMove::First,
+            DeadState::MovedOut => DeadMove::Returned,
+        })
+    }
+
     /// Takes in an event of the Run, as it happens or when a Run is resumed.
     pub fn record(&mut self, event: &RunEvent) {
         match event {
@@ -70,6 +105,17 @@ impl Rules {
                 self.closed.insert(area.id);
             }
             RunEvent::PokeBallsObtained => self.had_poke_balls = true,
+            RunEvent::Died { pid, .. } => {
+                self.dead.insert(*pid, DeadState::NotMovedYet);
+            }
+            RunEvent::MovedToDeadBox { pid, .. }
+            | RunEvent::DeadReturned { pid, .. }
+            | RunEvent::DeadBoxFull { pid, .. } => {
+                self.dead.insert(*pid, DeadState::MovedOut);
+            }
+            // A newly booted game holds the last in-game save, which may be
+            // from before a Dead Pokémon was moved.
+            RunEvent::Resumed => self.dead.values_mut().for_each(|state| *state = DeadState::NotMovedYet),
             _ => {}
         }
     }

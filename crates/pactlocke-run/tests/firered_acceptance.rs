@@ -1,4 +1,4 @@
-//! Seam 2, local only: a solo first-Encounter Run on the real
+//! Seam 2, local only: a solo Run on the real
 //! FireRed (USA) 1.0, driven through the Run engine on the real game
 //! interface. Skipped unless `PACTLOCKE_ROMS` names a folder holding
 //! `Pokemon - FireRed Version (USA).gba`. Never runs in CI; the ROM is only
@@ -36,6 +36,14 @@ const BATTLER_CONTROLLER: u32 = 0x0300_4FE0; // gBattlerControllerFuncs[0]
 /// What that holds while the Player picks FIGHT / BAG / POKéMON / RUN.
 const CHOOSE_ACTION: [u32; 2] = [0x0802_E438, 0x080E_763C];
 const CATCH_SITE: u32 = 0x0804_0F6C; // IsPlayerPartyAndPokemonStorageFull
+const PARTY: u32 = 0x0202_4284; // gPlayerParty
+const PARTY_COUNT: u32 = 0x0202_4029;
+const PARTY_SLOT_SIZE: usize = 100;
+const PARTY_HP: u32 = 0x56;
+const BATTLE_MONS: u32 = 0x0202_3BE4; // gBattleMons[0]
+const BATTLE_MON_HP: u32 = 0x28;
+const PC_STORAGE_POINTER: u32 = 0x0300_5010;
+const BOX_SLOT_SIZE: u32 = 80;
 const POKE_BALL: u16 = 4;
 const POTION: u16 = 13;
 
@@ -211,6 +219,16 @@ const FR_TO_ROUTE_1: &str =
     "m B 900\nh D 96\nh L 16\nh D 24\nw 120\nh L 96\nh U 160\nh R 32\nh U 200\nm B 200\nh U 120";
 
 fn firered_run(rom: Vec<u8>) -> Driver {
+    firered_run_with(
+        rom,
+        Ruleset {
+            first_encounter: true,
+            ..Ruleset::default()
+        },
+    )
+}
+
+fn firered_run_with(rom: Vec<u8>, ruleset: Ruleset) -> Driver {
     pactlocke_mgba::force_utc_time_zone();
     let store = ProfileStore::bundled().unwrap();
     let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
@@ -225,7 +243,7 @@ fn firered_run(rom: Vec<u8>) -> Driver {
             game_name: profile.name.clone(),
             game_sha1: profile.sha1.clone(),
             rom_path: None,
-            ruleset: Ruleset { first_encounter: true },
+            ruleset,
         },
         Box::new(MemoryStorage::default()),
         Box::new(SystemRunClock),
@@ -339,6 +357,86 @@ fn a_closed_route_1_refuses_the_ball_and_keeps_it_and_running_still_works() {
     assert_eq!(d.game.game_mut().party(), party_before, "nothing was caught");
     assert_eq!(d.game.engine().stamped().len(), 4, "on and off, two sites each");
     assert!(d.feed(FeedKind::Catch).is_empty(), "no catch in the feed");
+    for entry in d.game.engine().view().feed.iter().rev() {
+        eprintln!("feed: {}", entry.text);
+    }
+}
+
+#[test]
+fn a_starter_that_faints_to_the_rival_goes_to_the_dead_box_and_stays_there() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        return;
+    };
+    let mut d = firered_run_with(
+        rom,
+        Ruleset {
+            first_encounter: true,
+            faint_is_dead: true,
+        },
+    );
+
+    // The rival battle in the lab, with the starter left on 1 HP (test setup).
+    d.play(FR_STARTER);
+    d.fast_text();
+    d.play(
+        "h D 64
+w 60",
+    );
+    d.until_action_menu(Keys::A, 3000);
+    d.game.write(PARTY + PARTY_HP, &1u16.to_le_bytes());
+    d.game.write(BATTLE_MONS + BATTLE_MON_HP, &1u16.to_le_bytes());
+    let starter = d.game.game_mut().party()[0].clone();
+    let starter_bytes = d.read(PARTY, PARTY_SLOT_SIZE);
+    d.until_battle_over(Keys::A, 6000);
+
+    let deaths = d.feed(FeedKind::Death);
+    assert_eq!(deaths.len(), 1, "a Death, recorded in the battle: {deaths:?}");
+    assert!(
+        deaths[0].contains("fainted against a trainer's") && deaths[0].ends_with("is Dead"),
+        "{deaths:?}"
+    );
+    let graveyard = d.game.engine().view().graveyard.clone();
+    assert_eq!(graveyard.len(), 1);
+    assert!(graveyard[0].killed_by.starts_with("a trainer's"), "{graveyard:?}");
+
+    // Back on the overworld, before anything can heal it: off to box 14.
+    d.play("m B 600");
+    let deaths = d.feed(FeedKind::Death);
+    assert_eq!(
+        deaths[0],
+        format!(
+            "Moved {} to box 14, the Dead box: Dead Pokémon can't be used again",
+            starter.nickname
+        )
+    );
+    assert_eq!(d.read(PARTY_COUNT, 1)[0], 0, "the party count is fixed");
+    assert!(d.game.game_mut().party().is_empty());
+    let dead_box: Vec<u32> = d
+        .game
+        .game_mut()
+        .pc()
+        .into_iter()
+        .filter(|s| s.box_number == 14)
+        .map(|s| s.pokemon.pid)
+        .collect();
+    assert_eq!(dead_box, [starter.pid]);
+    dump_screen(&d.game, "after-dead-box");
+
+    // Withdrawn by hand (test setup: what the PC's WITHDRAW does to memory): back it goes, in red.
+    let box_14_slot_1 = d.u32(PC_STORAGE_POINTER) + 4 + 13 * 30 * BOX_SLOT_SIZE;
+    d.game.write(box_14_slot_1, &[0; BOX_SLOT_SIZE as usize]);
+    d.game.write(PARTY, &starter_bytes);
+    d.game.write(PARTY_COUNT, &[1]);
+    d.play("w 30");
+    assert_eq!(
+        d.feed(FeedKind::Violation),
+        [format!(
+            "Violation: {} is Dead but was back in the party, so it went back to box 14",
+            starter.nickname
+        )]
+    );
+    assert_eq!(d.read(PARTY_COUNT, 1)[0], 0);
     for entry in d.game.engine().view().feed.iter().rev() {
         eprintln!("feed: {}", entry.text);
     }

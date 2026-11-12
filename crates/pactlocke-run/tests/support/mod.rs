@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use pactlocke_emu::Keys;
-use pactlocke_game::{Area, Battle, BattleKind, Battler, FakeGame, Pokemon, ScriptContext, ScriptStatus, Side};
+use pactlocke_game::{
+    Area, Battle, BattleKind, Battler, FakeGame, PartyStats, Pokemon, ScriptContext, ScriptStatus, Side,
+};
 use pactlocke_run::{FeedKind, MemoryStorage, NewRun, Ruleset, RunClock, RunEngine, RunStorage};
 
 /// 2026-01-01T00:00:00Z.
@@ -84,7 +86,10 @@ impl Player {
 
     /// A first-Encounter Run with this name.
     pub fn starts_named_run_in(name: &str, storage: Box<dyn RunStorage>, clock: TestClock) -> Self {
-        let mut new = new_solo_run(Ruleset { first_encounter: true });
+        let mut new = new_solo_run(Ruleset {
+            first_encounter: true,
+            ..Ruleset::default()
+        });
         new.name = name.into();
         Self::starts(new, storage, clock)
     }
@@ -186,6 +191,76 @@ impl Player {
         self.leaves_battle();
     }
 
+    /// The Player's party Pokémon with this PID faints.
+    pub fn faints(&mut self, pid: u32) {
+        let pokemon = self.game.party.iter_mut().find(|p| p.pid == pid).expect("in the party");
+        pokemon.stats.as_mut().expect("a party Pokémon").hp = 0;
+        self.plays(10);
+    }
+
+    /// The Player loses a battle: the game heals the party before the
+    /// Player is back on the overworld.
+    pub fn blacks_out(&mut self) {
+        self.game.battle = None;
+        self.game.safe_point = false;
+        self.plays(10);
+        for pokemon in &mut self.game.party {
+            pokemon.stats.as_mut().expect("a party Pokémon").hp = HEALTHY_HP;
+        }
+        self.game.safe_point = true;
+        self.plays(10);
+    }
+
+    /// Poison takes the last HP of the party Pokémon with this PID as the Player walks.
+    pub fn is_poisoned_to_faint(&mut self, pid: u32) {
+        self.faints(pid);
+    }
+
+    /// A script runs, such as a trainer talking after the battle, until [`Player::script_ends`].
+    pub fn script_runs(&mut self) {
+        self.game.script = ScriptContext {
+            status: ScriptStatus::Running,
+            position: Some(0x0816_1000),
+        };
+        self.plays(10);
+    }
+
+    pub fn script_ends(&mut self) {
+        self.game.script = ScriptContext {
+            status: ScriptStatus::Idle,
+            position: None,
+        };
+        self.plays(10);
+    }
+
+    /// The Player takes the Pokémon with this PID out of the PC into the party.
+    pub fn withdraws(&mut self, pid: u32) {
+        let at = self
+            .game
+            .pc
+            .iter()
+            .position(|s| s.pokemon.pid == pid)
+            .expect("in the PC");
+        let mut pokemon = self.game.pc.remove(at).pokemon;
+        pokemon.stats = Some(healthy());
+        self.game.party.push(pokemon);
+        self.plays(10);
+    }
+
+    pub fn party_pids(&self) -> Vec<u32> {
+        self.game.party.iter().map(|p| p.pid).collect()
+    }
+
+    /// The PIDs in the fake game's Dead box, box 14.
+    pub fn dead_box_pids(&self) -> Vec<u32> {
+        self.game
+            .pc
+            .iter()
+            .filter(|s| s.box_number == 14)
+            .map(|s| s.pokemon.pid)
+            .collect()
+    }
+
     /// The live feed's texts, newest first, of one kind.
     pub fn feed(&self, kind: FeedKind) -> Vec<String> {
         self.engine
@@ -218,6 +293,29 @@ fn battle(kind: BattleKind, species: u16) -> Battle {
                 party_slot: None,
             },
         ],
+    }
+}
+
+/// A healthy party Pokémon.
+pub fn party_pokemon(species: u16, pid: u32, nickname: &str) -> Pokemon {
+    Pokemon {
+        pid,
+        ot_id: 1,
+        species,
+        nickname: nickname.into(),
+        met_section: 0x65,
+        is_egg: false,
+        stats: Some(healthy()),
+    }
+}
+
+const HEALTHY_HP: u16 = 20;
+
+fn healthy() -> PartyStats {
+    PartyStats {
+        level: 5,
+        hp: HEALTHY_HP,
+        max_hp: HEALTHY_HP,
     }
 }
 

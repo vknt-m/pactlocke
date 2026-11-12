@@ -38,6 +38,36 @@ pub enum RunEvent {
     },
     /// A block the rules called for couldn't be applied.
     BlockFailed { area: AreaRef, reason: String },
+    /// A Pokémon fainted, so it is Dead for the rest of the Run.
+    Died {
+        pid: u32,
+        species: u16,
+        species_name: String,
+        /// Its nickname, or its species name if it has none.
+        name: String,
+        area: Option<AreaRef>,
+        cause: DeathCause,
+    },
+    /// A Dead Pokémon was moved from the party to the Dead box.
+    MovedToDeadBox { pid: u32, name: String, box_number: u8 },
+    /// A Violation: a Dead Pokémon was back in the party, and was moved to the Dead box again.
+    DeadReturned { pid: u32, name: String, box_number: u8 },
+    /// A Violation: the Dead box was full, so a Dead Pokémon went to another box.
+    DeadBoxFull { pid: u32, name: String, box_number: u8 },
+    /// A Violation: a Dead Pokémon couldn't be moved out of the party.
+    DeadBoxFailed { pid: u32, name: String, reason: String },
+}
+
+/// What made a Pokémon faint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "by", rename_all = "snake_case")]
+pub enum DeathCause {
+    /// A wild Pokémon; `foe` is its species name.
+    Wild { foe: String },
+    /// A trainer's Pokémon; `foe` is its species name.
+    Trainer { foe: String },
+    /// Fainting outside battle, which only poison does.
+    Poison,
 }
 
 /// An Area as the log keeps it.

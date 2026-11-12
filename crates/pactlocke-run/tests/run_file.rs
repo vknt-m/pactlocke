@@ -9,7 +9,10 @@ use pactlocke_run::{FeedKind, Ruleset, RunLibrary, RunStorage};
 use support::*;
 
 fn first_encounter() -> Ruleset {
-    Ruleset { first_encounter: true }
+    Ruleset {
+        first_encounter: true,
+        ..Ruleset::default()
+    }
 }
 
 #[test]
@@ -126,4 +129,35 @@ fn files_in_the_runs_folder_that_are_not_runs_are_not_listed() {
     let library = RunLibrary::open(dir.path()).unwrap();
     let _empty = library.create().unwrap();
     assert!(library.list().is_empty(), "nor is a Run file nobody started");
+}
+
+#[test]
+fn a_run_resumed_from_its_file_keeps_its_dead_and_graveyard() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = RunLibrary::open(dir.path()).unwrap();
+    let clock = TestClock::at(START_MS);
+    let ruleset = Ruleset {
+        first_encounter: true,
+        faint_is_dead: true,
+    };
+    let mut player = Player::starts_a_run_in(Box::new(library.create().unwrap()), clock.clone(), ruleset);
+    player.game.party = vec![party_pokemon(PIDGEY, 0x0000_BEEF, "BIRDY")];
+    player.walks_into(route_1());
+    player.meets_wild(RATTATA);
+    player.faints(0x0000_BEEF);
+    player.leaves_battle();
+    drop(player);
+
+    let run = &library.list()[0];
+    assert_eq!(run.ruleset, ruleset);
+    let mut player = Player::resumes_from(Box::new(library.open_run(&run.id).unwrap()), clock);
+    let graveyard = &player.engine.view().graveyard;
+    assert_eq!(graveyard.len(), 1);
+    assert_eq!(graveyard[0].killed_by, "a wild RATTATA on Route 1");
+
+    // Withdrawn in this boot after being moved: a Violation.
+    player.game.party = vec![party_pokemon(PIDGEY, 0x0000_BEEF, "BIRDY")];
+    player.plays(1);
+    player.withdraws(0x0000_BEEF);
+    assert_eq!(player.feed(FeedKind::Violation).len(), 1);
 }

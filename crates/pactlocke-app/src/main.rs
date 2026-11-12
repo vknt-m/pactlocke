@@ -134,6 +134,9 @@ struct NewRunDraft {
     profile: Arc<GameProfile>,
     identity: RomIdentity,
     name: String,
+    /// Why faint = Dead can't be chosen on this ROM, if it can't.
+    faint_is_dead_unavailable: Option<String>,
+    faint_is_dead: bool,
 }
 
 struct PactlockeApp {
@@ -260,7 +263,16 @@ impl PactlockeApp {
                     return Err("First Encounter is this game's own option, which solo Runs don't use yet.".to_owned());
                 }
             }
+            let faint_is_dead_unavailable = match capabilities.get(Rule::FaintIsDead) {
+                Capability::Enforceable => None,
+                Capability::GreyedOut { reason } => Some(reason.clone()),
+                Capability::NativeOption { .. } => {
+                    Some("this game's own option, which solo Runs don't use yet".to_owned())
+                }
+            };
             Ok(NewRunDraft {
+                faint_is_dead: faint_is_dead_unavailable.is_none(),
+                faint_is_dead_unavailable,
                 profile: profile.clone(),
                 name: format!("Solo Run {}", self.runs.len() + 1),
                 rom,
@@ -288,7 +300,10 @@ impl PactlockeApp {
                 game_name: draft.profile.name.clone(),
                 game_sha1: draft.profile.sha1.clone(),
                 rom_path: Some(draft.path.display().to_string()),
-                ruleset: Ruleset { first_encounter: true },
+                ruleset: Ruleset {
+                    first_encounter: true,
+                    faint_is_dead: draft.faint_is_dead,
+                },
             };
             let engine = RunEngine::start(new, Box::new(file), Box::new(SystemRunClock)).map_err(|e| e.to_string())?;
             Ok(self.play_run(engine, core, draft.profile, draft.rom, draft.identity))
@@ -459,6 +474,17 @@ impl PactlockeApp {
         let modal = egui::Modal::new(egui::Id::unique("new run")).show(ctx, |ui| {
             ui.heading("New Run");
             ui.label(format!("{}: solo, with the First Encounter rule.", draft.profile.name));
+            ui.add_space(6.0);
+            let faint = ui.add_enabled(
+                draft.faint_is_dead_unavailable.is_none(),
+                egui::Checkbox::new(
+                    &mut draft.faint_is_dead,
+                    "Faint = Dead: fainted Pokémon go to the Dead box",
+                ),
+            );
+            if let Some(reason) = &draft.faint_is_dead_unavailable {
+                faint.on_disabled_hover_text(format!("Can't be enforced on this ROM: {reason}"));
+            }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label("Name");

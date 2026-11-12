@@ -8,7 +8,10 @@ use pactlocke_run::{FeedKind, MemoryStorage, Ruleset};
 use support::*;
 
 fn first_encounter() -> Ruleset {
-    Ruleset { first_encounter: true }
+    Ruleset {
+        first_encounter: true,
+        ..Ruleset::default()
+    }
 }
 
 #[test]
@@ -142,7 +145,10 @@ fn a_place_the_game_profile_does_not_list_has_no_encounter() {
 
 #[test]
 fn without_the_first_encounter_rule_nothing_is_blocked() {
-    let mut player = Player::starts_a_run(Ruleset { first_encounter: false });
+    let mut player = Player::starts_a_run(Ruleset {
+        first_encounter: false,
+        ..Ruleset::default()
+    });
     player.walks_into(route_1());
     player.meets_wild(PIDGEY);
     player.leaves_battle();
