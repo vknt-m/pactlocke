@@ -54,6 +54,13 @@ pub struct Ruleset {
     /// for no caps. The Host may edit the levels before the lock.
     #[serde(default)]
     pub level_caps: Option<Vec<LevelCap>>,
+    /// The Bag is refused in trainer battles and only Poké Balls work in
+    /// wild battles; items outside battle and held items still work.
+    #[serde(default)]
+    pub no_items: bool,
+    /// The battle style is forced to Set.
+    #[serde(default)]
+    pub set_mode: bool,
 }
 
 fn allowed() -> bool {
@@ -70,6 +77,8 @@ impl Default for Ruleset {
             gifts: true,
             statics: false,
             level_caps: None,
+            no_items: false,
+            set_mode: false,
         }
     }
 }

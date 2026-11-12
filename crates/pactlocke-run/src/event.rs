@@ -123,6 +123,16 @@ pub enum RunEvent {
     /// The game's level checks can't be patched, so the cap is only a soft
     /// cap: a Player over it can't ready up at a Sync Gate.
     SoftCap { reason: String },
+    /// No items: the Bag is refused in trainer battles and only Poké Balls
+    /// work in wild battles. Said once per Run.
+    ItemsBanned,
+    /// No items couldn't be put in place on this game. Said once per Run.
+    ItemBanFailed { reason: String },
+    /// Set mode: the battle style was written to Set; `again` when the
+    /// Player had changed it back.
+    SetModeForced { again: bool },
+    /// Set mode couldn't be forced on this game. Said once per Run.
+    SetModeFailed { reason: String },
 }
 
 /// A Gift or Static source, as the log keeps it.

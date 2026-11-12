@@ -54,6 +54,12 @@ const CAP_SITES: [u32; 4] = [0x0802_1CFA, 0x0802_1FB6, 0x0804_1834, 0x0804_274E]
 const BADGES: u32 = 0xFE4; // in save block 1
 const BATTLE_MON_SIZE: u32 = 0x58;
 const BATTLE_MON_LEVEL: u32 = 0x2A;
+const MAIN_CALLBACK2: u32 = 0x0300_30F4; // gMain.callback2
+const BATTLE_STYLE: u32 = 0x15; // in save block 2, bit 1: Set
+const ITEMS: u32 = 0x083D_B028; // gItems
+const ITEM_SIZE: usize = 44;
+const ITEM_COUNT: usize = 375;
+const ITEM_BATTLE_USAGE: usize = 32;
 
 type Running = RunningGame<MgbaCore>;
 
@@ -645,6 +651,198 @@ w 60",
     for entry in d.game.engine().view().feed.iter().rev() {
         eprintln!("feed: {}", entry.text);
     }
+}
+
+/// Into the lab rival battle with a second Pokémon on each side (test
+/// setup: copies of the first, the rival's on full HP), up to the action menu.
+fn rival_battle_with_two_pokemon_each(d: &mut Driver) {
+    d.play("h D 64\nw 60");
+    d.until_action_menu(Keys::A, 3000);
+    let rivals = d.read(ENEMY_PARTY, PARTY_SLOT_SIZE);
+    d.game.write(ENEMY_PARTY + PARTY_SLOT_SIZE as u32, &rivals);
+    let starter = d.read(PARTY, PARTY_SLOT_SIZE);
+    d.game.write(PARTY + PARTY_SLOT_SIZE as u32, &starter);
+    d.game.write(PARTY_COUNT, &[2]);
+}
+
+/// Leaves the rival's Pokémon out in battle on 1 HP (test setup).
+fn rivals_pokemon_on_1_hp(d: &mut Driver) {
+    d.game
+        .write(BATTLE_MONS + BATTLE_MON_SIZE + BATTLE_MON_HP, &1u16.to_le_bytes());
+}
+
+/// Whether the battle style option is on Set.
+fn battle_style_is_set(d: &mut Driver) -> bool {
+    let options = d.u32(SAVE_BLOCK_2_POINTER) + BATTLE_STYLE;
+    d.read(options, 1)[0] & 0x02 != 0
+}
+
+/// Whether the game's text is anywhere in EWRAM, where it builds the lines it shows.
+fn shows_text(d: &mut Driver, encoded: &[u8]) -> bool {
+    d.read(0x0200_0000, 0x4_0000)
+        .windows(encoded.len())
+        .any(|w| w == encoded)
+}
+
+/// FIGHT with the first move against a rival's Pokémon left on 1 HP, then A
+/// through what follows. Says whether the game offered to change Pokémon
+/// (Shift mode's "Will … change POKéMON?", where A opens the party menu)
+/// before the rival's second Pokémon came out.
+fn knock_out_the_first_and_see_if_shift_is_offered(d: &mut Driver) -> bool {
+    rivals_pokemon_on_1_hp(d);
+    let battle_screen = d.u32(MAIN_CALLBACK2);
+    d.play("p A 30\np A 60");
+    for i in 0..6000 {
+        if d.u32(MAIN_CALLBACK2) != battle_screen {
+            (0..90).for_each(|_| d.frame(Keys::NONE));
+            dump_screen(&d.game, "shift-offered");
+            return true;
+        }
+        if i > 200 && d.at_action_menu() {
+            return false;
+        }
+        d.frame(if i % 16 < 3 { Keys::A } else { Keys::NONE });
+    }
+    panic!("neither the party menu nor the action menu came up");
+}
+
+#[test]
+fn set_mode_holds_in_a_trainer_battle_and_the_bag_is_refused_there() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        return;
+    };
+    let mut d = firered_run_with(
+        rom,
+        Ruleset {
+            no_items: true,
+            set_mode: true,
+            ..Ruleset::default()
+        },
+    );
+    d.play(FR_STARTER);
+    assert!(battle_style_is_set(&mut d), "the battle style is Set");
+    let run = d.feed(FeedKind::Run);
+    assert!(
+        run.contains(&"Set mode: the battle style is set to Set".to_owned()),
+        "{run:?}"
+    );
+    assert!(run.iter().any(|e| e.starts_with("No items in battle")), "{run:?}");
+    d.fast_text();
+    d.give(ITEMS_POCKET, POTION, 1);
+
+    // BAG in a trainer battle: "Items can't be used now", and the Bag never opens.
+    rival_battle_with_two_pokemon_each(&mut d);
+    let battle_screen = d.u32(MAIN_CALLBACK2);
+    // "Items can't" in the game's characters.
+    const ITEMS_CANT: [u8; 11] = [0xC3, 0xE8, 0xD9, 0xE1, 0xE7, 0x00, 0xD7, 0xD5, 0xE2, 0xB4, 0xE8];
+    assert!(!shows_text(&mut d, &ITEMS_CANT), "not before BAG");
+    d.play("p R 10\np A 40");
+    dump_screen(&d.game, "bag-refused");
+    assert!(
+        shows_text(&mut d, &ITEMS_CANT),
+        "the game's own \"Items can't be used now.\""
+    );
+    for _ in 0..120 {
+        d.frame(Keys::NONE);
+        assert_eq!(d.u32(MAIN_CALLBACK2), battle_screen, "the Bag opened");
+    }
+    d.until_action_menu(Keys::B, 3000);
+    d.play("p L 10");
+
+    // The rival's next Pokémon comes out with no offer to change.
+    assert!(
+        !knock_out_the_first_and_see_if_shift_is_offered(&mut d),
+        "Set mode: no offer to change Pokémon"
+    );
+    rivals_pokemon_on_1_hp(&mut d);
+    d.until_battle_over(Keys::A, 6000);
+    for entry in d.game.engine().view().feed.iter().rev() {
+        eprintln!("feed: {}", entry.text);
+    }
+}
+
+#[test]
+fn control_without_set_mode_the_same_battle_offers_to_change_pokemon() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        return;
+    };
+    let mut d = firered_run_with(rom, Ruleset::default());
+    d.play(FR_STARTER);
+    assert!(!battle_style_is_set(&mut d), "a new game's battle style is Shift");
+    d.fast_text();
+    rival_battle_with_two_pokemon_each(&mut d);
+    assert!(knock_out_the_first_and_see_if_shift_is_offered(&mut d));
+}
+
+#[test]
+fn with_no_items_only_balls_work_in_a_wild_battle_and_items_work_outside_battle() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        return;
+    };
+    let clean_items = {
+        let at = (ITEMS - 0x0800_0000) as usize;
+        rom[at..at + ITEM_COUNT * ITEM_SIZE].to_vec()
+    };
+    let mut d = firered_run_with(
+        rom,
+        Ruleset {
+            no_items: true,
+            ..Ruleset::default()
+        },
+    );
+    d.play(FR_STARTER);
+    d.fast_text();
+    d.play("h D 64\nw 60");
+    d.until_action_menu(Keys::A, 3000);
+    rivals_pokemon_on_1_hp(&mut d);
+    d.until_battle_over(Keys::A, 6000);
+    d.play(FR_TO_ROUTE_1);
+
+    // Only battle use changed in the item table: held effects, field use
+    // and everything else are as the ROM has them.
+    let patched = d.read(ITEMS, ITEM_COUNT * ITEM_SIZE);
+    for (i, (now, clean)) in patched.iter().zip(&clean_items).enumerate() {
+        if now != clean {
+            assert_eq!(
+                i % ITEM_SIZE,
+                ITEM_BATTLE_USAGE,
+                "item {} byte {:#x} changed",
+                i / ITEM_SIZE,
+                i % ITEM_SIZE
+            );
+        }
+    }
+    assert_ne!(patched, clean_items, "battle use is banned");
+
+    // A Potion works outside battle.
+    d.game.write(PARTY + PARTY_HP, &5u16.to_le_bytes());
+    d.give(ITEMS_POCKET, POTION, 2);
+    // Once the walk has stopped, or START is missed.
+    d.play("w 60");
+    d.play(START_MENU_ON_BAG);
+    d.play(USE_FIRST_ITEM);
+    assert!(d.u16(PARTY + PARTY_HP) > 5, "the Potion healed");
+    assert_eq!(d.quantity(ITEMS_POCKET, POTION), 1);
+
+    // In a wild battle the Potion has no USE, so nothing is used...
+    d.give(BALLS_POCKET, POKE_BALL, 5);
+    d.game.write(PARTY + PARTY_HP, &5u16.to_le_bytes());
+    d.walk_in_grass(6000);
+    d.until_action_menu(Keys::B, 3000);
+    let hp = d.u16(BATTLE_MONS + BATTLE_MON_HP);
+    d.play("p R 10\np A 60\np A 40");
+    dump_screen(&d.game, "potion-in-wild-battle");
+    d.play("p A 40\np B 60");
+    d.until_action_menu(Keys::B, 3000);
+    assert_eq!(d.quantity(ITEMS_POCKET, POTION), 1, "the Potion is kept");
+    assert_eq!(d.u16(BATTLE_MONS + BATTLE_MON_HP), hp, "and nothing healed");
+
+    // ...while a Poké Ball still throws.
+    d.play("p A 60\np R 30\np R 30\np A 40\np A 120");
+    assert_eq!(d.quantity(BALLS_POCKET, POKE_BALL), 4, "the ball was thrown");
 }
 
 /// Writes the screen as a PPM under `target/acceptance/` for a person to look at.

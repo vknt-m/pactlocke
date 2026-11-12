@@ -323,6 +323,8 @@ impl PactlockeApp {
                 Rule::Gifts,
                 Rule::Statics,
                 Rule::FaintIsDead,
+                Rule::NoItems,
+                Rule::SetMode,
             ]
             .into_iter()
             .filter_map(|rule| unavailable_reason(capabilities.get(rule)).map(|why| (rule, why)))
@@ -591,6 +593,18 @@ impl PactlockeApp {
                 &mut ruleset.faint_is_dead,
                 "Faint = Dead: fainted Pokémon go to the Dead box",
                 draft.unavailable.get(&Rule::FaintIsDead).cloned(),
+            );
+            rule_checkbox(
+                ui,
+                &mut ruleset.no_items,
+                "No items: the Bag is refused in trainer battles, and only Poké Balls work in wild battles",
+                draft.unavailable.get(&Rule::NoItems).cloned(),
+            );
+            rule_checkbox(
+                ui,
+                &mut ruleset.set_mode,
+                "Set mode: the battle style is kept on Set",
+                draft.unavailable.get(&Rule::SetMode).cloned(),
             );
             level_caps_editor(ui, draft);
             ui.add_space(6.0);

@@ -538,6 +538,16 @@ impl<M: Memory> Game for ProfileGame<M> {
         }])
     }
 
+    fn force_set_mode(&mut self) -> Actions {
+        let Some(Method::OptionBit { option, value }) = self.profile.rules.set_mode.clone() else {
+            return Err(GameError::NoMethod("set mode"));
+        };
+        if self.option(&option).as_deref() == Some(value.as_str()) {
+            return Ok(Vec::new());
+        }
+        self.set_option(&option, &value)
+    }
+
     fn set_option(&mut self, name: &str, value: &str) -> Actions {
         let def = self
             .profile

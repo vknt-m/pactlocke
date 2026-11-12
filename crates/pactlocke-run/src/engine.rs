@@ -1,5 +1,6 @@
 mod caps;
 mod gifts;
+mod no_items_and_set_mode;
 
 use std::collections::BTreeSet;
 
@@ -51,6 +52,8 @@ pub struct RunEngine {
     /// The level cap patched in since the game was booted (or found
     /// unpatchable); ROM patches don't survive a boot.
     cap_patched_for: Option<u8>,
+    /// Whether no items is patched in since the game was booted.
+    items_patched: bool,
 }
 
 /// A battle in progress, as the engine saw it begin.
@@ -140,6 +143,7 @@ impl RunEngine {
             known: None,
             release_failed: BTreeSet::new(),
             cap_patched_for: None,
+            items_patched: false,
         }
     }
 
@@ -196,6 +200,8 @@ impl RunEngine {
         // a game is loaded they read as garbage.
         if game.at_safe_overworld_point() {
             self.keep_level_cap(game);
+            self.keep_items_banned(game);
+            self.keep_set_mode(game);
         }
 
         let battle = game.battle();

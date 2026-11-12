@@ -453,6 +453,24 @@ fn setting_an_option_keeps_the_other_options_in_its_byte() {
 }
 
 #[test]
+fn set_mode_writes_the_battle_style_option_only_while_it_isnt_set() {
+    let mut game = at_overworld();
+    game.memory_mut().put8(SAVE_BLOCK_2 + 0x15, 0x05); // battle style Shift
+    let changes = game.force_set_mode().unwrap();
+    assert_eq!(
+        changes,
+        vec![Change::Write {
+            addr: SAVE_BLOCK_2 + 0x15,
+            bytes: vec![0x07]
+        }]
+    );
+
+    game.memory_mut().apply(&changes);
+    assert_eq!(game.option("battle_style"), Some("set".into()));
+    assert_eq!(game.force_set_mode(), Ok(Vec::new()), "nothing to write once it is Set");
+}
+
+#[test]
 fn a_species_primary_type_is_read_from_the_loaded_rom() {
     // A randomized ROM changes types, so they come from the ROM, not a list.
     let mut rom = patchable_rom(b"BPRE");

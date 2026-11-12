@@ -45,6 +45,10 @@ pub struct FakeGame {
     pub cap_stage: usize,
     /// Whether the game has level cap sites to patch; without them only a soft cap applies.
     pub has_cap_sites: bool,
+    /// Whether the game has a way to refuse the Bag and ban items in battle.
+    pub has_item_ban: bool,
+    /// Whether the game has a battle style option for set mode.
+    pub has_set_mode: bool,
     /// Option settings by name, such as `battle_style = "shift"`.
     pub options: BTreeMap<String, String>,
     /// The settings each option has.
@@ -89,6 +93,8 @@ impl Default for FakeGame {
             badges: Badges::default(),
             cap_stage: 0,
             has_cap_sites: true,
+            has_item_ban: true,
+            has_set_mode: true,
             options: BTreeMap::from([("battle_style".to_owned(), "shift".to_owned())]),
             option_values: BTreeMap::from([("battle_style".to_owned(), vec!["shift".to_owned(), "set".to_owned()])]),
             trainer_id: 0,
@@ -278,10 +284,16 @@ impl Game for FakeGame {
     }
 
     fn ban_items_in_wild_battles(&mut self, banned: bool) -> Actions {
+        if !self.has_item_ban {
+            return Err(GameError::NoMethod("no items in wild battles"));
+        }
         Ok(vec![fake_patch(BAN_WILD_ITEMS, vec![u8::from(banned)])])
     }
 
     fn lock_bag_in_trainer_battles(&mut self, locked: bool) -> Actions {
+        if !self.has_item_ban {
+            return Err(GameError::NoMethod("no items in trainer battles"));
+        }
         Ok(vec![fake_patch(LOCK_BAG, vec![u8::from(locked)])])
     }
 
@@ -334,6 +346,16 @@ impl Game for FakeGame {
         let mut bytes = vec![party_slot];
         bytes.extend_from_slice(name.as_bytes());
         Ok(vec![fake_write(NICKNAME, bytes)])
+    }
+
+    fn force_set_mode(&mut self) -> Actions {
+        if !self.has_set_mode {
+            return Err(GameError::NoMethod("set mode"));
+        }
+        if self.options.get("battle_style").map(String::as_str) == Some("set") {
+            return Ok(Vec::new());
+        }
+        self.set_option("battle_style", "set")
     }
 
     fn set_option(&mut self, name: &str, value: &str) -> Actions {

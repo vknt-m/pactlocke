@@ -221,6 +221,9 @@ pub trait Game {
     /// Moves a party Pokémon to the Dead box.
     fn move_to_dead_box(&mut self, party_slot: u8) -> Actions;
     fn write_nickname(&mut self, party_slot: u8, name: &str) -> Actions;
-    /// Sets one of the game's options: forced set mode, or a native option written back.
+    /// The writes that put the battle style on Set through the game's own
+    /// option; none when it is on Set already.
+    fn force_set_mode(&mut self) -> Actions;
+    /// Sets one of the game's options, such as a native option written back.
     fn set_option(&mut self, name: &str, value: &str) -> Actions;
 }

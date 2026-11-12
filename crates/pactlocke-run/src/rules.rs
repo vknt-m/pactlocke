@@ -77,6 +77,12 @@ pub(crate) struct Rules {
     level_cap: Option<u8>,
     /// Whether the cap is only a soft cap: the game's level checks can't be patched.
     soft_cap: bool,
+    /// What the log has said about no items and set mode, so each is said
+    /// once, and whether set mode has been forced before in this Run.
+    items_banned_said: bool,
+    item_ban_failed_said: bool,
+    set_mode_forced_before: bool,
+    set_mode_failed_said: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +114,10 @@ impl Rules {
             cap_stage: None,
             level_cap: None,
             soft_cap: false,
+            items_banned_said: false,
+            item_ban_failed_said: false,
+            set_mode_forced_before: false,
+            set_mode_failed_said: false,
         }
     }
 
@@ -222,6 +232,30 @@ impl Rules {
         })
     }
 
+    pub fn no_items(&self) -> bool {
+        self.ruleset.no_items
+    }
+
+    pub fn set_mode(&self) -> bool {
+        self.ruleset.set_mode
+    }
+
+    pub fn items_banned_said(&self) -> bool {
+        self.items_banned_said
+    }
+
+    pub fn item_ban_failed_said(&self) -> bool {
+        self.item_ban_failed_said
+    }
+
+    pub fn set_mode_forced_before(&self) -> bool {
+        self.set_mode_forced_before
+    }
+
+    pub fn set_mode_failed_said(&self) -> bool {
+        self.set_mode_failed_said
+    }
+
     /// The level cap now, once one is set.
     pub fn level_cap(&self) -> Option<u8> {
         self.level_cap
@@ -256,6 +290,10 @@ impl Rules {
                 self.level_cap = Some(*level);
             }
             RunEvent::SoftCap { .. } => self.soft_cap = true,
+            RunEvent::ItemsBanned => self.items_banned_said = true,
+            RunEvent::ItemBanFailed { .. } => self.item_ban_failed_said = true,
+            RunEvent::SetModeForced { .. } => self.set_mode_forced_before = true,
+            RunEvent::SetModeFailed { .. } => self.set_mode_failed_said = true,
             RunEvent::Released { pid, .. } => {
                 self.to_release.remove(pid);
             }

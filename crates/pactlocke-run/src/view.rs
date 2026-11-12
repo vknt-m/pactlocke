@@ -270,6 +270,22 @@ impl FeedEntry {
                     None => "No level cap any more: every cap is passed".to_owned(),
                 },
             ),
+            RunEvent::ItemsBanned => (
+                FeedKind::Run,
+                "No items in battle: the Bag is refused in trainer battles, and only Poké Balls work in wild battles"
+                    .to_owned(),
+            ),
+            RunEvent::ItemBanFailed { reason } => {
+                (FeedKind::Problem, format!("Couldn't ban items in battle: {reason}"))
+            }
+            RunEvent::SetModeForced { again: false } => {
+                (FeedKind::Run, "Set mode: the battle style is set to Set".to_owned())
+            }
+            RunEvent::SetModeForced { again: true } => (
+                FeedKind::Run,
+                "Set mode: the battle style was changed, so it is set back to Set".to_owned(),
+            ),
+            RunEvent::SetModeFailed { reason } => (FeedKind::Problem, format!("Couldn't force set mode: {reason}")),
             RunEvent::SoftCap { reason } => (
                 FeedKind::Run,
                 format!(
