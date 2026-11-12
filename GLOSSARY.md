@@ -29,7 +29,7 @@ A place in the game that counts as one encounter location for the Run's first-en
 _Avoid_: Route (too narrow), map (one Area can span many maps), location
 
 **Encounter**:
-A Player's one chance at a Pokémon from a given source, whether or not it is caught. There are three kinds of source: an Area (the first wild Pokémon the Player battles there, not merely entering it), a Gift, or a Static.
+A Player's one chance at a Pokémon from a given source, whether or not it is caught. There are three kinds of source: an Area (the first wild Pokémon the Player battles there, not merely entering it), a Gift, or a Static. Wild battles before the Player first has Poké Balls don't count.
 _Avoid_: Catch (a catch is only one possible outcome of an Encounter)
 
 **Gift**:

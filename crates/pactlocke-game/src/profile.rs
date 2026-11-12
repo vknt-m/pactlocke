@@ -152,6 +152,9 @@ pub struct Layout {
     pub trainer_id: u32,
     /// In save block 1: one byte, a bit per badge.
     pub badges: u32,
+    /// In save block 1: the Bag's Poké Balls pocket, 4 bytes a slot (item, quantity).
+    pub balls_pocket: u32,
+    pub balls_pocket_slots: u8,
     /// The PC box (counting from 1) that holds the Dead.
     pub dead_box: u8,
 }

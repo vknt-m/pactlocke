@@ -258,14 +258,32 @@ fn a_closed_route_1_refuses_the_ball_and_keeps_it_and_running_still_works() {
         "the rival battle isn't an Encounter"
     );
 
-    // Route 1's first wild battle is its Encounter; catching stays on.
+    // Route 1's first wild battle with Poké Balls is its Encounter; catching stays on.
     d.play(FR_TO_ROUTE_1);
     assert_eq!(d.game.game_mut().area().map(|a| a.name), Some("Route 1".into()));
+    // Oak hasn't handed over Poké Balls yet, so a wild battle here doesn't count.
+    d.walk_in_grass(6000);
+    d.until_action_menu(Keys::B, 3000);
+    let not_counted = d.feed(FeedKind::Encounter);
+    assert_eq!(not_counted.len(), 1, "{not_counted:?}");
+    assert!(
+        not_counted[0].ends_with("not counted: no Poké Balls yet"),
+        "{not_counted:?}"
+    );
+    d.run_away();
+
+    // With Poké Balls in the Bag, Encounters count from the next wild battle.
     d.give(BALLS_POCKET, POKE_BALL, 5);
+    d.play("w 180");
+    assert!(
+        d.feed(FeedKind::Run)
+            .iter()
+            .any(|e| e.starts_with("You have Poké Balls"))
+    );
     d.walk_in_grass(6000);
     d.until_action_menu(Keys::B, 3000);
     let encounters = d.feed(FeedKind::Encounter);
-    assert_eq!(encounters.len(), 1, "{encounters:?}");
+    assert_eq!(encounters.len(), 2, "{encounters:?}");
     assert!(
         ["Route 1: a wild PIDGEY,", "Route 1: a wild RATTATA,"]
             .iter()
@@ -312,7 +330,7 @@ fn a_closed_route_1_refuses_the_ball_and_keeps_it_and_running_still_works() {
     // And running away from the closed Area works; the block comes off with the battle.
     d.run_away();
     assert!(!d.in_battle());
-    d.play("w 10");
+    d.play("w 180");
     assert_eq!(
         d.read(CATCH_SITE, 4),
         clean_catch_site,

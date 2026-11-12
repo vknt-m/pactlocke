@@ -181,6 +181,8 @@ pub trait Game {
     fn species_name(&mut self, species: u16) -> String;
     /// On the overworld and out of battle: where Pokémon can be moved safely.
     fn at_safe_overworld_point(&mut self) -> bool;
+    /// Whether the Bag holds any kind of Poké Ball.
+    fn holds_poke_balls(&mut self) -> bool;
 
     // Actions. Each returns changes for the Run engine to apply.
 

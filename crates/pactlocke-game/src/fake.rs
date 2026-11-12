@@ -47,6 +47,7 @@ pub struct FakeGame {
     /// Species names; a species not listed is called `SPECIES <number>`.
     pub species_names: BTreeMap<u16, String>,
     pub safe_point: bool,
+    pub holds_poke_balls: bool,
 
     // What applied changes have switched on.
     pub catches_blocked: bool,
@@ -59,7 +60,8 @@ pub struct FakeGame {
 }
 
 impl Default for FakeGame {
-    /// A Player on the overworld with an empty party, no script running.
+    /// A Player on the overworld with an empty party, no script running,
+    /// who already has Poké Balls.
     fn default() -> Self {
         Self {
             area: None,
@@ -78,6 +80,7 @@ impl Default for FakeGame {
             primary_types: BTreeMap::new(),
             species_names: BTreeMap::new(),
             safe_point: true,
+            holds_poke_balls: true,
             catches_blocked: false,
             level_cap: None,
             wild_items_banned: false,
@@ -204,6 +207,10 @@ impl Game for FakeGame {
 
     fn at_safe_overworld_point(&mut self) -> bool {
         self.safe_point && self.battle.is_none()
+    }
+
+    fn holds_poke_balls(&mut self) -> bool {
+        self.holds_poke_balls
     }
 
     fn block_catches(&mut self, blocked: bool) -> Actions {

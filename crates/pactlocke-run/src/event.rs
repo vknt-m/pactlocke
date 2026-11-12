@@ -9,6 +9,14 @@ pub enum RunEvent {
     Started { game_name: String },
     /// The Run was opened again; the game was booted afresh.
     Resumed,
+    /// The Player first holds Poké Balls; wild Encounters count from here on.
+    PokeBallsObtained,
+    /// A wild battle before the Player had Poké Balls: no Encounter is used.
+    NotCounted {
+        area: AreaRef,
+        species: u16,
+        species_name: String,
+    },
     /// The first wild battle in an Area: its one Encounter is used.
     Encounter {
         area: AreaRef,

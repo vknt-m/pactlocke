@@ -307,6 +307,14 @@ impl<M: Memory> Game for ProfileGame<M> {
         callback == self.profile.symbols.overworld_callback & !1 && !self.in_battle()
     }
 
+    fn holds_poke_balls(&mut self) -> bool {
+        let layout = &self.profile.layout;
+        let (offset, slots) = (layout.balls_pocket, layout.balls_pocket_slots);
+        let pocket = self.save_block(1) + offset;
+        // The game empties a slot's item when its last ball is used.
+        (0..u32::from(slots)).any(|slot| self.u16(pocket + slot * 4) != 0)
+    }
+
     fn block_catches(&mut self, blocked: bool) -> Actions {
         self.toggle("catch blocks", self.profile.rules.catch_block.as_ref(), blocked)
     }

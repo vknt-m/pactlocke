@@ -111,6 +111,8 @@ pc_box_slots = 30
 pc_boxes_offset = 4
 trainer_id = 0x0A
 badges = 0xFE4
+balls_pocket = 0x430
+balls_pocket_slots = 13
 dead_box = 14
 
 [options.battle_style]

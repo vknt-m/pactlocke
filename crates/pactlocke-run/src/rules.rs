@@ -20,6 +20,8 @@ pub(crate) struct BattleStart<'a> {
 pub(crate) enum Verdict {
     /// Nothing for the rules here.
     Nothing,
+    /// A wild battle before the Player has Poké Balls: it doesn't use the Encounter.
+    NotCounted,
     /// The Area's one Encounter: catching is allowed.
     Encounter,
     /// The Area is closed: ball throws are refused for this battle.
@@ -30,6 +32,8 @@ pub(crate) struct Rules {
     ruleset: Ruleset,
     /// Areas whose Encounter is used.
     closed: BTreeSet<u16>,
+    /// Whether the Player has had Poké Balls; until then no wild battle counts.
+    had_poke_balls: bool,
 }
 
 impl Rules {
@@ -37,6 +41,7 @@ impl Rules {
         Self {
             ruleset,
             closed: BTreeSet::new(),
+            had_poke_balls: false,
         }
     }
 
@@ -47,15 +52,25 @@ impl Rules {
         }
         match start.area {
             None => Verdict::Nothing,
+            Some(_) if !self.had_poke_balls => Verdict::NotCounted,
             Some(area) if self.closed.contains(&area.id) => Verdict::BlockCatches,
             Some(_) => Verdict::Encounter,
         }
     }
 
+    /// Whether the game should be watched for the Player's first Poké Balls.
+    pub fn waiting_for_poke_balls(&self) -> bool {
+        self.ruleset.first_encounter && !self.had_poke_balls
+    }
+
     /// Takes in an event of the Run, as it happens or when a Run is resumed.
     pub fn record(&mut self, event: &RunEvent) {
-        if let RunEvent::Encounter { area, .. } = event {
-            self.closed.insert(area.id);
+        match event {
+            RunEvent::Encounter { area, .. } => {
+                self.closed.insert(area.id);
+            }
+            RunEvent::PokeBallsObtained => self.had_poke_balls = true,
+            _ => {}
         }
     }
 }

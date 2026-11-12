@@ -30,7 +30,7 @@ The ROM is only read into memory. Pactlocke never copies or changes ROM, save or
 
 ## Runs
 
-**New Run…** picks a supported ROM (FireRed (USA) 1.0 for now) and starts a named solo Run with the First Encounter rule: your first wild battle in each Area is its Encounter, and in an Area whose Encounter is used the game refuses a ball with its own "This isn't the time to use that!" and keeps the ball. Running is always allowed. The side panel's live feed says what happened.
+**New Run…** picks a supported ROM (FireRed (USA) 1.0 for now) and starts a named solo Run with the First Encounter rule: once you have Poké Balls, your first wild battle in each Area is its Encounter, and in an Area whose Encounter is used the game refuses a ball with its own "This isn't the time to use that!" and keeps the ball. Running is always allowed. The side panel's live feed says what happened.
 
 Runs are listed on the home screen; **Resume** opens one again. Each Run is one SQLite file in a `data/runs` folder next to the app (or your user data folder if that can't be written to). It holds the Run's events, your button presses with every write and patch the Run made, and the game's in-game save, which the game boots with on resume. A Run resumes from your last in-game save; suspending mid-play comes later. Outside a Run, **Open ROM…** just plays a ROM, and its in-game save is kept in memory only.
 

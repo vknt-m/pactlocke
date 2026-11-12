@@ -34,6 +34,14 @@ impl FeedEntry {
         let (kind, text) = match &recorded.event {
             RunEvent::Started { game_name } => (FeedKind::Run, format!("Run started on {game_name}")),
             RunEvent::Resumed => (FeedKind::Run, "Run resumed".to_owned()),
+            RunEvent::PokeBallsObtained => (
+                FeedKind::Run,
+                "You have Poké Balls: wild Encounters count from now on".to_owned(),
+            ),
+            RunEvent::NotCounted { area, species_name, .. } => (
+                FeedKind::Encounter,
+                format!("{}: a wild {species_name}, not counted: no Poké Balls yet", area.name),
+            ),
             RunEvent::Encounter { area, species_name, .. } => (
                 FeedKind::Encounter,
                 format!("{}: a wild {species_name}, this Area's Encounter", area.name),

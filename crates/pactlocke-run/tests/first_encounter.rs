@@ -197,10 +197,11 @@ fn the_feed_starts_with_the_run_and_lists_newest_first() {
         [
             "Caught PIDGEY on Route 1",
             "Route 1: a wild PIDGEY, this Area's Encounter",
+            "You have Poké Balls: wild Encounters count from now on",
             "Run started on Pokémon FireRed (USA) 1.0",
         ]
     );
-    assert_eq!(player.engine.view().feed[2].at_ms, START_MS);
+    assert_eq!(player.engine.view().feed[3].at_ms, START_MS);
 }
 
 #[test]
@@ -217,7 +218,11 @@ fn a_resumed_run_still_has_its_closed_areas_and_feed() {
     assert_eq!(player.engine.view().name, "Kanto solo");
     assert_eq!(
         player.feed(FeedKind::Run),
-        ["Run resumed", "Run started on Pokémon FireRed (USA) 1.0"]
+        [
+            "Run resumed",
+            "You have Poké Balls: wild Encounters count from now on",
+            "Run started on Pokémon FireRed (USA) 1.0"
+        ]
     );
     assert_eq!(player.engine.view().closed_areas, ["Route 1"]);
 
@@ -263,4 +268,82 @@ fn a_run_file_that_cannot_be_written_is_shown_in_the_feed() {
         ["The Run file can't be written, so this Run may not resume as it is now: disk full"],
         "said once"
     );
+}
+
+#[test]
+fn wild_battles_before_the_player_has_poke_balls_do_not_count() {
+    let mut player = Player::starts_a_run(first_encounter());
+    player.game.holds_poke_balls = false;
+    player.walks_into(route_1());
+    player.meets_wild(PIDGEY);
+    player.leaves_battle();
+
+    assert_eq!(
+        player.feed(FeedKind::Encounter),
+        ["Route 1: a wild PIDGEY, not counted: no Poké Balls yet"]
+    );
+    assert!(player.engine.view().closed_areas.is_empty());
+
+    // Oak hands over Poké Balls: from then on Encounters count.
+    player.game.holds_poke_balls = true;
+    player.plays(10);
+    assert_eq!(
+        player.feed(FeedKind::Run)[0],
+        "You have Poké Balls: wild Encounters count from now on"
+    );
+    player.meets_wild(RATTATA);
+    assert!(!player.game.catches_blocked, "Route 1 still has its Encounter");
+    assert_eq!(
+        player.feed(FeedKind::Encounter)[0],
+        "Route 1: a wild RATTATA, this Area's Encounter"
+    );
+}
+
+#[test]
+fn encounters_keep_counting_after_the_last_ball_is_thrown() {
+    let mut player = Player::starts_a_run(first_encounter());
+    player.walks_into(route_1());
+    player.meets_wild(PIDGEY);
+    player.leaves_battle();
+
+    player.game.holds_poke_balls = false;
+    player.meets_wild(RATTATA);
+    assert!(player.game.catches_blocked, "out of balls doesn't reopen Route 1");
+    player.leaves_battle();
+    player.walks_into(route_2());
+    player.meets_wild(RATTATA);
+    assert_eq!(
+        player.feed(FeedKind::Encounter)[0],
+        "Route 2: a wild RATTATA, this Area's Encounter"
+    );
+}
+
+#[test]
+fn having_poke_balls_is_remembered_when_a_run_is_resumed() {
+    let mut player = Player::starts_a_run(first_encounter());
+    player.plays(1);
+    let (storage, clock) = (player.storage.clone(), player.clock.clone());
+    drop(player);
+
+    let mut player = Player::resumes(storage, clock);
+    player.game.holds_poke_balls = false;
+    player.walks_into(route_1());
+    player.meets_wild(PIDGEY);
+    assert_eq!(
+        player.feed(FeedKind::Encounter),
+        ["Route 1: a wild PIDGEY, this Area's Encounter"]
+    );
+}
+
+#[test]
+fn poke_balls_are_only_looked_for_on_the_overworld() {
+    // Before the title screen is passed, the save the Bag lives in holds garbage.
+    let mut player = Player::starts_a_run(first_encounter());
+    player.game.safe_point = false;
+    player.plays(10);
+    assert!(!player.feed(FeedKind::Run)[0].starts_with("You have Poké Balls"));
+
+    player.game.safe_point = true;
+    player.plays(1);
+    assert!(player.feed(FeedKind::Run)[0].starts_with("You have Poké Balls"));
 }

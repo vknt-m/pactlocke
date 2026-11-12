@@ -167,6 +167,11 @@ impl RunEngine {
         self.pending.keys.push(keys);
         self.frame += 1;
 
+        // Only on the overworld: before a game is loaded the Bag reads as garbage.
+        if self.rules.waiting_for_poke_balls() && game.at_safe_overworld_point() && game.holds_poke_balls() {
+            self.record(RunEvent::PokeBallsObtained);
+        }
+
         match (self.battle.is_some(), game.battle()) {
             (false, Some(battle)) => {
                 self.battle = Some(BattleWatch {
@@ -251,6 +256,14 @@ impl RunEngine {
         self.battle.as_mut().unwrap().decided = true;
 
         match (verdict, area) {
+            (Verdict::NotCounted, Some(area)) => {
+                let species_name = game.species_name(species);
+                self.record(RunEvent::NotCounted {
+                    area,
+                    species,
+                    species_name,
+                });
+            }
             (Verdict::Encounter, Some(area)) => {
                 let species_name = game.species_name(species);
                 self.record(RunEvent::Encounter {

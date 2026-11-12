@@ -398,3 +398,13 @@ fn the_opponents_party_is_read_before_the_battle_fills_in_its_battlers() {
     assert_eq!(opponents[0].species, 19);
     assert_eq!(opponents[0].nickname, "Rat 2");
 }
+
+#[test]
+fn the_player_holds_poke_balls_once_the_balls_pocket_has_any() {
+    let mut game = at_overworld();
+    assert!(!game.holds_poke_balls(), "a new game starts with none");
+
+    // A Great Ball (item 3) in the Balls pocket's third slot.
+    game.memory_mut().put16(SAVE_BLOCK_1 + 0x430 + 2 * 4, 3);
+    assert!(game.holds_poke_balls());
+}
