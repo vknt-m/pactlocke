@@ -62,7 +62,7 @@ jobs:
 
       - name: Fetch the test ROMs (jsmolka gba-tests arm.gba and thumb.gba, MIT)
         shell: bash
-        run: scripts/fetch-test-rom.sh
+        run: bash scripts/fetch-test-rom.sh
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
