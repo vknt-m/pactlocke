@@ -38,5 +38,7 @@ cargo test --workspace
 - `pactlocke-emu` tests the emulator thread (pacing at each speed, the newest-frame slot, keys and audio) against a fake core.
 - `pactlocke-mgba` tests the libmgba adapter against a tiny ROM the test builds in memory. The tests cover the clock reading UTC in any time zone, memory, ROM patches and checkpoints. A determinism check also compares frame hashes from the test ROMs with `tests/golden/test-roms.sha256`. That hash must match on every OS and in every time zone. After a deliberate change, such as a new libmgba pin, re-bless it with `PACTLOCKE_BLESS=1`.
 - `pactlocke --smoke` opens the UI, draws a few frames and quits.
+- `pactlocke-game` loads every bundled Game Profile (`crates/pactlocke-game/profiles/*.toml`) and checks its format, schema version and parent link, with no ROM. It tests the capability report, the profile-driven game interface over an in-memory image of a game, and the fake game the Run engine tests use.
+- Local only: with `PACTLOCKE_ROMS` set to a folder holding your own `Pokemon - FireRed Version (USA).gba`, the FireRed acceptance tests check its SHA-1 and patch sites, then play from power-on to the overworld and the starter and read the game back. Without it they skip. They never run in CI.
 
 No ROM, save or patch is ever committed. CI checks for them.

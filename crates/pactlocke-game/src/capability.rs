@@ -1,0 +1,179 @@
+//! The capability report: for each game-dependent Ruleset rule, whether this
+//! ROM can enforce it, leaves it to the game's own option, or can't, and why.
+
+use std::collections::BTreeMap;
+
+use crate::profile::{GameProfile, HexBytes, Method, ROM_BASE};
+
+/// The Ruleset rules whose enforcement depends on the game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Rule {
+    FirstEncounter,
+    DupesClause,
+    Gifts,
+    Statics,
+    FaintIsDead,
+    Links,
+    LevelCap,
+    NoItems,
+    MustNickname,
+    SetMode,
+    TypeClause,
+    SyncGates,
+}
+
+impl Rule {
+    pub const ALL: [Rule; 12] = [
+        Rule::FirstEncounter,
+        Rule::DupesClause,
+        Rule::Gifts,
+        Rule::Statics,
+        Rule::FaintIsDead,
+        Rule::Links,
+        Rule::LevelCap,
+        Rule::NoItems,
+        Rule::MustNickname,
+        Rule::SetMode,
+        Rule::TypeClause,
+        Rule::SyncGates,
+    ];
+
+    /// The rule's name as Players see it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Rule::FirstEncounter => "First Encounter",
+            Rule::DupesClause => "Dupes clause",
+            Rule::Gifts => "Gifts",
+            Rule::Statics => "Statics",
+            Rule::FaintIsDead => "Faint = Dead",
+            Rule::Links => "Links",
+            Rule::LevelCap => "Level caps",
+            Rule::NoItems => "No items in battle",
+            Rule::MustNickname => "Must nickname",
+            Rule::SetMode => "Set mode",
+            Rule::TypeClause => "Type clause",
+            Rule::SyncGates => "Sync Gates",
+        }
+    }
+}
+
+/// How one rule can be applied on this ROM.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Capability {
+    /// Pactlocke enforces it.
+    Enforceable,
+    /// The game's own option does it; each Player turns it on.
+    NativeOption { name: String, menu: String, value: String },
+    /// It can't be used on this ROM.
+    GreyedOut { reason: String },
+}
+
+/// Every game-dependent rule's capability on one ROM.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityReport {
+    rules: BTreeMap<Rule, Capability>,
+}
+
+impl CapabilityReport {
+    /// Checks every patch site's bytes in `rom` and reports each rule.
+    pub fn check(profile: &GameProfile, rom: &[u8]) -> Self {
+        let methods = &profile.rules;
+        let catch = method_capability(profile, methods.catch_block.as_ref(), rom);
+        let no_catalogue = |what: &str| Capability::GreyedOut {
+            reason: format!("this Game Profile has no {what} yet"),
+        };
+        let no_items = match method_capability(profile, methods.no_items_trainer.as_ref(), rom) {
+            Capability::Enforceable => method_capability(profile, methods.no_items_wild.as_ref(), rom),
+            other => other,
+        };
+
+        let rules = Rule::ALL
+            .into_iter()
+            .map(|rule| {
+                let capability = match rule {
+                    Rule::FirstEncounter | Rule::DupesClause => catch.clone(),
+                    Rule::Gifts | Rule::Statics => no_catalogue("Gift and Static catalogue"),
+                    Rule::SyncGates => no_catalogue("Sync Gate trainers"),
+                    // Read and written in RAM through the profile's symbols and layout.
+                    Rule::FaintIsDead | Rule::Links | Rule::TypeClause => Capability::Enforceable,
+                    Rule::LevelCap => method_capability(profile, methods.level_cap.as_ref(), rom),
+                    Rule::NoItems => no_items.clone(),
+                    Rule::MustNickname => method_capability(profile, methods.must_nickname.as_ref(), rom),
+                    Rule::SetMode => method_capability(profile, methods.set_mode.as_ref(), rom),
+                };
+                (rule, capability)
+            })
+            .collect();
+        Self { rules }
+    }
+
+    pub fn get(&self, rule: Rule) -> &Capability {
+        &self.rules[&rule]
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Rule, &Capability)> {
+        self.rules.iter().map(|(rule, capability)| (*rule, capability))
+    }
+}
+
+fn method_capability(profile: &GameProfile, method: Option<&Method>, rom: &[u8]) -> Capability {
+    match method {
+        None => Capability::GreyedOut {
+            reason: "this Game Profile has no way to enforce it".into(),
+        },
+        Some(Method::Patch { sites }) => sites
+            .iter()
+            .find_map(|site| {
+                let start = (site.at - ROM_BASE) as usize;
+                let expect = &site.expect.0;
+                let Some(found) = rom.get(start..start + expect.len()) else {
+                    return Some(format!("{:#010X} is past the end of the ROM", site.at));
+                };
+                (found != expect.as_slice()).then(|| {
+                    format!(
+                        "the ROM holds {} at {:#010X} where the Game Profile expects {}",
+                        HexBytes(found.to_vec()),
+                        site.at,
+                        site.expect
+                    )
+                })
+            })
+            .map_or(Capability::Enforceable, |reason| Capability::GreyedOut { reason }),
+        Some(Method::Native { option, value }) => {
+            // The store checked the option exists.
+            let def = &profile.options[option];
+            Capability::NativeOption {
+                name: def.name.clone(),
+                menu: def.menu.clone(),
+                value: value.clone(),
+            }
+        }
+        Some(Method::KeyFilter {
+            command_table, command, ..
+        }) => {
+            // The command must be one of the table's entries, or the filter
+            // would never see it run.
+            let start = (command_table - ROM_BASE) as usize;
+            let table = rom.get(start..).unwrap_or_default();
+            let found = table
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .take(COMMAND_TABLE_ENTRIES)
+                .any(|entry| u32::from_le_bytes(*entry) == *command);
+            if found {
+                Capability::Enforceable
+            } else {
+                Capability::GreyedOut {
+                    reason: format!(
+                        "the battle script command table at {command_table:#010X} has no command {command:#010X}"
+                    ),
+                }
+            }
+        }
+        Some(Method::ZeroTableField | Method::OptionBit { .. }) => Capability::Enforceable,
+    }
+}
+
+/// Generation III battle scripts have fewer commands than this.
+const COMMAND_TABLE_ENTRIES: usize = 0x100;

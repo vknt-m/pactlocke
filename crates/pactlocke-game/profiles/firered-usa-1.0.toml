@@ -1,0 +1,238 @@
+# Pokémon FireRed (USA) 1.0. Addresses are pret's pokefirered symbols; every
+# patch site and rule here was checked in the emulator, and its expected
+# bytes read from a clean dump.
+
+schema = 1
+id = "firered-usa-1.0"
+name = "Pokémon FireRed (USA) 1.0"
+game_code = "BPRE"
+family = "FRLG"
+sha1 = "41cb23d8dccc8ebd7c649cd8fbb58eeace6e2fdc"
+status = "supported"
+
+[symbols]
+party = 0x02024284
+party_count = 0x02024029
+pc_storage_pointer = 0x03005010
+save_block_1_pointer = 0x03005008
+save_block_2_pointer = 0x0300500C
+region_map_section = 0x02036E10        # gMapHeader.regionMapSectionId
+main_callback2 = 0x030030F4            # gMain.callback2
+overworld_callback = 0x080565B4        # CB2_Overworld
+in_battle = { at = 0x03003529, mask = 0x02 }   # gMain.inBattle
+battle_type_flags = 0x02022B4C
+battle_mons = 0x02023BE4
+battler_party_indexes = 0x02023BCE
+battler_statuses3 = 0x02023DFC
+disable_structs = 0x02023E0C
+script_context_status = 0x03000EA8     # 0 running, 1 waiting, 2 idle
+script_context = 0x03000EB0
+species_info = 0x08254784
+items = 0x083DB028
+
+[layout]
+# How a Pokémon is stored (pret's struct Pokemon / BoxPokemon).
+party_slot_size = 100
+box_slot_size = 80
+encrypted = true
+ot_id = 0x04
+nickname = 0x08
+nickname_length = 10
+flags = 0x13
+egg_mask = 0x04
+has_species_mask = 0x02
+checksum = 0x1C
+substructures = 0x20
+level = 0x54
+hp = 0x56
+max_hp = 0x58
+battle_mon_size = 0x58
+battle_mon_hp = 0x28
+battle_type_trainer = 0x08
+battle_type_double = 0x01
+perish_song_status3 = 0x20
+disable_struct_size = 0x1C
+perish_timer = 0x0F
+script_context_pointer = 0x08
+species_info_size = 28
+primary_type = 6
+item_size = 44
+item_count = 375
+item_pocket = 26
+item_battle_usage = 32
+ball_pocket = 3
+pc_boxes = 14
+pc_box_slots = 30
+pc_boxes_offset = 4
+trainer_id = 0x0A                      # in save block 2
+badges = 0xFE4                         # in save block 1: flags 0x820-0x827
+dead_box = 14
+
+[options.battle_style]
+name = "Battle style"
+menu = "OPTION > BATTLE STYLE"
+save_block = 2
+offset = 0x15
+mask = 0x02
+values = { shift = 0x00, set = 0x02 }
+
+# Closes an Area: the ball is refused in the Bag with Oak's "time and place" line.
+[rules.catch_block]
+method = "patch"
+sites = [
+  { at = 0x08040F6C, expect = "10 B5 00 24", write = "01 20 70 47" },  # IsPlayerPartyAndPokemonStorageFull -> TRUE
+  { at = 0x080A1E5C, expect = "31 66 41 08", write = "25 64 41 08" },  # gText_BoxFull -> "This isn't the time to use that!"
+]
+
+# The level-100 checks after `movs r1, #0x38` (MON_DATA_LEVEL); the first byte is the cap.
+[rules.level_cap]
+method = "patch"
+sites = [
+  { at = 0x08021CFA, expect = "64 28" },  # Cmd_getexp
+  { at = 0x08021FB6, expect = "64 28" },  # Cmd_getexp
+  { at = 0x08041834, expect = "64 28" },  # PokemonUseItemEffects (Rare Candy)
+  { at = 0x0804274E, expect = "64 28" },  # PokemonItemUseNoEffect
+]
+
+# BATTLE_TYPE_TRAINER added to the "items can't be used" mask in HandleTurnActionSelectionState.
+[rules.no_items_trainer]
+method = "patch"
+sites = [{ at = 0x08014414, expect = "02 09 00 00", write = "0A 09 00 00" }]
+
+# Only Poké Balls keep a battle use in wild battles.
+[rules.no_items_wild]
+method = "zero_table_field"
+
+[rules.set_mode]
+method = "option_bit"
+option = "battle_style"
+value = "set"
+
+# "Give a nickname?" is answered Yes: B and Down are dropped while the battle script waits on
+# trygivecaughtmonnick and its Yes/No box is up.
+[rules.must_nickname]
+method = "key_filter"
+battle_script_pointer = 0x02023D74   # gBattlescriptCurrInstr
+command_table = 0x0825011C           # gBattleScriptingCommandsTable
+command = 0x0802DD39                 # Cmd_trygivecaughtmonnick
+battle_communication = 0x02023E82
+
+[areas]
+0x58 = "Pallet Town"
+0x59 = "Viridian City"
+0x5A = "Pewter City"
+0x5B = "Cerulean City"
+0x5C = "Lavender Town"
+0x5D = "Vermilion City"
+0x5E = "Celadon City"
+0x5F = "Fuchsia City"
+0x60 = "Cinnabar Island"
+0x61 = "Indigo Plateau"
+0x62 = "Saffron City"
+0x63 = "Route 4"
+0x64 = "Route 10"
+0x65 = "Route 1"
+0x66 = "Route 2"
+0x67 = "Route 3"
+0x68 = "Route 4"
+0x69 = "Route 5"
+0x6A = "Route 6"
+0x6B = "Route 7"
+0x6C = "Route 8"
+0x6D = "Route 9"
+0x6E = "Route 10"
+0x6F = "Route 11"
+0x70 = "Route 12"
+0x71 = "Route 13"
+0x72 = "Route 14"
+0x73 = "Route 15"
+0x74 = "Route 16"
+0x75 = "Route 17"
+0x76 = "Route 18"
+0x77 = "Route 19"
+0x78 = "Route 20"
+0x79 = "Route 21"
+0x7A = "Route 22"
+0x7B = "Route 23"
+0x7C = "Route 24"
+0x7D = "Route 25"
+0x7E = "Viridian Forest"
+0x7F = "Mt. Moon"
+0x80 = "S.S. Anne"
+0x81 = "Underground Path"
+0x82 = "Underground Path"
+0x83 = "Diglett's Cave"
+0x84 = "Victory Road"
+0x85 = "Rocket Hideout"
+0x86 = "Silph Co."
+0x87 = "Pokémon Mansion"
+0x88 = "Safari Zone"
+0x89 = "Pokémon League"
+0x8A = "Rock Tunnel"
+0x8B = "Seafoam Islands"
+0x8C = "Pokémon Tower"
+0x8D = "Cerulean Cave"
+0x8E = "Power Plant"
+0x8F = "One Island"
+0x90 = "Two Island"
+0x91 = "Three Island"
+0x92 = "Four Island"
+0x93 = "Five Island"
+0x94 = "Seven Island"
+0x95 = "Six Island"
+0x96 = "Kindle Road"
+0x97 = "Treasure Beach"
+0x98 = "Cape Brink"
+0x99 = "Bond Bridge"
+0x9A = "Three Isle Port"
+0x9B = "Sevii Isle 6"
+0x9C = "Sevii Isle 7"
+0x9D = "Sevii Isle 8"
+0x9E = "Sevii Isle 9"
+0x9F = "Resort Gorgeous"
+0xA0 = "Water Labyrinth"
+0xA1 = "Five Isle Meadow"
+0xA2 = "Memorial Pillar"
+0xA3 = "Outcast Island"
+0xA4 = "Green Path"
+0xA5 = "Water Path"
+0xA6 = "Ruin Valley"
+0xA7 = "Trainer Tower"
+0xA8 = "Canyon Entrance"
+0xA9 = "Sevault Canyon"
+0xAA = "Tanoby Ruins"
+0xAB = "Sevii Isle 22"
+0xAC = "Sevii Isle 23"
+0xAD = "Sevii Isle 24"
+0xAE = "Navel Rock"
+0xAF = "Mt. Ember"
+0xB0 = "Berry Forest"
+0xB1 = "Icefall Cave"
+0xB2 = "Rocket Warehouse"
+0xB3 = "Trainer Tower"
+0xB4 = "Dotted Hole"
+0xB5 = "Lost Cave"
+0xB6 = "Pattern Bush"
+0xB7 = "Altering Cave"
+0xB8 = "Tanoby Chambers"
+0xB9 = "Three Isle Path"
+0xBA = "Tanoby Key"
+0xBB = "Birth Island"
+0xBC = "Monean Chamber"
+0xBD = "Liptoo Chamber"
+0xBE = "Weepth Chamber"
+0xBF = "Dilford Chamber"
+0xC0 = "Scufib Chamber"
+0xC1 = "Rixy Chamber"
+0xC2 = "Viapois Chamber"
+0xC3 = "Ember Spa"
+0xC4 = "Celadon Dept."
+
+# One Area per place: the Pokémon Centers on Routes 4 and 10 count as their
+# routes, and the game's second Underground Path and Trainer Tower sections as
+# the first.
+[area_merges]
+0x63 = 0x68
+0x64 = 0x6E
+0x82 = 0x81
+0xB3 = 0xA7

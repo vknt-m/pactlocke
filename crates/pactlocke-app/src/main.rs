@@ -7,12 +7,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod rom_report;
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use pactlocke_emu::{CoreAdapter, Emulator, EmulatorOptions, Keys, Speed, SystemClock};
+use pactlocke_game::{ProfileStore, RomIdentity};
 use pactlocke_mgba::MgbaCore;
 
 /// Frames the smoke launch draws before it closes itself.
@@ -82,11 +84,15 @@ struct Playing {
     texture: Option<egui::TextureHandle>,
     shown_seq: u64,
     name: String,
+    /// What the ROM is, and what its Game Profile can enforce.
+    identity: RomIdentity,
 }
 
 struct PactlockeApp {
     ctx: egui::Context,
     playing: Option<Playing>,
+    /// The bundled Game Profiles; an error here is a broken build.
+    profiles: Result<ProfileStore, String>,
     speed: Speed,
     error: Option<String>,
     smoke_frames_left: Option<u32>,
@@ -97,6 +103,7 @@ impl PactlockeApp {
         Self {
             ctx,
             playing: None,
+            profiles: ProfileStore::bundled().map_err(|e| format!("The bundled Game Profiles are broken: {e}")),
             speed: Speed::X1,
             error: None,
             smoke_frames_left: smoke.then_some(SMOKE_FRAMES),
@@ -128,6 +135,7 @@ impl PactlockeApp {
     fn start(&self, path: &Path) -> Result<Playing, String> {
         // The ROM is read into memory only; it is never copied anywhere.
         let rom = std::fs::read(path).map_err(|e| format!("Couldn't read {}: {e}", path.display()))?;
+        let identity = self.profiles.as_ref().map_err(Clone::clone)?.identify(&rom);
         let mut core = MgbaCore::new();
         core.load_rom(&rom).map_err(|e| format!("{}: {e}", path.display()))?;
         // The game clock starts now; a Run will start it at the Ruleset lock.
@@ -155,6 +163,7 @@ impl PactlockeApp {
             texture: None,
             shown_seq: 0,
             name,
+            identity,
         })
     }
 
@@ -182,6 +191,8 @@ impl PactlockeApp {
             if let Some(playing) = &self.playing {
                 ui.separator();
                 ui.label(&playing.name);
+                ui.separator();
+                rom_report::status_label(ui, &playing.identity);
             }
         });
     }
@@ -242,6 +253,12 @@ impl eframe::App for PactlockeApp {
             egui::Panel::bottom("error").show(ui, |ui| {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             });
+        }
+        if let Some(playing) = &self.playing {
+            egui::Panel::right("rules")
+                .resizable(true)
+                .default_size(300.0)
+                .show(ui, |ui| rom_report::rules_panel(ui, &playing.identity));
         }
         egui::CentralPanel::default_margins().show(ui, |ui| self.game_screen(ui));
 

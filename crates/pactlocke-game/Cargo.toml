@@ -1,0 +1,17 @@
+[package]
+name = "pactlocke-game"
+description = "Game Profiles, the capability report, and the game interface the rules engine sees a game through."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[dependencies]
+pactlocke-emu = { path = "../pactlocke-emu" }
+serde = { version = "1", features = ["derive"] }
+sha1 = "0.10"
+toml = "0.8"
+
+[dev-dependencies]
+pactlocke-mgba = { path = "../pactlocke-mgba" }
