@@ -2336,6 +2336,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pactlocke-dev"
+version = "0.1.0"
+dependencies = [
+ "pactlocke-game",
+]
+
+[[package]]
 name = "pactlocke-emu"
 version = "0.1.0"
 

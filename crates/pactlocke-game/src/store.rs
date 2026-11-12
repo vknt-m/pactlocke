@@ -34,6 +34,8 @@ pub enum ProfileError {
     Duplicate { file: String, what: String },
     /// Well-formed, but contradicts itself.
     Invalid { file: String, message: String },
+    /// A file or folder of profiles can't be read.
+    Unreadable { file: String, message: String },
 }
 
 impl fmt::Display for ProfileError {
@@ -56,6 +58,7 @@ impl fmt::Display for ProfileError {
             Self::MissingOwnField { file, field } => write!(f, "{file}: must set its own {field}"),
             Self::Duplicate { file, what } => write!(f, "{file}: another profile has the same {what}"),
             Self::Invalid { file, message } => write!(f, "{file}: {message}"),
+            Self::Unreadable { file, message } => write!(f, "{file} can't be read: {message}"),
         }
     }
 }
@@ -90,12 +93,91 @@ const KNOWN_GAME_CODES: [&[u8; 4]; 5] = [b"BPRE", b"BPGE", b"BPEE", b"AXVE", b"A
 #[derive(Debug, Clone, Default)]
 pub struct ProfileStore {
     profiles: Vec<Arc<GameProfile>>,
+    /// The ids of the developer's local, unbundled profiles: solo Runs only.
+    local: Vec<String>,
 }
+
+/// Draft profiles (from the developer scanner) have ids that start with
+/// this, and are never bundled.
+pub const DRAFT_PREFIX: &str = "draft-";
+
+/// The developer setting: a folder of local Game Profiles, for solo Runs only.
+pub const DEV_PROFILES_VAR: &str = "PACTLOCKE_DEV_PROFILES";
 
 impl ProfileStore {
     /// The profiles bundled with this build.
     pub fn bundled() -> Result<Self, ProfileError> {
-        Self::from_sources(BUNDLED.iter().map(|(file, text)| (*file, *text)))
+        let none: [(&str, &str); 0] = [];
+        Self::from_sources_with_local(BUNDLED.iter().map(|(file, text)| (*file, *text)), none)
+    }
+
+    /// The bundled profiles and a developer's local ones, from every `.toml`
+    /// file in `dir`. A developer setting: local profiles are for solo Runs.
+    pub fn bundled_with_local(dir: &std::path::Path) -> Result<Self, ProfileError> {
+        let unreadable = |e: std::io::Error| ProfileError::Unreadable {
+            file: dir.display().to_string(),
+            message: e.to_string(),
+        };
+        let mut local = Vec::new();
+        for entry in std::fs::read_dir(dir).map_err(unreadable)? {
+            let path = entry.map_err(unreadable)?.path();
+            if path.extension().is_some_and(|ext| ext == "toml") {
+                let text = std::fs::read_to_string(&path).map_err(unreadable)?;
+                local.push((path.display().to_string(), text));
+            }
+        }
+        Self::from_sources_with_local(BUNDLED.iter().map(|(file, text)| (*file, *text)), local)
+    }
+
+    /// The bundled profiles, and with the developer setting
+    /// ([`DEV_PROFILES_VAR`] naming a folder) a developer's local ones too.
+    pub fn from_env() -> Result<Self, ProfileError> {
+        match std::env::var_os(DEV_PROFILES_VAR) {
+            Some(dir) => Self::bundled_with_local(std::path::Path::new(&dir)),
+            None => Self::bundled(),
+        }
+    }
+
+    /// Bundled profiles and local ones. A local profile may extend a bundled
+    /// one, but not share its id or SHA-1: a bundled profile is edited where
+    /// it is, so a Run's profile id always says which kind it was played on.
+    /// A draft is never a bundled profile.
+    pub fn from_sources_with_local<F, T, G, U>(
+        bundled: impl IntoIterator<Item = (F, T)>,
+        local: impl IntoIterator<Item = (G, U)>,
+    ) -> Result<Self, ProfileError>
+    where
+        F: AsRef<str>,
+        T: AsRef<str>,
+        G: AsRef<str>,
+        U: AsRef<str>,
+    {
+        let local: Vec<(String, String)> = local
+            .into_iter()
+            .map(|(file, text)| (file.as_ref().to_owned(), text.as_ref().to_owned()))
+            .collect();
+        let local_ids: Vec<String> = local.iter().filter_map(|(_, text)| profile_id_of(text)).collect();
+        let mut sources = Vec::new();
+        for (file, text) in bundled {
+            let (file, text) = (file.as_ref().to_owned(), text.as_ref().to_owned());
+            let id = profile_id_of(&text);
+            if id.as_deref().is_some_and(|id| id.starts_with(DRAFT_PREFIX)) {
+                return Err(ProfileError::Invalid {
+                    file,
+                    message: "a draft profile can't be bundled: review it and give it its own id first".into(),
+                });
+            }
+            sources.push((file, text));
+        }
+        sources.extend(local);
+        let mut store = Self::from_sources(sources)?;
+        store.local = local_ids;
+        Ok(store)
+    }
+
+    /// Whether a profile is a developer's local one, which only solo Runs may use.
+    pub fn is_local(&self, id: &str) -> bool {
+        self.local.iter().any(|local| local == id)
     }
 
     /// Loads profiles from (file name, TOML) pairs, resolving parents.
@@ -177,7 +259,20 @@ impl ProfileStore {
             }
             profiles.push(Arc::new(profile));
         }
-        Ok(Self { profiles })
+        Ok(Self {
+            profiles,
+            local: Vec::new(),
+        })
+    }
+
+    /// The profile with this id.
+    pub fn by_id(&self, id: &str) -> Option<&Arc<GameProfile>> {
+        self.profiles.iter().find(|p| p.id == id)
+    }
+
+    /// Every profile, bundled and local.
+    pub fn profiles(&self) -> impl Iterator<Item = &Arc<GameProfile>> {
+        self.profiles.iter()
     }
 
     /// The profile for a ROM with this SHA-1 (lowercase hex).
@@ -206,6 +301,12 @@ impl ProfileStore {
             },
         }
     }
+}
+
+/// A profile's `id`, if its TOML has one.
+fn profile_id_of(text: &str) -> Option<String> {
+    let table: toml::Table = toml::from_str(text).ok()?;
+    table.get("id")?.as_str().map(str::to_owned)
 }
 
 /// The SHA-1 of a ROM, as lowercase hex.

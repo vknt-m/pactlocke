@@ -18,6 +18,27 @@ pub enum SourceKind {
     Static,
 }
 
+impl SourceKind {
+    /// The script instruction that gives this kind of Pokémon or starts its
+    /// battle: `givemon`, `giveegg` or `setwildbattle`.
+    pub fn opcode(self) -> u8 {
+        match self {
+            SourceKind::Starter | SourceKind::Gift => 0x79,
+            SourceKind::Egg => 0x7A,
+            SourceKind::Static => 0xB6,
+        }
+    }
+
+    /// That instruction's name in the game's script language.
+    pub fn instruction(self) -> &'static str {
+        match self {
+            SourceKind::Starter | SourceKind::Gift => "givemon",
+            SourceKind::Egg => "giveegg",
+            SourceKind::Static => "setwildbattle",
+        }
+    }
+}
+
 /// A Gift or Static source the Game Profile lists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Source {

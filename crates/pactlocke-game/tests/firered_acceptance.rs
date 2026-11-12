@@ -13,21 +13,26 @@ use pactlocke_mgba::MgbaCore;
 
 const FIRERED_FILE: &str = "Pokemon - FireRed Version (USA).gba";
 
+/// The ROM `cargo dev accept` names in `PACTLOCKE_ROM`, or the one in the
+/// folder `PACTLOCKE_ROMS` names.
 fn firered_rom() -> Option<Vec<u8>> {
-    let dir = PathBuf::from(std::env::var_os("PACTLOCKE_ROMS")?);
-    match std::fs::read(dir.join(FIRERED_FILE)) {
+    let path = match std::env::var_os("PACTLOCKE_ROM") {
+        Some(file) => PathBuf::from(file),
+        None => PathBuf::from(std::env::var_os("PACTLOCKE_ROMS")?).join(FIRERED_FILE),
+    };
+    match std::fs::read(&path) {
         Ok(rom) => Some(rom),
-        Err(e) => panic!("PACTLOCKE_ROMS is set but {FIRERED_FILE} can't be read: {e}"),
+        Err(e) => panic!("{} can't be read: {e}", path.display()),
     }
 }
 
 #[test]
 fn firered_is_supported_and_every_profiled_rule_is_enforceable() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
-    let store = ProfileStore::bundled().unwrap();
+    let store = ProfileStore::from_env().unwrap();
     let RomIdentity::Profiled { profile, capabilities } = store.identify(&rom) else {
         panic!("FireRed (USA) 1.0 should match its profile by SHA-1");
     };
@@ -51,11 +56,11 @@ fn firered_is_supported_and_every_profiled_rule_is_enforceable() {
 #[test]
 fn a_new_firered_game_reads_as_a_player_in_pallet_town() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
     pactlocke_mgba::force_utc_time_zone();
-    let store = ProfileStore::bundled().unwrap();
+    let store = ProfileStore::from_env().unwrap();
     let profile = store.identify(&rom);
     let RomIdentity::Profiled { profile, .. } = profile else {
         panic!("FireRed should be profiled");
@@ -134,10 +139,10 @@ h R 64\nh U 96\nh R 32\nh U 48\nm A 1500\nm B 1500\nh R 20\nw 20\np A 90\np A 90
 #[test]
 fn the_starter_reads_back_decrypted_from_the_real_party() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
-    let store = ProfileStore::bundled().unwrap();
+    let store = ProfileStore::from_env().unwrap();
     let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
         panic!("FireRed should be profiled");
     };
@@ -168,10 +173,10 @@ fn the_starter_reads_back_decrypted_from_the_real_party() {
 #[test]
 fn evolutions_read_from_the_real_rom_match_the_games_families() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
-    let store = ProfileStore::bundled().unwrap();
+    let store = ProfileStore::from_env().unwrap();
     let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
         panic!("FireRed should be profiled");
     };
@@ -198,21 +203,16 @@ fn evolutions_read_from_the_real_rom_match_the_games_families() {
 #[test]
 fn every_catalogued_gift_and_static_is_its_script_instruction_in_the_real_rom() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
-    let store = ProfileStore::bundled().unwrap();
+    let store = ProfileStore::from_env().unwrap();
     let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
         panic!("FireRed should be profiled");
     };
     assert!(profile.sources.iter().any(|s| s.kind == SourceKind::Starter));
     for source in &profile.sources {
-        // givemon, giveegg and setwildbattle in the game's script language.
-        let opcode = match source.kind {
-            SourceKind::Starter | SourceKind::Gift => 0x79,
-            SourceKind::Egg => 0x7A,
-            SourceKind::Static => 0xB6,
-        };
+        let opcode = source.kind.opcode();
         for &at in &source.at {
             let byte = rom[(at - 0x0800_0000) as usize];
             assert_eq!(byte, opcode, "{} at {at:#010X}", source.key);
@@ -223,10 +223,10 @@ fn every_catalogued_gift_and_static_is_its_script_instruction_in_the_real_rom() 
 #[test]
 fn default_level_caps_are_each_leaders_strongest_pokemon_in_the_real_rom() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
-    let store = ProfileStore::bundled().unwrap();
+    let store = ProfileStore::from_env().unwrap();
     let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
         panic!("FireRed should be profiled");
     };
@@ -261,10 +261,10 @@ fn default_level_caps_are_each_leaders_strongest_pokemon_in_the_real_rom() {
 #[test]
 fn every_profiled_level_cap_site_is_found_by_byte_pattern_in_the_real_rom() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
-    let store = ProfileStore::bundled().unwrap();
+    let store = ProfileStore::from_env().unwrap();
     let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
         panic!("FireRed should be profiled");
     };

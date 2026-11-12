@@ -20,7 +20,8 @@ use std::sync::{Arc, Mutex};
 use eframe::egui;
 use pactlocke_emu::{CoreAdapter, Emulator, EmulatorOptions, FrameSlot, Keys, Speed, SystemClock};
 use pactlocke_game::{
-    Capability, GameProfile, LevelCap, MAX_LEVEL, ProfileGame, ProfileStore, RomIdentity, Rule, sha1_hex,
+    Capability, DEV_PROFILES_VAR, GameProfile, LevelCap, MAX_LEVEL, ProfileGame, ProfileStore, RomIdentity, Rule,
+    sha1_hex,
 };
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
@@ -133,6 +134,20 @@ struct Playing {
     identity: RomIdentity,
 }
 
+/// The folder of a developer's local Game Profiles, if the developer setting names one.
+fn dev_profiles_dir() -> Option<PathBuf> {
+    std::env::var_os(DEV_PROFILES_VAR).map(PathBuf::from)
+}
+
+/// The bundled Game Profiles, and with the developer setting a developer's
+/// local ones too (for solo Runs only).
+fn load_profiles() -> Result<ProfileStore, String> {
+    ProfileStore::from_env().map_err(|e| match dev_profiles_dir() {
+        Some(dir) => format!("The developer profiles in {} don't load: {e}", dir.display()),
+        None => format!("The bundled Game Profiles are broken: {e}"),
+    })
+}
+
 /// Why a rule can't be chosen for a solo Run on this ROM, if it can't.
 fn unavailable_reason(capability: &Capability) -> Option<String> {
     match capability {
@@ -203,6 +218,8 @@ struct NewRunDraft {
     level_caps: Vec<LevelCap>,
     /// Why the caps are only soft caps on this ROM, if they are.
     soft_cap: Option<String>,
+    /// Whether the Game Profile is a developer's local one (solo Runs only).
+    local_profile: bool,
 }
 
 struct PactlockeApp {
@@ -228,7 +245,7 @@ impl PactlockeApp {
         Self {
             ctx,
             playing: None,
-            profiles: ProfileStore::bundled().map_err(|e| format!("The bundled Game Profiles are broken: {e}")),
+            profiles: load_profiles(),
             library,
             library_fallback,
             runs,
@@ -349,6 +366,7 @@ impl PactlockeApp {
                 level_caps_on: !level_caps.is_empty(),
                 level_caps,
                 soft_cap,
+                local_profile: self.profiles.as_ref().is_ok_and(|store| store.is_local(&profile.id)),
                 profile: profile.clone(),
                 name: format!("Solo Run {}", self.runs.len() + 1),
                 rom,
@@ -555,6 +573,12 @@ impl PactlockeApp {
             if self.library_fallback {
                 ui.weak("The app's folder can't be written to, so Runs are kept in your user data folder.");
             }
+            if let Some(dir) = dev_profiles_dir() {
+                ui.weak(format!(
+                    "Developer setting: local Game Profiles from {}, for solo Runs only.",
+                    dir.display()
+                ));
+            }
         });
         ui.add_space(8.0);
         let now = SystemRunClock.now_ms();
@@ -589,6 +613,12 @@ impl PactlockeApp {
         let modal = egui::Modal::new(egui::Id::unique("new run")).show(ctx, |ui| {
             ui.heading("New Run");
             ui.label(format!("{}: solo.", draft.profile.name));
+            if draft.local_profile {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    "A developer's local Game Profile, not a bundled one: for solo Runs only.",
+                );
+            }
             ui.add_space(6.0);
             let ruleset = &mut draft.ruleset;
             rule_checkbox(

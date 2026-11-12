@@ -18,11 +18,16 @@ use pactlocke_run::{
 
 const FIRERED_FILE: &str = "Pokemon - FireRed Version (USA).gba";
 
+/// The ROM `cargo dev accept` names in `PACTLOCKE_ROM`, or the one in the
+/// folder `PACTLOCKE_ROMS` names.
 fn firered_rom() -> Option<Vec<u8>> {
-    let dir = PathBuf::from(std::env::var_os("PACTLOCKE_ROMS")?);
-    match std::fs::read(dir.join(FIRERED_FILE)) {
+    let path = match std::env::var_os("PACTLOCKE_ROM") {
+        Some(file) => PathBuf::from(file),
+        None => PathBuf::from(std::env::var_os("PACTLOCKE_ROMS")?).join(FIRERED_FILE),
+    };
+    match std::fs::read(&path) {
         Ok(rom) => Some(rom),
-        Err(e) => panic!("PACTLOCKE_ROMS is set but {FIRERED_FILE} can't be read: {e}"),
+        Err(e) => panic!("{} can't be read: {e}", path.display()),
     }
 }
 
@@ -253,7 +258,7 @@ fn firered_run(rom: Vec<u8>) -> Driver {
 
 fn firered_run_with(rom: Vec<u8>, ruleset: Ruleset) -> Driver {
     pactlocke_mgba::force_utc_time_zone();
-    let store = ProfileStore::bundled().unwrap();
+    let store = ProfileStore::from_env().unwrap();
     let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
         panic!("FireRed should be profiled");
     };
@@ -275,7 +280,7 @@ fn firered_run_with(rom: Vec<u8>, ruleset: Ruleset) -> Driver {
 
 /// The Run's game booted the way its engine planned, on a fresh core.
 fn booted(engine: RunEngine, storage: MemoryStorage, rom: Vec<u8>) -> Driver {
-    let store = ProfileStore::bundled().unwrap();
+    let store = ProfileStore::from_env().unwrap();
     let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
         panic!("FireRed should be profiled");
     };
@@ -307,7 +312,7 @@ fn ram_hash(d: &mut Driver) -> String {
 #[test]
 fn a_closed_route_1_refuses_the_ball_and_keeps_it_and_running_still_works() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
     let mut d = firered_run(rom);
@@ -414,7 +419,7 @@ fn a_closed_route_1_refuses_the_ball_and_keeps_it_and_running_still_works() {
 #[test]
 fn a_starter_that_faints_to_the_rival_goes_to_the_dead_box_and_stays_there() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
     let mut d = firered_run_with(
@@ -495,7 +500,7 @@ w 60",
 #[test]
 fn a_route_1_pokemon_from_a_family_already_owned_is_skipped_as_a_dupe() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
     let mut d = firered_run_with(
@@ -571,7 +576,7 @@ fn a_route_1_pokemon_from_a_family_already_owned_is_skipped_as_a_dupe() {
 #[test]
 fn the_real_starter_is_the_starter_gift_and_kept_with_gifts_off() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
     let mut d = firered_run_with(
@@ -613,7 +618,7 @@ m B 600";
 #[test]
 fn exp_stops_at_the_cap_and_rare_candy_works_only_below_it() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
     let cap = |name: &str, level| LevelCap {
@@ -743,7 +748,7 @@ fn knock_out_the_first_and_see_if_shift_is_offered(d: &mut Driver) -> bool {
 #[test]
 fn set_mode_holds_in_a_trainer_battle_and_the_bag_is_refused_there() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
     let mut d = firered_run_with(
@@ -799,7 +804,7 @@ fn set_mode_holds_in_a_trainer_battle_and_the_bag_is_refused_there() {
 #[test]
 fn control_without_set_mode_the_same_battle_offers_to_change_pokemon() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
     let mut d = firered_run_with(rom, Ruleset::default());
@@ -813,7 +818,7 @@ fn control_without_set_mode_the_same_battle_offers_to_change_pokemon() {
 #[test]
 fn with_no_items_only_balls_work_in_a_wild_battle_and_items_work_outside_battle() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
     let clean_items = {
@@ -930,7 +935,7 @@ fn name_from_the_side_panel(d: &mut Driver, name: &str) -> u32 {
 #[test]
 fn must_nickname_names_the_starter_and_a_catch_and_the_type_clause_boxes_a_second_normal() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
     let mut d = firered_run_with(
@@ -1049,7 +1054,7 @@ fn to_a_closed_route_1_battle(d: &mut Driver) {
 #[test]
 fn after_a_crash_mid_battle_the_game_is_rebuilt_from_its_checkpoint_and_matches_by_hash() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
     let mut d = firered_run(rom);
@@ -1092,7 +1097,7 @@ fn after_a_crash_mid_battle_the_game_is_rebuilt_from_its_checkpoint_and_matches_
 #[test]
 fn suspend_and_quit_mid_battle_resumes_exactly_there() {
     let Some(rom) = firered_rom() else {
-        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
     };
     let mut d = firered_run(rom);

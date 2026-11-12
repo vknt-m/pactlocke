@@ -9,7 +9,7 @@ mod profile;
 mod profile_game;
 mod source;
 mod store;
-mod text;
+pub mod text;
 
 pub use capability::{Capability, CapabilityReport, Rule};
 pub use caps::{LevelCap, LevelCapDef, MAX_LEVEL, level_cap_sites};
@@ -19,12 +19,13 @@ pub use game::{
     ScriptStatus, Side, StoredPokemon,
 };
 pub use profile::{
-    Bit, Family, GameProfile, HexBytes, Layout, Method, OptionDef, PatchSite, RuleMethods, SCHEMA_VERSION,
+    Bit, Family, GameProfile, HexBytes, Layout, Method, OptionDef, PatchSite, ROM_BASE, RuleMethods, SCHEMA_VERSION,
     SupportStatus, Symbols,
 };
 pub use profile_game::ProfileGame;
 pub use source::{Source, SourceDef, SourceKind};
-pub use store::{ProfileError, ProfileStore, RomIdentity, Unprofiled, sha1_hex};
+pub use store::{DEV_PROFILES_VAR, DRAFT_PREFIX, ProfileError, ProfileStore, RomIdentity, Unprofiled, sha1_hex};
+pub use text::{decode as decode_text, encode as encode_text};
 
 /// A place that counts as one encounter location: a region-map section, after
 /// the profile's merges and renames.

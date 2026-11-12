@@ -1,0 +1,3 @@
+[alias]
+# Developer-only tools: `cargo dev scan <rom>`, `cargo dev accept <profile id> <rom>`.
+dev = "run --quiet --release -p pactlocke-dev --"
