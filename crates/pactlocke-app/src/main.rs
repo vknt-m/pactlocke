@@ -9,6 +9,7 @@
 
 mod audio;
 mod data_dir;
+mod lobby_ui;
 mod rom_report;
 mod run_panel;
 
@@ -235,6 +236,8 @@ struct PactlockeApp {
     speed: Speed,
     error: Option<String>,
     smoke_frames_left: Option<u32>,
+    /// Inviting friends to a Run, or joining one.
+    lobbies: lobby_ui::Lobbies,
 }
 
 impl PactlockeApp {
@@ -253,6 +256,7 @@ impl PactlockeApp {
             speed: Speed::X1,
             error: None,
             smoke_frames_left: smoke.then_some(SMOKE_FRAMES),
+            lobbies: lobby_ui::Lobbies::new(&data_dir::identity_file()),
         }
     }
 
@@ -535,6 +539,9 @@ impl PactlockeApp {
                     if ui.button("New Run…").clicked() {
                         self.begin_new_run();
                     }
+                    if ui.button("Join Run…").clicked() {
+                        self.lobbies.open_join_prompt();
+                    }
                     if ui.button("Open ROM…").clicked() {
                         self.pick_rom();
                     }
@@ -610,6 +617,7 @@ impl PactlockeApp {
         };
         let mut start = false;
         let mut cancel = false;
+        let mut invite = false;
         let modal = egui::Modal::new(egui::Id::unique("new run")).show(ctx, |ui| {
             ui.heading("New Run");
             ui.label(format!("{}: solo.", draft.profile.name));
@@ -707,8 +715,30 @@ impl PactlockeApp {
                 if ui.button("Cancel").clicked() {
                     cancel = true;
                 }
+                let shareable = !draft.local_profile;
+                let invite_button = ui.add_enabled(shareable, egui::Button::new("Invite friends…"));
+                if shareable {
+                    if invite_button
+                        .on_hover_text("Open a lobby and get an invite link for each friend")
+                        .clicked()
+                    {
+                        invite = true;
+                    }
+                } else {
+                    invite_button.on_disabled_hover_text(
+                        "A developer's local Game Profile can't be shared: Runs with other Players use bundled profiles only.",
+                    );
+                }
             });
         });
+        if invite {
+            let run = pactlocke_net::RunAdvert {
+                name: draft.name.trim().to_owned(),
+                game_name: draft.profile.name.clone(),
+                game_sha1: draft.profile.sha1.clone(),
+            };
+            self.lobbies.host(run);
+        }
         start &= !draft.name.trim().is_empty();
         if start {
             let draft = self.new_run.take().expect("a draft is open");
@@ -811,6 +841,7 @@ impl eframe::App for PactlockeApp {
         egui::CentralPanel::default_margins().show(ui, |ui| self.game_screen(ui));
         let ctx = ui.ctx().clone();
         self.new_run_prompt(&ctx);
+        self.lobbies.show(&ctx);
 
         if let Some(left) = self.smoke_frames_left.as_mut() {
             *left = left.saturating_sub(1);

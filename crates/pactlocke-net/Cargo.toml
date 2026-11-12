@@ -1,0 +1,12 @@
+[package]
+name = "pactlocke-net"
+description = "Invites, the lobby and the wire format between Players' apps, over iroh: identity by key, no accounts, no server."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+getrandom = "0.3"
+iroh = "1.4.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }

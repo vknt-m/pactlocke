@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/pactlocke-emu", "crates/pactlocke-mgba", "crates/pactlocke-game", "crates/pactlocke-run", "crates/pactlocke-app", "crates/pactlocke-dev"]
+members = ["crates/pactlocke-emu", "crates/pactlocke-mgba", "crates/pactlocke-game", "crates/pactlocke-run", "crates/pactlocke-app", "crates/pactlocke-dev", "crates/pactlocke-net"]
 
 [workspace.package]
 version = "0.1.0"

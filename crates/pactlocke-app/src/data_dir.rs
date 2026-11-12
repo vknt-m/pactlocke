@@ -14,6 +14,13 @@ pub fn runs_dir() -> (PathBuf, bool) {
     (user_data_dir().join("runs"), true)
 }
 
+/// The file that holds this install's network key, beside the Runs folder.
+pub fn identity_file() -> PathBuf {
+    let (runs, _) = runs_dir();
+    runs.parent()
+        .map_or_else(|| runs.join("identity.key"), |dir| dir.join("identity.key"))
+}
+
 fn beside_app() -> Option<PathBuf> {
     Some(std::env::current_exe().ok()?.parent()?.join("data"))
 }
