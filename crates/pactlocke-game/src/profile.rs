@@ -175,6 +175,8 @@ pub struct Layout {
     pub pc_boxes_offset: u32,
     /// In save block 2.
     pub trainer_id: u32,
+    /// In save block 2: play time as hours (two bytes), minutes, seconds and frames.
+    pub play_time: u32,
     /// In save block 1: one byte, a bit per badge.
     pub badges: u32,
     /// In save block 1: the event flags, a bit per flag.

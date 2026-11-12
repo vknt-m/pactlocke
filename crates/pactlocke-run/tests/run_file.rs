@@ -162,3 +162,59 @@ fn a_run_resumed_from_its_file_keeps_its_dead_and_graveyard() {
     player.withdraws(0x0000_BEEF);
     assert_eq!(player.feed(FeedKind::Violation).len(), 1);
 }
+
+/// A core checkpoint as a stand-in: a savestate of `byte`s that compresses well.
+fn core_checkpoint(byte: u8) -> pactlocke_emu::Checkpoint {
+    pactlocke_emu::Checkpoint {
+        save_memory: vec![0x5A; 128],
+        state: vec![byte; 400_000],
+    }
+}
+
+#[test]
+fn checkpoints_and_the_suspend_slot_are_kept_in_the_run_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = RunLibrary::open(dir.path()).unwrap();
+    let clock = TestClock::at(START_MS);
+    let mut player = Player::starts_a_run_in(Box::new(library.create().unwrap()), clock.clone(), first_encounter());
+    player.engine.take_checkpoint(core_checkpoint(0));
+    // Five in-game saves: the file keeps the newest checkpoints only.
+    for save in 1..=5u8 {
+        player.plays(10);
+        player.engine.save_memory_seen(&[save]);
+        player.engine.take_checkpoint(core_checkpoint(save));
+    }
+    player.plays(10);
+    player.engine.suspend(core_checkpoint(0xEE));
+    drop(player);
+
+    let id = library.list()[0].id.clone();
+    let path = dir.path().join(format!("{}.pactrun", id.0));
+    assert!(
+        std::fs::metadata(&path).unwrap().len() < 400_000,
+        "the checkpoints are compressed"
+    );
+    let stored = library.open_run(&id).unwrap().load().unwrap();
+    let latest = stored.latest_checkpoint.expect("the newest checkpoint");
+    assert_eq!((latest.frame, latest.core), (50, core_checkpoint(5)));
+    let suspended = stored.suspended.expect("the suspend slot");
+    assert_eq!((suspended.frame, suspended.core), (60, core_checkpoint(0xEE)));
+    let db = rusqlite::Connection::open(&path).unwrap();
+    let kept: i64 = db
+        .query_row("SELECT COUNT(*) FROM checkpoints", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        kept, 4,
+        "the boot checkpoint and the newest three Run Checkpoints; older ones are pruned"
+    );
+    drop(db);
+
+    // Resuming uses up the slot.
+    let player = Player::resumes_from(Box::new(library.open_run(&id).unwrap()), clock);
+    assert!(matches!(
+        player.engine.boot_plan(),
+        pactlocke_run::BootPlan::Suspended(_)
+    ));
+    drop(player);
+    assert!(library.open_run(&id).unwrap().load().unwrap().suspended.is_none());
+}

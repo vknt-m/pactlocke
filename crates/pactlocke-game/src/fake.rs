@@ -60,6 +60,8 @@ pub struct FakeGame {
     /// The settings each option has.
     pub option_values: BTreeMap<String, Vec<String>>,
     pub trainer_id: u32,
+    /// The game's play time in frames.
+    pub play_time: u32,
     /// Primary types by species; a species not listed has type 0.
     pub primary_types: BTreeMap<u16, u8>,
     /// Species names; a species not listed is called `SPECIES <number>`.
@@ -108,6 +110,7 @@ impl Default for FakeGame {
             options: BTreeMap::from([("battle_style".to_owned(), "shift".to_owned())]),
             option_values: BTreeMap::from([("battle_style".to_owned(), vec!["shift".to_owned(), "set".to_owned()])]),
             trainer_id: 0,
+            play_time: 0,
             primary_types: BTreeMap::new(),
             species_names: BTreeMap::new(),
             evolutions: BTreeMap::new(),
@@ -248,6 +251,10 @@ impl Game for FakeGame {
 
     fn option(&mut self, name: &str) -> Option<String> {
         self.options.get(name).cloned()
+    }
+
+    fn play_time(&mut self) -> u32 {
+        self.play_time
     }
 
     fn trainer_id(&mut self) -> u32 {

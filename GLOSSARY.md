@@ -98,6 +98,14 @@ _Avoid_: Mirror, replay (a replay is after the fact), ghost
 A moment every Player's game is captured together, taken whenever any Player saves in-game and at every Sync Gate. It is what a Retry returns to.
 _Avoid_: Save (a save belongs to one Player), savestate (that is the emulator mechanism)
 
+**Boot checkpoint**:
+A Player's game as it stood when the app booted it, kept only to rebuild that game after a crash. It is never a Retry point.
+_Avoid_: Run Checkpoint (that is taken at in-game saves and Sync Gates)
+
+**Suspend slot**:
+The one place a Player's game is kept by Suspend and quit, so the Run resumes exactly there. It is used up on resume.
+_Avoid_: Save state, quicksave
+
 **Retry**:
 An optional Ruleset rule: a small shared number of times the group may vote to send every Player back to the latest Run Checkpoint, undoing everything since.
 _Avoid_: Reset (one Player alone), rewind, reload

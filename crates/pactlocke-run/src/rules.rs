@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use pactlocke_game::{Area, BattleKind, Source, SourceKind};
 
-use crate::event::DeclineReason;
+use crate::event::{DeclineReason, ResumedFrom};
 use crate::families::EvolutionFamilies;
 use crate::{Ruleset, RunEvent};
 
@@ -70,6 +70,12 @@ pub(crate) struct Rules {
     families: Option<EvolutionFamilies>,
     /// Gift and Static sources whose one Encounter is used.
     used_sources: BTreeSet<String>,
+    /// For each used Gift source, the Pokémon it gave and when.
+    gift_from: BTreeMap<String, GiftGiven>,
+    /// The number of events taken in so far, as a clock for when things happened.
+    events_seen: u64,
+    /// When the game was last reset to an older save (or booted from one).
+    last_reset: Option<u64>,
     /// Declined Gifts not yet released.
     to_release: BTreeSet<u32>,
     /// The level cap stage last reached in this Run, and its cap.
@@ -85,6 +91,13 @@ pub(crate) struct Rules {
     set_mode_failed_said: bool,
     /// Must nickname: Pokémon waiting for the Player to name them, with their species names.
     nickname_wanted: BTreeMap<u32, String>,
+}
+
+/// The Pokémon a Gift source gave, and when (in events taken in).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GiftGiven {
+    pid: u32,
+    at: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +125,9 @@ impl Rules {
             dead: BTreeMap::new(),
             families: None,
             used_sources: BTreeSet::new(),
+            gift_from: BTreeMap::new(),
+            events_seen: 0,
+            last_reset: None,
             to_release: BTreeSet::new(),
             cap_stage: None,
             level_cap: None,
@@ -160,19 +176,35 @@ impl Rules {
         }
     }
 
+    /// Whether the game was reset to an older save after the moment `at`.
+    fn reset_since(&self, at: u64) -> bool {
+        self.last_reset.is_some_and(|reset| reset > at)
+    }
+
     fn statics(&self) -> bool {
         self.ruleset.statics_available() && self.ruleset.statics
     }
 
     /// Whether a Gift may be kept. The starter always may, and so may an
-    /// unknown Gift, which can't be told apart from a Pokémon the Ruleset allows.
-    pub fn gift_received(&self, origin: &GiftOrigin) -> GiftVerdict {
+    /// unknown Gift, which can't be told apart from a Pokémon the Ruleset
+    /// allows (an unlisted egg is bred at the Day Care). A used source may
+    /// give again when the game reloaded a save from before its Gift and that
+    /// first Pokémon (`still_owned` says) is gone.
+    pub fn gift_received(&self, origin: &GiftOrigin, still_owned: impl Fn(u32) -> bool) -> GiftVerdict {
         match origin {
             GiftOrigin::Listed(source) if source.kind == SourceKind::Starter => GiftVerdict::Keep,
             GiftOrigin::Unknown => GiftVerdict::Keep,
             _ if !self.ruleset.gifts => GiftVerdict::Decline(DeclineReason::GiftsOff),
             GiftOrigin::Listed(source) if self.used_sources.contains(&source.key) => {
-                GiftVerdict::Decline(DeclineReason::SourceUsed)
+                let undone = self
+                    .gift_from
+                    .get(&source.key)
+                    .is_some_and(|given| self.reset_since(given.at) && !still_owned(given.pid));
+                if undone {
+                    GiftVerdict::Keep
+                } else {
+                    GiftVerdict::Decline(DeclineReason::SourceUsed)
+                }
             }
             _ => GiftVerdict::Keep,
         }
@@ -295,15 +327,27 @@ impl Rules {
 
     /// Takes in an event of the Run, as it happens or when a Run is resumed.
     pub fn record(&mut self, event: &RunEvent) {
+        self.events_seen += 1;
         match event {
             RunEvent::Encounter { area, .. } => {
                 self.closed.insert(area.id);
             }
             RunEvent::PokeBallsObtained => self.had_poke_balls = true,
             RunEvent::Gift {
-                source: Some(source), ..
+                source: Some(source),
+                pid,
+                ..
+            } => {
+                self.used_sources.insert(source.key.clone());
+                self.gift_from.insert(
+                    source.key.clone(),
+                    GiftGiven {
+                        pid: *pid,
+                        at: self.events_seen,
+                    },
+                );
             }
-            | RunEvent::StaticEncounter { source, .. } => {
+            RunEvent::StaticEncounter { source, .. } => {
                 self.used_sources.insert(source.key.clone());
             }
             RunEvent::GiftDeclined { pid, .. } => {
@@ -336,9 +380,16 @@ impl Rules {
             | RunEvent::DeadBoxFull { pid, .. } => {
                 self.dead.insert(*pid, DeadState::MovedOut);
             }
-            // A newly booted game holds the last in-game save, which may be
-            // from before a Dead Pokémon was moved.
-            RunEvent::Resumed => self.dead.values_mut().for_each(|state| *state = DeadState::NotMovedYet),
+            // A game booted from its last in-game save, or reset to it, may
+            // hold a Dead Pokémon from before it was moved: no Violation.
+            // A suspend or a rebuild goes on exactly where the game was.
+            RunEvent::Resumed {
+                from: ResumedFrom::Save | ResumedFrom::Start,
+            }
+            | RunEvent::GameReset => {
+                self.dead.values_mut().for_each(|state| *state = DeadState::NotMovedYet);
+                self.last_reset = Some(self.events_seen);
+            }
             _ => {}
         }
     }

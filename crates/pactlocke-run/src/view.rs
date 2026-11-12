@@ -1,6 +1,6 @@
 //! What the side panel shows of a Run. The UI only displays it.
 
-use crate::event::{AreaRef, DeathCause, DeclineReason, Recorded, RunEvent};
+use crate::event::{AreaRef, DeathCause, DeclineReason, Recorded, ResumedFrom, RunEvent};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RunView {
@@ -122,10 +122,26 @@ pub enum FeedKind {
 }
 
 impl FeedEntry {
-    pub(crate) fn of(recorded: &Recorded) -> Self {
+    /// What the feed says of an event; some, such as checkpoints, it doesn't show.
+    pub(crate) fn of(recorded: &Recorded) -> Option<Self> {
         let (kind, text) = match &recorded.event {
             RunEvent::Started { game_name } => (FeedKind::Run, format!("Run started on {game_name}")),
-            RunEvent::Resumed => (FeedKind::Run, "Run resumed".to_owned()),
+            RunEvent::Resumed { from } => (
+                FeedKind::Run,
+                match from {
+                    ResumedFrom::Save => "Run resumed from your last in-game save".to_owned(),
+                    ResumedFrom::Start => "Run resumed from the start: the game hasn't been saved yet".to_owned(),
+                    ResumedFrom::Suspend => "Run resumed where you suspended it".to_owned(),
+                    ResumedFrom::Rebuild { frames } => format!(
+                        "Run recovered after the app closed unexpectedly: rebuilt from the last checkpoint and \
+                         {:.0} s of button presses",
+                        *frames as f64 / 60.0
+                    ),
+                },
+            ),
+            RunEvent::Checkpoint { .. } | RunEvent::Closed => return None,
+            RunEvent::Suspended => (FeedKind::Run, "Run suspended".to_owned()),
+            RunEvent::GameReset => (FeedKind::Run, "The game was reset to an older save".to_owned()),
             RunEvent::PokeBallsObtained => (
                 FeedKind::Run,
                 "You have Poké Balls: wild Encounters count from now on".to_owned(),
@@ -173,12 +189,14 @@ impl FeedEntry {
                 area,
                 source,
                 starter,
+                egg,
                 ..
             } => (
                 FeedKind::Gift,
                 at(
                     area.as_ref(),
                     match (source, starter) {
+                        (None, _) if *egg => "received an Egg from the Day Care".to_owned(),
                         (Some(source), true) => format!("received {species_name}, the {}", source.name),
                         (Some(source), false) => format!("received {species_name} from the {}", source.name),
                         (None, _) => {
@@ -340,10 +358,10 @@ impl FeedEntry {
                 ),
             ),
         };
-        Self {
+        Some(Self {
             at_ms: recorded.at_ms,
             kind,
             text,
-        }
+        })
     }
 }

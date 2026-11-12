@@ -367,6 +367,13 @@ impl<M: Memory> Game for ProfileGame<M> {
         self.u32(block + self.profile.layout.trainer_id)
     }
 
+    fn play_time(&mut self) -> u32 {
+        let at = self.save_block(2) + self.profile.layout.play_time;
+        let (hours, minutes) = (u32::from(self.u16(at)), u32::from(self.u8(at + 2)));
+        let (seconds, frames) = (u32::from(self.u8(at + 3)), u32::from(self.u8(at + 4)));
+        ((hours * 60 + minutes) * 60 + seconds) * 60 + frames
+    }
+
     fn primary_type(&mut self, species: u16) -> u8 {
         let layout = &self.profile.layout;
         let addr =

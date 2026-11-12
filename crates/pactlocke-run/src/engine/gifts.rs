@@ -45,6 +45,8 @@ impl RunEngine {
                 let (party, pc) = party_and_pc(game);
                 let mut known = SeenPokemon::default();
                 known.take_in(&party, &pc, game);
+                // Pokémon away (at the Day Care) when the game was booted.
+                known.pids.extend(self.logged_pids.iter().copied());
                 self.known = Some(known);
             }
             return;
@@ -95,12 +97,13 @@ impl RunEngine {
                         species_name: species_name.clone(),
                         area: area.clone(),
                         starter: matches!(source, Some(ref s) if s.kind == pactlocke_game::SourceKind::Starter),
+                        egg: pokemon.is_egg,
                         source: source.map(SourceRef::from),
                     };
                     (origin, event)
                 }
             };
-            let verdict = self.rules.gift_received(&origin);
+            let verdict = self.rules.gift_received(&origin, |pid| still_here.contains(&pid));
             self.record(event);
             if let GiftVerdict::Decline(reason) = verdict {
                 self.record(RunEvent::GiftDeclined {

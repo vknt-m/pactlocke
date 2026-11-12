@@ -183,6 +183,9 @@ pub trait Game {
     /// it holds a known setting.
     fn option(&mut self, name: &str) -> Option<String>;
     fn trainer_id(&mut self) -> u32;
+    /// The game's play time in frames. It only runs backwards when the game
+    /// is reset to an older save.
+    fn play_time(&mut self) -> u32;
     /// A species' primary type, from the loaded ROM (randomizers change types).
     fn primary_type(&mut self, species: u16) -> u8;
     /// A species' name as the game shows it, from the loaded ROM.

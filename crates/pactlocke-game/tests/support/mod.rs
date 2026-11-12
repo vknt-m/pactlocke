@@ -126,6 +126,7 @@ pc_boxes = 14
 pc_box_slots = 30
 pc_boxes_offset = 4
 trainer_id = 0x0A
+play_time = 0x0E
 badges = 0xFE4
 event_flags = 0xEE0
 trainer_size = 40

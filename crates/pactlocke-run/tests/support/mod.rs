@@ -112,7 +112,12 @@ impl Player {
     }
 
     pub fn resumes_from(storage: Box<dyn RunStorage>, clock: TestClock) -> Self {
-        let engine = RunEngine::resume(storage, Box::new(clock.clone())).unwrap();
+        let mut engine = RunEngine::resume(storage, Box::new(clock.clone())).unwrap();
+        // The game booted by the plan, as the running game does.
+        engine.booted(pactlocke_run::Booted {
+            clock_ms: 0,
+            patches: Default::default(),
+        });
         Self::playing(engine, clock)
     }
 

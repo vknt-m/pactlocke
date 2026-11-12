@@ -4,10 +4,10 @@
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use pactlocke_emu::Keys;
+use pactlocke_emu::{Checkpoint, Keys};
 use pactlocke_game::Change;
 
-use crate::{Recorded, Ruleset};
+use crate::{CheckpointReason, Recorded, Ruleset};
 
 /// What a Run is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +40,26 @@ pub struct InputBatch {
     pub stamped: Vec<Stamped>,
 }
 
+/// A checkpoint as the Run file keeps it: a Run Checkpoint (an in-game save,
+/// a Sync Gate), a boot checkpoint, or the suspend slot. It is the core's
+/// savestate and save memory, the ROM patches active then (a savestate
+/// doesn't hold them), and where it falls in its boot's input stream, so a
+/// crash can be rebuilt from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredCheckpoint {
+    pub reason: CheckpointReason,
+    pub boot: u32,
+    /// The frame boundary it was taken at: frames run in its boot before it.
+    pub frame: u64,
+    /// How many changes its boot had stamped before it was taken.
+    pub stamped_before: usize,
+    /// The clock its boot started with, so a rebuild reads the same time.
+    pub clock_ms: i64,
+    /// Every ROM patch active then, by address.
+    pub patches: Vec<(u32, Vec<u8>)>,
+    pub core: Checkpoint,
+}
+
 /// Everything kept about a Run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredRun {
@@ -48,6 +68,10 @@ pub struct StoredRun {
     pub inputs: Vec<InputBatch>,
     /// The game's save memory as last seen, to boot the game with on resume.
     pub save_memory: Option<Vec<u8>>,
+    /// The newest checkpoint of any reason, to rebuild a crashed boot from.
+    pub latest_checkpoint: Option<StoredCheckpoint>,
+    /// The suspend slot: where the Player suspended and quit, until resumed.
+    pub suspended: Option<StoredCheckpoint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +100,12 @@ pub trait RunStorage: Send {
     fn append(&mut self, event: &Recorded);
     fn record_inputs(&mut self, batch: &InputBatch);
     fn store_save_memory(&mut self, save: &[u8]);
+    /// Records an event with the checkpoint it refers to, together.
+    fn append_with_checkpoint(&mut self, event: &Recorded, checkpoint: &StoredCheckpoint);
+    /// Records the Suspended event with the suspend slot's checkpoint, together.
+    fn store_suspend(&mut self, event: &Recorded, checkpoint: &StoredCheckpoint);
+    /// Empties the suspend slot: it is used up on resume.
+    fn clear_suspend(&mut self);
     fn load(&mut self) -> Result<StoredRun, StorageError>;
     /// Why a write failed, if one has since the Run was opened.
     fn write_failure(&mut self) -> Option<String>;
@@ -90,6 +120,20 @@ pub struct MemoryStorage {
 }
 
 impl MemoryStorage {
+    /// A copy of the Run as stored now that later writes don't reach, as
+    /// the Run file would be found after a crash at this moment.
+    pub fn snapshot(&self) -> MemoryStorage {
+        MemoryStorage {
+            run: Arc::new(Mutex::new(self.run.lock().unwrap().clone())),
+            failure: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// The Run as stored.
+    pub fn load_run(&self) -> StoredRun {
+        self.run.lock().unwrap().clone().expect("the Run was created first")
+    }
+
     /// From now on, writes fail for this reason (the Run as stored so far is kept).
     pub fn fail_writes(&self, why: &str) {
         *self.failure.lock().unwrap() = Some(why.to_owned());
@@ -115,6 +159,8 @@ impl RunStorage for MemoryStorage {
             events: Vec::new(),
             inputs: Vec::new(),
             save_memory: None,
+            latest_checkpoint: None,
+            suspended: None,
         });
         Ok(())
     }
@@ -129,6 +175,24 @@ impl RunStorage for MemoryStorage {
 
     fn store_save_memory(&mut self, save: &[u8]) {
         self.with(|run| run.save_memory = Some(save.to_vec()));
+    }
+
+    fn append_with_checkpoint(&mut self, event: &Recorded, checkpoint: &StoredCheckpoint) {
+        self.with(|run| {
+            run.events.push(event.clone());
+            run.latest_checkpoint = Some(checkpoint.clone());
+        });
+    }
+
+    fn store_suspend(&mut self, event: &Recorded, checkpoint: &StoredCheckpoint) {
+        self.with(|run| {
+            run.events.push(event.clone());
+            run.suspended = Some(checkpoint.clone());
+        });
+    }
+
+    fn clear_suspend(&mut self) {
+        self.with(|run| run.suspended = None);
     }
 
     fn load(&mut self) -> Result<StoredRun, StorageError> {

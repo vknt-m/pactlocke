@@ -81,6 +81,7 @@ pc_boxes = 14
 pc_box_slots = 30
 pc_boxes_offset = 4
 trainer_id = 0x0A                      # in save block 2
+play_time = 0x0E                       # in save block 2: hours, minutes, seconds, frames
 badges = 0xFE4                         # in save block 1: flags 0x820-0x827
 event_flags = 0xEE0                    # in save block 1
 # pret's struct Trainer (40 bytes) and its party entries; the party flags say

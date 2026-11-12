@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use pactlocke_emu::{Checkpoint, CoreAdapter, CoreError, Frame, Keys};
 use pactlocke_game::ProfileGame;
 
-use crate::{RunEngine, RunView};
+use crate::{RunEngine, RunView, boot_core};
 
 /// What the side panel asks of the Run, carried out at the next frame boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,15 +32,40 @@ pub struct RunningGame<C: CoreAdapter> {
 
 impl<C: CoreAdapter> RunningGame<C> {
     /// `game` is freshly booted: its ROM loaded and, on a resume, the Run's
-    /// save memory loaded too.
+    /// save memory loaded too. Its first checkpoint is taken now.
     pub fn new(game: ProfileGame<C>, engine: RunEngine) -> Self {
         let view = Arc::new(Mutex::new(engine.view().clone()));
-        Self {
+        let mut running = Self {
             published_version: engine.view_version(),
             game,
             engine,
             view,
             commands: channel(),
+        };
+        running.checkpoint_if_wanted();
+        running
+    }
+
+    /// Boots `game`, whose core has the ROM loaded and nothing run, the way
+    /// the Run engine planned: from power-on, the last in-game save, the
+    /// suspend slot, or rebuilt after a crash.
+    pub fn boot(mut game: ProfileGame<C>, mut engine: RunEngine, now_ms: i64) -> Result<Self, CoreError> {
+        let booted = boot_core(game.memory_mut(), engine.boot_plan(), now_ms)?;
+        engine.booted(booted);
+        Ok(Self::new(game, engine))
+    }
+
+    /// Suspend and quit: the Run's suspend slot holds exactly where the game is.
+    pub fn suspend(mut self) {
+        self.check_save_memory();
+        let checkpoint = self.core().checkpoint();
+        self.engine.suspend(checkpoint);
+    }
+
+    fn checkpoint_if_wanted(&mut self) {
+        if self.engine.checkpoint_wanted() {
+            let checkpoint = self.core().checkpoint();
+            self.engine.take_checkpoint(checkpoint);
         }
     }
 
@@ -65,6 +90,17 @@ impl<C: CoreAdapter> RunningGame<C> {
 
     pub fn engine(&self) -> &RunEngine {
         &self.engine
+    }
+
+    /// Takes a Run Checkpoint now, at this frame boundary.
+    pub fn checkpoint(&mut self) {
+        self.engine.want_checkpoint();
+        self.checkpoint_if_wanted();
+    }
+
+    /// Writes the input stream so far to the Run file.
+    pub fn flush(&mut self) {
+        self.engine.flush();
     }
 
     pub fn game_mut(&mut self) -> &mut ProfileGame<C> {
@@ -101,6 +137,7 @@ impl<C: CoreAdapter> CoreAdapter for RunningGame<C> {
         if self.engine.frames_run().is_multiple_of(SAVE_CHECK_FRAMES) {
             self.check_save_memory();
         }
+        self.checkpoint_if_wanted();
         if self.engine.view_version() != self.published_version {
             self.published_version = self.engine.view_version();
             *self.view.lock().unwrap_or_else(|e| e.into_inner()) = self.engine.view().clone();

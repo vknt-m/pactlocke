@@ -7,8 +7,21 @@ use serde::{Deserialize, Serialize};
 pub enum RunEvent {
     /// The Run began.
     Started { game_name: String },
-    /// The Run was opened again; the game was booted afresh.
-    Resumed,
+    /// The Run was opened again; the game was booted afresh `from` there.
+    Resumed {
+        #[serde(default)]
+        from: ResumedFrom,
+    },
+    /// A Run Checkpoint was stored with this event; `hash` is its savestate's SHA-1.
+    Checkpoint { reason: CheckpointReason, hash: String },
+    /// The Player suspended and quit; the suspend slot holds where.
+    Suspended,
+    /// The Run was closed cleanly. A boot that ends without this or
+    /// `Suspended` ended in a crash.
+    Closed,
+    /// The game was reset to an older save, or a new game was started (its
+    /// play time ran backwards).
+    GameReset,
     /// The Player first holds Poké Balls; wild Encounters count from here on.
     PokeBallsObtained,
     /// A wild battle before the Player had Poké Balls: no Encounter is used.
@@ -56,6 +69,9 @@ pub enum RunEvent {
         area: Option<AreaRef>,
         source: Option<SourceRef>,
         starter: bool,
+        /// An egg; one no catalogue lists was bred at the Day Care.
+        #[serde(default)]
+        egg: bool,
     },
     /// An in-game trade: the Player gave `gave` and received this Pokémon, a Gift.
     Traded {
@@ -165,6 +181,34 @@ pub enum RunEvent {
         type_name: String,
         reason: String,
     },
+}
+
+/// Where a resumed Run's game was booted from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "boot")]
+pub enum ResumedFrom {
+    /// The last in-game save, as a console would after being switched off.
+    #[default]
+    Save,
+    /// No in-game save yet: a new game from the start.
+    Start,
+    /// The suspend slot: exactly where the Player suspended.
+    Suspend,
+    /// After a crash: the last checkpoint and the button presses recorded after it.
+    Rebuild { frames: u64 },
+}
+
+/// Why a Run Checkpoint was taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointReason {
+    /// The game was booted: a boot checkpoint, only for rebuilding after a
+    /// crash, never a Retry point.
+    Boot,
+    /// The Player saved in-game.
+    InGameSave,
+    /// Asked for at a moment that needs one, such as a Sync Gate.
+    Asked,
 }
 
 /// A Gift or Static source, as the log keeps it.

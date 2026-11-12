@@ -6,6 +6,7 @@
 //! Dependencies are passed in: the game (through [`LiveGame`]), storage
 //! (through [`RunStorage`]) and the clock (through [`RunClock`]).
 
+mod boot;
 mod clock;
 mod engine;
 mod event;
@@ -17,13 +18,14 @@ mod running;
 mod storage;
 mod view;
 
+pub use boot::{BootPlan, Booted, boot_core};
 pub use clock::{RunClock, SystemRunClock};
 pub use engine::RunEngine;
-pub use event::{AreaRef, DeathCause, Recorded, RunEvent};
+pub use event::{AreaRef, CheckpointReason, DeathCause, Recorded, ResumedFrom, RunEvent};
 pub use file::{RunFile, RunId, RunLibrary, RunSummary};
 pub use live::LiveGame;
 pub use running::{RunCommand, RunningGame};
-pub use storage::{InputBatch, MemoryStorage, RunInfo, RunStorage, Stamped, StorageError, StoredRun};
+pub use storage::{InputBatch, MemoryStorage, RunInfo, RunStorage, Stamped, StorageError, StoredCheckpoint, StoredRun};
 pub use view::{FeedEntry, FeedKind, Grave, LevelCapView, NicknameWanted, RunView};
 
 use pactlocke_game::LevelCap;

@@ -1,6 +1,7 @@
 //! The Run file: one SQLite database per Run (WAL, synchronous NORMAL),
 //! written on a dedicated thread fed by a channel, and the folder of Run
-//! files the home screen lists.
+//! files the home screen lists. Run Checkpoints are zstd blobs, written in
+//! the same transaction as the log event that refers to them.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -8,15 +9,22 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pactlocke_emu::Keys;
+use pactlocke_emu::{Checkpoint, Keys};
 use pactlocke_game::Change;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
-use crate::storage::{InputBatch, RunInfo, RunStorage, Stamped, StorageError, StoredRun};
-use crate::{Recorded, Ruleset};
+use crate::storage::{InputBatch, RunInfo, RunStorage, Stamped, StorageError, StoredCheckpoint, StoredRun};
+use crate::{CheckpointReason, Recorded, Ruleset};
 
 /// Run files end in this.
 const EXTENSION: &str = "pactrun";
+
+/// How many Run Checkpoints the file keeps, besides the newest boot
+/// checkpoint; older ones are pruned (their hashes stay in the log).
+const RUN_CHECKPOINTS_KEPT: i64 = 3;
+
+/// zstd's level for checkpoints: quick, and a savestate shrinks well.
+const ZSTD_LEVEL: i32 = 3;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS run (
@@ -51,6 +59,28 @@ CREATE TABLE IF NOT EXISTS stamped (
 CREATE TABLE IF NOT EXISTS save_memory (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     bytes BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reason TEXT NOT NULL,
+    event_seq INTEGER NOT NULL,
+    boot INTEGER NOT NULL,
+    frame INTEGER NOT NULL,
+    stamped_before INTEGER NOT NULL,
+    clock_ms INTEGER NOT NULL,
+    patches BLOB NOT NULL,
+    core BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS suspend (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    reason TEXT NOT NULL,
+    event_seq INTEGER NOT NULL,
+    boot INTEGER NOT NULL,
+    frame INTEGER NOT NULL,
+    stamped_before INTEGER NOT NULL,
+    clock_ms INTEGER NOT NULL,
+    patches BLOB NOT NULL,
+    core BLOB NOT NULL
 );
 ";
 
@@ -183,6 +213,9 @@ enum Message {
     Append(Recorded),
     Inputs(InputBatch),
     SaveMemory(Vec<u8>),
+    Checkpoint(Recorded, StoredCheckpoint),
+    Suspend(Recorded, StoredCheckpoint),
+    ClearSuspend,
     Load(Sender<Result<StoredRun, StorageError>>),
 }
 
@@ -269,6 +302,18 @@ impl RunStorage for RunFile {
         self.send(Message::SaveMemory(save.to_vec()));
     }
 
+    fn append_with_checkpoint(&mut self, event: &Recorded, checkpoint: &StoredCheckpoint) {
+        self.send(Message::Checkpoint(event.clone(), checkpoint.clone()));
+    }
+
+    fn store_suspend(&mut self, event: &Recorded, checkpoint: &StoredCheckpoint) {
+        self.send(Message::Suspend(event.clone(), checkpoint.clone()));
+    }
+
+    fn clear_suspend(&mut self) {
+        self.send(Message::ClearSuspend);
+    }
+
     fn load(&mut self) -> Result<StoredRun, StorageError> {
         self.ask(Message::Load)
     }
@@ -302,6 +347,9 @@ fn serve(db: &Connection, messages: &Receiver<Message>, failure: &Mutex<Option<S
                     params![save],
                 )
                 .map(drop),
+            Message::Checkpoint(event, checkpoint) => store_checkpoint(db, &event, &checkpoint, Slot::Checkpoints),
+            Message::Suspend(event, checkpoint) => store_checkpoint(db, &event, &checkpoint, Slot::Suspend),
+            Message::ClearSuspend => db.execute("DELETE FROM suspend", []).map(drop),
             Message::Load(reply) => {
                 let _ = reply.send(load(db));
                 Ok(())
@@ -338,6 +386,10 @@ fn write_info(db: &Connection, info: &RunInfo) -> rusqlite::Result<()> {
 }
 
 fn append(db: &Connection, recorded: &Recorded) -> rusqlite::Result<()> {
+    insert_event(db, recorded)
+}
+
+fn insert_event(db: &Connection, recorded: &Recorded) -> rusqlite::Result<()> {
     let event = serde_json::to_string(&recorded.event).expect("an event serialises");
     db.execute(
         "INSERT INTO events (seq, boot, frame, at_ms, event) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -350,6 +402,154 @@ fn append(db: &Connection, recorded: &Recorded) -> rusqlite::Result<()> {
         ],
     )
     .map(drop)
+}
+
+/// Where a checkpoint is kept in the file.
+#[derive(Clone, Copy)]
+enum Slot {
+    /// Run Checkpoints and boot checkpoints: the newest few are kept.
+    Checkpoints,
+    /// The one suspend slot.
+    Suspend,
+}
+
+impl Slot {
+    fn table(self) -> &'static str {
+        match self {
+            Slot::Checkpoints => "checkpoints",
+            Slot::Suspend => "suspend",
+        }
+    }
+}
+
+/// The event and its checkpoint, in one transaction. The suspend slot has one
+/// row; the checkpoints table keeps the newest boot checkpoint and the newest
+/// few Run Checkpoints.
+fn store_checkpoint(
+    db: &Connection,
+    event: &Recorded,
+    checkpoint: &StoredCheckpoint,
+    slot: Slot,
+) -> rusqlite::Result<()> {
+    let tx = db.unchecked_transaction()?;
+    insert_event(&tx, event)?;
+    let core = zstd::encode_all(&encode_core(&checkpoint.core)[..], ZSTD_LEVEL)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let reason = serde_json::to_string(&checkpoint.reason).expect("a reason serialises");
+    let id = match slot {
+        Slot::Suspend => Some(1),
+        Slot::Checkpoints => None,
+    };
+    tx.execute(
+        &format!(
+            "INSERT OR REPLACE INTO {} (id, reason, event_seq, boot, frame, stamped_before, clock_ms, patches, core)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            slot.table()
+        ),
+        params![
+            id,
+            reason,
+            event.seq as i64,
+            checkpoint.boot,
+            checkpoint.frame as i64,
+            checkpoint.stamped_before as i64,
+            checkpoint.clock_ms,
+            encode_patches(&checkpoint.patches),
+            core
+        ],
+    )?;
+    if let Slot::Checkpoints = slot {
+        let boot = serde_json::to_string(&CheckpointReason::Boot).expect("a reason serialises");
+        tx.execute(
+            "DELETE FROM checkpoints WHERE id NOT IN (
+                 SELECT id FROM checkpoints WHERE reason != ?1 ORDER BY id DESC LIMIT ?2
+             ) AND id NOT IN (SELECT MAX(id) FROM checkpoints WHERE reason = ?1)",
+            params![boot, RUN_CHECKPOINTS_KEPT],
+        )?;
+    }
+    tx.commit()
+}
+
+/// A core checkpoint as bytes: the save memory's length, the save memory, the savestate.
+fn encode_core(core: &Checkpoint) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + core.save_memory.len() + core.state.len());
+    out.extend_from_slice(&(core.save_memory.len() as u32).to_le_bytes());
+    out.extend_from_slice(&core.save_memory);
+    out.extend_from_slice(&core.state);
+    out
+}
+
+fn decode_core(bytes: &[u8]) -> Option<Checkpoint> {
+    let (len, rest) = bytes.split_first_chunk::<4>()?;
+    let len = u32::from_le_bytes(*len) as usize;
+    let (save_memory, state) = (rest.get(..len)?, rest.get(len..)?);
+    Some(Checkpoint {
+        save_memory: save_memory.to_vec(),
+        state: state.to_vec(),
+    })
+}
+
+/// Each patch as its address, length and bytes.
+fn encode_patches(patches: &[(u32, Vec<u8>)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (addr, bytes) in patches {
+        out.extend_from_slice(&addr.to_le_bytes());
+        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(bytes);
+    }
+    out
+}
+
+fn decode_patches(mut bytes: &[u8]) -> Option<Vec<(u32, Vec<u8>)>> {
+    let mut patches = Vec::new();
+    while !bytes.is_empty() {
+        let (addr, rest) = bytes.split_first_chunk::<4>()?;
+        let (len, rest) = rest.split_first_chunk::<4>()?;
+        let len = u32::from_le_bytes(*len) as usize;
+        patches.push((u32::from_le_bytes(*addr), rest.get(..len)?.to_vec()));
+        bytes = &rest[len..];
+    }
+    Some(patches)
+}
+
+/// The newest checkpoint in a slot, decompressed.
+fn read_checkpoint(db: &Connection, slot: Slot) -> Result<Option<StoredCheckpoint>, StorageError> {
+    let table = slot.table();
+    let row = db
+        .query_row(
+            &format!(
+                "SELECT reason, boot, frame, stamped_before, clock_ms, patches, core FROM {table}
+                 ORDER BY id DESC LIMIT 1"
+            ),
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, Vec<u8>>(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(file_error)?;
+    let Some((reason, boot, frame, stamped_before, clock_ms, patches, core)) = row else {
+        return Ok(None);
+    };
+    let broken = || StorageError::File(format!("a checkpoint in {table} can't be read"));
+    let core = zstd::decode_all(&core[..]).map_err(|_| broken())?;
+    Ok(Some(StoredCheckpoint {
+        reason: serde_json::from_str(&reason).map_err(|_| broken())?,
+        boot,
+        frame: frame as u64,
+        stamped_before: stamped_before as usize,
+        clock_ms,
+        patches: decode_patches(&patches).ok_or_else(broken)?,
+        core: decode_core(&core).ok_or_else(broken)?,
+    }))
 }
 
 fn record_inputs(db: &Connection, batch: &InputBatch) -> rusqlite::Result<()> {
@@ -455,5 +655,7 @@ fn load(db: &Connection) -> Result<StoredRun, StorageError> {
         events,
         inputs: inputs.into_iter().map(|(_, batch)| batch).collect(),
         save_memory,
+        latest_checkpoint: read_checkpoint(db, Slot::Checkpoints)?,
+        suspended: read_checkpoint(db, Slot::Suspend)?,
     })
 }

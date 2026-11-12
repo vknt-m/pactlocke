@@ -3,20 +3,29 @@ mod gifts;
 mod nicknames_and_types;
 mod no_items_and_set_mode;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use pactlocke_emu::Keys;
+use pactlocke_emu::{Checkpoint, Keys};
 use pactlocke_game::{Area, Battle, BattleKind, Change, Game, GameError, Pokemon, ScriptStatus, Side};
+use sha1::{Digest, Sha1};
 
-use crate::event::{AreaRef, DeathCause, SourceRef};
+use crate::boot::{BootPlan, Booted};
+use crate::event::{AreaRef, CheckpointReason, DeathCause, SourceRef};
 use crate::families::EvolutionFamilies;
 use crate::rules::{BattleStart, DeadMove, Rules, Verdict};
-use crate::storage::{InputBatch, RunInfo, RunStorage, Stamped, StorageError};
+use crate::storage::{InputBatch, RunInfo, RunStorage, Stamped, StorageError, StoredCheckpoint};
 use crate::view::{FeedEntry, FeedKind, Grave, LevelCapView, NicknameWanted, RunView};
 use crate::{LiveGame, NewRun, Recorded, RunClock, RunEvent};
 
 /// How often the input stream is flushed to storage, so a crash loses at most this much.
 const FLUSH_EVERY_MS: i64 = 1000;
+
+/// How many Run Checkpoints stay in RAM, for instant Retries.
+const RUN_CHECKPOINTS_IN_RAM: usize = 2;
+
+/// How far the game's play time may run backwards (in frames) before it
+/// counts as a reset to an older save rather than a counter wobbling.
+const PLAY_TIME_WOBBLE_FRAMES: u32 = 60;
 
 /// The Run engine for one Player's game. Call [`RunEngine::frame`] after
 /// every emulated frame; it reads the game, decides what the rules say, and
@@ -64,6 +73,28 @@ pub struct RunEngine {
     /// Pokémon the type clause couldn't move since the game was booted; they
     /// aren't tried again until it is booted afresh.
     type_clause_failed: BTreeSet<u32>,
+    /// How this boot's game is to be started, decided from the Run file.
+    boot_plan: BootPlan,
+    /// The checkpoint the game should be given at this frame boundary, and why.
+    checkpoint_due: Option<CheckpointReason>,
+    /// Whether this boot started from a checkpoint (a suspend or a crash
+    /// rebuild), so a battle under way is the one the log already decided.
+    resumed_mid_game: bool,
+    /// Whether this boot's game got going (its boot checkpoint is taken).
+    game_running: bool,
+    /// Every ROM patch active in this boot, by address.
+    patches: BTreeMap<u32, Vec<u8>>,
+    /// The clock this boot started with.
+    boot_clock_ms: i64,
+    /// The newest Run Checkpoints (not boot checkpoints), newest last.
+    recent_checkpoints: VecDeque<StoredCheckpoint>,
+    /// Whether the Player suspended, so closing isn't a clean close.
+    suspended: bool,
+    /// The game's play time at the last look on the overworld.
+    last_play_time: Option<u32>,
+    /// Every Pokémon the Run log says the Player got, so one back from the
+    /// Day Care after a reboot isn't taken for a Gift.
+    logged_pids: BTreeSet<u32>,
 }
 
 /// A battle in progress, as the engine saw it begin.
@@ -106,13 +137,91 @@ impl RunEngine {
     pub fn resume(mut storage: Box<dyn RunStorage>, clock: Box<dyn RunClock>) -> Result<Self, StorageError> {
         let stored = storage.load()?;
         let boot = stored.events.iter().map(|e| e.boot).max().unwrap_or(0) + 1;
-        let mut engine = Self::with(stored.info, storage, clock, boot, stored.save_memory);
+        let mut engine = Self::with(stored.info.clone(), storage, clock, boot, stored.save_memory.clone());
         for recorded in &stored.events {
             engine.take_in(recorded);
         }
         engine.next_seq = stored.events.iter().map(|e| e.seq).max().unwrap_or(0) + 1;
-        engine.record(RunEvent::Resumed);
+        let (plan, from) = crate::boot::plan(&stored);
+        engine.boot_plan = plan;
+        engine.record(RunEvent::Resumed { from });
         Ok(engine)
+    }
+
+    /// How the game is to be booted for this Run: see [`crate::boot_core`].
+    pub fn boot_plan(&self) -> &BootPlan {
+        &self.boot_plan
+    }
+
+    /// The game was booted by the plan: its clock, and the patches it holds.
+    /// A suspend slot is used up only now, once the game is back.
+    pub fn booted(&mut self, booted: Booted) {
+        self.boot_clock_ms = booted.clock_ms;
+        self.patches = booted.patches;
+        match self.boot_plan {
+            BootPlan::Suspended(_) => {
+                self.storage.clear_suspend();
+                self.resumed_mid_game = true;
+            }
+            BootPlan::Rebuild { .. } => self.resumed_mid_game = true,
+            BootPlan::PowerOn | BootPlan::FromSave(_) => {}
+        }
+    }
+
+    /// Whether the game should be checkpointed now, at this frame boundary:
+    /// once a boot starts, and after each in-game save.
+    pub fn checkpoint_wanted(&self) -> bool {
+        self.checkpoint_due.is_some()
+    }
+
+    /// Stores a Run Checkpoint from the core's checkpoint taken at this
+    /// frame boundary, with the event that refers to it.
+    pub fn take_checkpoint(&mut self, core: Checkpoint) {
+        let reason = self.checkpoint_due.take().unwrap_or(CheckpointReason::Asked);
+        self.game_running = true;
+        let checkpoint = self.run_checkpoint(reason, core);
+        let hash = checkpoint_hash(&checkpoint);
+        self.record_with(RunEvent::Checkpoint { reason, hash }, Stored::Checkpoint(&checkpoint));
+        if reason != CheckpointReason::Boot {
+            self.recent_checkpoints.push_back(checkpoint);
+            while self.recent_checkpoints.len() > RUN_CHECKPOINTS_IN_RAM {
+                self.recent_checkpoints.pop_front();
+            }
+        }
+    }
+
+    /// Asks for a Run Checkpoint at this frame boundary, such as at a Sync Gate.
+    pub fn want_checkpoint(&mut self) {
+        self.checkpoint_due = Some(CheckpointReason::Asked);
+    }
+
+    /// The newest Run Checkpoints kept in RAM, newest last (for Retries).
+    pub fn recent_checkpoints(&self) -> &VecDeque<StoredCheckpoint> {
+        &self.recent_checkpoints
+    }
+
+    /// Suspend and quit: the one suspend slot holds exactly where the game is.
+    pub fn suspend(&mut self, core: Checkpoint) {
+        let checkpoint = self.run_checkpoint(CheckpointReason::Asked, core);
+        self.record_with(RunEvent::Suspended, Stored::Suspend(&checkpoint));
+        self.suspended = true;
+        self.flush();
+    }
+
+    fn run_checkpoint(&self, reason: CheckpointReason, core: Checkpoint) -> StoredCheckpoint {
+        StoredCheckpoint {
+            reason,
+            boot: self.boot,
+            frame: self.frame,
+            stamped_before: self.stamped.len(),
+            clock_ms: self.boot_clock_ms,
+            patches: self
+                .patches
+                .iter()
+                .map(|(addr, bytes)| (*addr, bytes.clone()))
+                .collect(),
+            core,
+        }
     }
 
     fn with(
@@ -158,6 +267,16 @@ impl RunEngine {
             names_given: Vec::new(),
             party_before: None,
             type_clause_failed: BTreeSet::new(),
+            boot_plan: BootPlan::PowerOn,
+            checkpoint_due: Some(CheckpointReason::Boot),
+            resumed_mid_game: false,
+            game_running: false,
+            patches: BTreeMap::new(),
+            boot_clock_ms: 0,
+            recent_checkpoints: VecDeque::new(),
+            suspended: false,
+            last_play_time: None,
+            logged_pids: BTreeSet::new(),
         }
     }
 
@@ -196,7 +315,11 @@ impl RunEngine {
             return;
         }
         self.storage.store_save_memory(save);
-        self.save_memory = Some(save.to_vec());
+        // A Run Checkpoint at every in-game save. The first save memory a new
+        // game shows is its blank cartridge, not a save.
+        if self.save_memory.replace(save.to_vec()).is_some() && self.checkpoint_due.is_none() {
+            self.checkpoint_due = Some(CheckpointReason::InGameSave);
+        }
     }
 
     /// One frame has just run with `keys` held. Reads the game at this frame
@@ -218,18 +341,25 @@ impl RunEngine {
             self.keep_set_mode(game);
         }
 
+        if game.at_safe_overworld_point() {
+            self.watch_for_a_reset(game);
+        }
+
         let battle = game.battle();
         match (self.battle.is_some(), battle.clone()) {
             (false, Some(battle)) => {
                 let script = game.script();
+                // A battle under way in a game resumed from a checkpoint was
+                // decided before the checkpoint; any block on it comes off as usual.
+                let decided = self.resumed_mid_game;
                 self.battle = Some(BattleWatch {
                     kind: battle.kind,
                     script_idle: script.status == ScriptStatus::Idle,
                     script_position: script.position,
                     area: game.area(),
                     owned_before: owned(game),
-                    decided: false,
-                    catches_blocked: false,
+                    decided,
+                    catches_blocked: decided,
                 });
                 self.decide(game);
             }
@@ -263,15 +393,37 @@ impl RunEngine {
             self.keep_type_clause(game);
         }
 
+        self.resumed_mid_game = false;
+
+        self.resumed_mid_game = false;
+
         if self.clock.now_ms() - self.last_flush_ms >= FLUSH_EVERY_MS {
             self.flush();
         }
+    }
+
+    /// A reset to an older save (A+B+START+SELECT, then CONTINUE) shows as
+    /// the play time running backwards.
+    fn watch_for_a_reset(&mut self, game: &mut impl LiveGame) {
+        let now = game.play_time();
+        if self
+            .last_play_time
+            .is_some_and(|last| now + PLAY_TIME_WOBBLE_FRAMES < last)
+        {
+            self.record(RunEvent::GameReset);
+        }
+        self.last_play_time = Some(now);
     }
 
     /// Writes the input stream so far to storage.
     pub fn flush(&mut self) {
         self.last_flush_ms = self.clock.now_ms();
         self.show_write_failure();
+        self.flush_inputs();
+    }
+
+    /// Writes the input stream not yet written.
+    fn flush_inputs(&mut self) {
         if self.pending.keys.is_empty() && self.pending.stamped.is_empty() {
             return;
         }
@@ -538,6 +690,9 @@ impl RunEngine {
     fn apply(&mut self, changes: Vec<Change>, game: &mut impl LiveGame) {
         for change in changes {
             game.apply(&change);
+            if let Change::Patch { addr, bytes } = &change {
+                self.patches.insert(*addr, bytes.clone());
+            }
             let stamped = Stamped {
                 frame: self.frame,
                 change,
@@ -548,6 +703,12 @@ impl RunEngine {
     }
 
     fn record(&mut self, event: RunEvent) {
+        self.record_with(event, Stored::EventOnly);
+    }
+
+    /// Records an event, and what is stored with it. The input stream up to
+    /// here is written first, so a crash rebuild reaches every logged event.
+    fn record_with(&mut self, event: RunEvent, with: Stored) {
         let recorded = Recorded {
             seq: self.next_seq,
             boot: self.boot,
@@ -556,13 +717,23 @@ impl RunEngine {
             event,
         };
         self.next_seq += 1;
-        self.storage.append(&recorded);
+        self.flush_inputs();
+        match with {
+            Stored::EventOnly => self.storage.append(&recorded),
+            Stored::Checkpoint(checkpoint) => self.storage.append_with_checkpoint(&recorded, checkpoint),
+            Stored::Suspend(checkpoint) => self.storage.store_suspend(&recorded, checkpoint),
+        }
         self.take_in(&recorded);
     }
 
     /// Updates the rules and the view with an event.
     fn take_in(&mut self, recorded: &Recorded) {
         self.rules.record(&recorded.event);
+        if let RunEvent::Gift { pid, .. } | RunEvent::Caught { pid, .. } | RunEvent::Traded { pid, .. } =
+            &recorded.event
+        {
+            self.logged_pids.insert(*pid);
+        }
         if let RunEvent::Encounter { area, .. } = &recorded.event {
             self.view.closed_areas.push(area.name.clone());
         }
@@ -595,15 +766,43 @@ impl RunEngine {
         if let Some(grave) = Grave::of(recorded) {
             self.view.graveyard.insert(0, grave);
         }
-        self.view.feed.insert(0, FeedEntry::of(recorded));
+        if let Some(entry) = FeedEntry::of(recorded) {
+            self.view.feed.insert(0, entry);
+        }
         self.view_version += 1;
     }
 }
 
 impl Drop for RunEngine {
+    /// A clean close is recorded, once the game got going. Unwinding from a
+    /// panic is a crash, so the next resume rebuilds the game instead of
+    /// booting from its save.
     fn drop(&mut self) {
+        if self.game_running && !self.suspended && !std::thread::panicking() {
+            self.record(RunEvent::Closed);
+        }
         self.flush();
     }
+}
+
+/// What is stored with an event.
+enum Stored<'a> {
+    EventOnly,
+    Checkpoint(&'a StoredCheckpoint),
+    Suspend(&'a StoredCheckpoint),
+}
+
+/// A checkpoint's SHA-1, over everything a restore puts back: the save
+/// memory, the savestate and the patch set.
+fn checkpoint_hash(checkpoint: &StoredCheckpoint) -> String {
+    let mut sha = Sha1::new();
+    sha.update(&checkpoint.core.save_memory);
+    sha.update(&checkpoint.core.state);
+    for (addr, bytes) in &checkpoint.patches {
+        sha.update(addr.to_le_bytes());
+        sha.update(bytes);
+    }
+    sha.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Moves a party Pokémon to the Dead box or, when that is full, to the

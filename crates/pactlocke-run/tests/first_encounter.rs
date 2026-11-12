@@ -226,7 +226,7 @@ fn a_resumed_run_still_has_its_closed_areas_and_feed() {
     assert_eq!(
         player.feed(FeedKind::Run),
         [
-            "Run resumed",
+            "Run resumed from the start: the game hasn't been saved yet",
             "You have Poké Balls: wild Encounters count from now on",
             "Run started on Pokémon FireRed (USA) 1.0"
         ]
@@ -245,9 +245,17 @@ fn every_frame_and_stamped_change_reaches_storage_within_a_second() {
     player.meets_wild(PIDGEY);
     player.leaves_battle();
     player.meets_wild(RATTATA);
+    // Each event writes the presses up to it, so a crash rebuild reaches it;
+    // quiet frames after it wait for the second.
+    let at_last_event = player.engine.view_version();
+    player.plays(5);
+    assert_eq!(player.engine.view_version(), at_last_event, "no events in those frames");
+    let written: usize = player.storage.load_inputs().iter().map(|b| b.keys.len()).sum();
+    let last_event = player.storage.load_run().events.last().unwrap().frame;
+    assert_eq!(written as u64, last_event, "written up to the last event");
     assert!(
-        player.storage.load_inputs().is_empty(),
-        "nothing flushed before a second has passed"
+        last_event < player.engine.frames_run(),
+        "and not after it before a second has passed"
     );
 
     player.clock.advance_ms(1000);

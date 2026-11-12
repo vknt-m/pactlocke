@@ -261,7 +261,7 @@ impl PactlockeApp {
     fn open_rom(&mut self, path: &Path) {
         self.stop_playing();
         let result = self.read_rom(path).and_then(|(rom, identity)| {
-            let core = self.boot(&rom, None).map_err(|e| format!("{}: {e}", path.display()))?;
+            let core = self.boot(&rom).map_err(|e| format!("{}: {e}", path.display()))?;
             let (emulator, audio) = self.spawn(core);
             Ok(Playing::new(Play::Free(emulator), audio, file_stem(path), identity))
         });
@@ -275,15 +275,9 @@ impl PactlockeApp {
         Ok((rom, identity))
     }
 
-    /// A core with the ROM loaded, and the Run's save memory if it has one.
-    fn boot(&self, rom: &[u8], save: Option<&[u8]>) -> Result<MgbaCore, String> {
-        let mut core = MgbaCore::new();
-        core.load_rom(rom).map_err(|e| e.to_string())?;
-        if let Some(save) = save {
-            core.load_save_memory(save)
-                .map_err(|e| format!("The Run's in-game save couldn't be loaded: {e}"))?;
-        }
-        // The game clock starts now; a co-op Run will start it at the Ruleset lock.
+    /// A core with the ROM loaded and its clock started, for playing a game outside any Run.
+    fn boot(&self, rom: &[u8]) -> Result<MgbaCore, String> {
+        let mut core = Self::core_with_rom(rom)?;
         core.set_clock(SystemRunClock.now_ms());
         Ok(core)
     }
@@ -375,8 +369,8 @@ impl PactlockeApp {
         self.stop_playing();
         draft.ruleset.level_caps = draft.level_caps_on.then(|| draft.level_caps.clone());
         let result = self.run_library().and_then(|library| {
-            // Boot first, so a game that won't start leaves no Run behind.
-            let core = self.boot(&draft.rom, None)?;
+            // Load first, so a ROM the core refuses leaves no Run behind.
+            let core = Self::core_with_rom(&draft.rom)?;
             let file = library.create().map_err(|e| e.to_string())?;
             let new = NewRun {
                 name: draft.name.trim().to_owned(),
@@ -386,7 +380,7 @@ impl PactlockeApp {
                 ruleset: draft.ruleset,
             };
             let engine = RunEngine::start(new, Box::new(file), Box::new(SystemRunClock)).map_err(|e| e.to_string())?;
-            Ok(self.play_run(engine, core, draft.profile, draft.rom, draft.identity))
+            self.play_run(engine, core, draft.profile, draft.rom, draft.identity)
         });
         self.show_result(result);
         self.refresh_runs();
@@ -402,8 +396,8 @@ impl PactlockeApp {
             let library = self.run_library()?;
             let file = library.open_run(&summary.id).map_err(|e| e.to_string())?;
             let engine = RunEngine::resume(Box::new(file), Box::new(SystemRunClock)).map_err(|e| e.to_string())?;
-            let core = self.boot(&rom, engine.save_memory())?;
-            Ok(self.play_run(engine, core, profile, rom, identity))
+            let core = Self::core_with_rom(&rom)?;
+            self.play_run(engine, core, profile, rom, identity)
         });
         self.show_result(result);
         self.refresh_runs();
@@ -430,7 +424,16 @@ impl PactlockeApp {
         Ok((rom, identity))
     }
 
-    /// Plays a Run's booted game with the Run engine watching it.
+    /// A core with the ROM loaded and nothing run yet.
+    fn core_with_rom(rom: &[u8]) -> Result<MgbaCore, String> {
+        let mut core = MgbaCore::new();
+        core.load_rom(rom).map_err(|e| e.to_string())?;
+        Ok(core)
+    }
+
+    /// Boots a Run's game the way its Run engine planned (from power-on,
+    /// the last in-game save, the suspend slot, or rebuilt after a crash),
+    /// then plays it with the engine watching.
     fn play_run(
         &self,
         engine: RunEngine,
@@ -438,13 +441,15 @@ impl PactlockeApp {
         profile: Arc<GameProfile>,
         rom: Vec<u8>,
         identity: RomIdentity,
-    ) -> Playing {
+    ) -> Result<Playing, String> {
         let name = engine.info().name.clone();
-        let running = RunningGame::new(ProfileGame::new(profile, rom, core), engine);
+        // The game clock starts now; a co-op Run will start it at the Ruleset lock.
+        let running = RunningGame::boot(ProfileGame::new(profile, rom, core), engine, SystemRunClock.now_ms())
+            .map_err(|e| format!("The Run's game couldn't be booted: {e}"))?;
         let view = running.view();
         let commands = running.commands();
         let (emulator, audio) = self.spawn(running);
-        Playing::new(
+        Ok(Playing::new(
             Play::Run {
                 emulator,
                 view,
@@ -453,12 +458,24 @@ impl PactlockeApp {
             audio,
             name,
             identity,
-        )
+        ))
     }
 
     /// Stops the game. A Run's file has finished writing when this returns.
     fn stop_playing(&mut self) {
         if self.playing.take().is_some() {
+            self.refresh_runs();
+        }
+    }
+
+    /// Suspend and quit: the Run resumes exactly here next time.
+    fn suspend_and_quit(&mut self) {
+        if let Some(Playing {
+            play: Play::Run { emulator, .. },
+            ..
+        }) = self.playing.take()
+        {
+            emulator.stop().suspend();
             self.refresh_runs();
         }
     }
@@ -484,8 +501,16 @@ impl PactlockeApp {
                         Play::Run { .. } => "Close Run",
                         Play::Free(_) => "Close game",
                     };
+                    let in_run = matches!(playing.play, Play::Run { .. });
                     if ui.button(label).clicked() {
                         self.stop_playing();
+                    } else if in_run
+                        && ui
+                            .button("Suspend and quit")
+                            .on_hover_text("Close the Run and resume exactly here next time, unsaved progress and all")
+                            .clicked()
+                    {
+                        self.suspend_and_quit();
                     }
                 }
                 None => {

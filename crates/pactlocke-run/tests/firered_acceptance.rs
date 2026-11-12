@@ -12,7 +12,9 @@ use std::path::PathBuf;
 use pactlocke_emu::{CoreAdapter, Keys};
 use pactlocke_game::{Game, LevelCap, ProfileGame, ProfileStore, RomIdentity};
 use pactlocke_mgba::MgbaCore;
-use pactlocke_run::{FeedKind, MemoryStorage, NewRun, Ruleset, RunCommand, RunEngine, RunningGame, SystemRunClock};
+use pactlocke_run::{
+    BootPlan, FeedKind, MemoryStorage, NewRun, Ruleset, RunCommand, RunEngine, RunningGame, SystemRunClock,
+};
 
 const FIRERED_FILE: &str = "Pokemon - FireRed Version (USA).gba";
 
@@ -65,7 +67,13 @@ type Running = RunningGame<MgbaCore>;
 
 struct Driver {
     game: Running,
+    /// The Run as stored, shared with the engine.
+    storage: MemoryStorage,
+    rom: Vec<u8>,
 }
+
+/// The game clock a test Run starts with: 2026-01-01T00:00:00Z.
+const CLOCK: i64 = 1_767_225_600_000;
 
 impl Driver {
     fn frame(&mut self, keys: Keys) {
@@ -249,9 +257,7 @@ fn firered_run_with(rom: Vec<u8>, ruleset: Ruleset) -> Driver {
     let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
         panic!("FireRed should be profiled");
     };
-    let mut core = MgbaCore::new();
-    core.load_rom(&rom).unwrap();
-    core.set_clock(1_767_225_600_000);
+    let storage = MemoryStorage::default();
     let engine = RunEngine::start(
         NewRun {
             name: "Acceptance".into(),
@@ -260,14 +266,42 @@ fn firered_run_with(rom: Vec<u8>, ruleset: Ruleset) -> Driver {
             rom_path: None,
             ruleset,
         },
-        Box::new(MemoryStorage::default()),
+        Box::new(storage.clone()),
         Box::new(SystemRunClock),
     )
     .unwrap();
-    let game = ProfileGame::new(profile, rom, core);
+    booted(engine, storage, rom)
+}
+
+/// The Run's game booted the way its engine planned, on a fresh core.
+fn booted(engine: RunEngine, storage: MemoryStorage, rom: Vec<u8>) -> Driver {
+    let store = ProfileStore::bundled().unwrap();
+    let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
+        panic!("FireRed should be profiled");
+    };
+    let mut core = MgbaCore::new();
+    core.load_rom(&rom).unwrap();
+    let game = ProfileGame::new(profile, rom.clone(), core);
     Driver {
-        game: RunningGame::new(game, engine),
+        game: RunningGame::boot(game, engine, CLOCK).unwrap(),
+        storage,
+        rom,
     }
+}
+
+/// The same Run resumed from `storage`, as the app does when it is opened again.
+fn resumed(storage: MemoryStorage, rom: Vec<u8>) -> Driver {
+    let engine = RunEngine::resume(Box::new(storage.clone()), Box::new(SystemRunClock)).unwrap();
+    booted(engine, storage, rom)
+}
+
+/// The game's RAM, hashed.
+fn ram_hash(d: &mut Driver) -> String {
+    use sha1::{Digest, Sha1};
+    let mut sha = Sha1::new();
+    sha.update(d.read(0x0200_0000, 0x4_0000));
+    sha.update(d.read(0x0300_0000, 0x8000));
+    sha.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[test]
@@ -987,6 +1021,100 @@ fn must_nickname_names_the_starter_and_a_catch_and_the_type_clause_boxes_a_secon
     for entry in d.game.engine().view().feed.iter().rev() {
         eprintln!("feed: {}", entry.text);
     }
+}
+
+/// Route 1 with Poké Balls and its Encounter used: the next wild battle
+/// there has the catch block on, up to the action menu.
+fn to_a_closed_route_1_battle(d: &mut Driver) {
+    d.play(FR_STARTER);
+    d.fast_text();
+    d.play("h D 64\nw 60");
+    d.until_action_menu(Keys::A, 3000);
+    rivals_pokemon_on_1_hp(d);
+    d.until_battle_over(Keys::A, 6000);
+    d.play(FR_TO_ROUTE_1);
+    d.give(BALLS_POCKET, POKE_BALL, 5);
+    d.play("w 120");
+    // The test's own writes above aren't in the input stream, so a rebuild
+    // starts after them. From here the game moves only by presses.
+    d.game.checkpoint();
+    d.walk_in_grass(6000);
+    d.until_action_menu(Keys::B, 3000);
+    d.run_away();
+    d.walk_in_grass(6000);
+    d.until_action_menu(Keys::B, 3000);
+    assert_eq!(d.read(CATCH_SITE, 4), [0x01, 0x20, 0x70, 0x47], "catch block on");
+}
+
+#[test]
+fn after_a_crash_mid_battle_the_game_is_rebuilt_from_its_checkpoint_and_matches_by_hash() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        return;
+    };
+    let mut d = firered_run(rom);
+    to_a_closed_route_1_battle(&mut d);
+    let play_time = d.game.game_mut().play_time();
+    assert!(play_time > 60 * 60, "the play time runs: {play_time} frames");
+
+    // The power goes out: the Run file is as it was at this frame.
+    d.game.flush();
+    let crashed = d.storage.snapshot();
+    let at_crash = ram_hash(&mut d);
+    let frames = d.game.engine().frames_run();
+    let rom = d.rom.clone();
+    drop(d);
+
+    let mut d = resumed(crashed, rom);
+    assert!(
+        matches!(d.game.engine().boot_plan(), BootPlan::Rebuild { from, keys, .. } if from.frame + keys.len() as u64 == frames),
+        "rebuilt from the boot's last checkpoint with every press since"
+    );
+    assert_eq!(
+        ram_hash(&mut d),
+        at_crash,
+        "the rebuilt game matches the one that crashed"
+    );
+    assert_eq!(d.read(CATCH_SITE, 4), [0x01, 0x20, 0x70, 0x47], "with its patch set");
+    assert!(d.in_battle());
+    let run = d.feed(FeedKind::Run);
+    assert!(
+        run[0].starts_with("Run recovered after the app closed unexpectedly"),
+        "{run:?}"
+    );
+
+    // And it plays on: running away lifts the block as usual.
+    d.run_away();
+    d.play("w 180");
+    assert_eq!(d.read(CATCH_SITE, 4), [0x10, 0xB5, 0x00, 0x24]);
+}
+
+#[test]
+fn suspend_and_quit_mid_battle_resumes_exactly_there() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        return;
+    };
+    let mut d = firered_run(rom);
+    to_a_closed_route_1_battle(&mut d);
+    let at_suspend = ram_hash(&mut d);
+    let (storage, rom) = (d.storage.clone(), d.rom.clone());
+    d.game.suspend();
+
+    let mut d = resumed(storage.clone(), rom.clone());
+    assert!(matches!(d.game.engine().boot_plan(), BootPlan::Suspended(_)));
+    assert_eq!(ram_hash(&mut d), at_suspend);
+    assert_eq!(
+        d.read(CATCH_SITE, 4),
+        [0x01, 0x20, 0x70, 0x47],
+        "the patch set is restored too"
+    );
+    d.run_away();
+    drop(d);
+
+    // The slot is used up: next time, the game boots from its last in-game save.
+    let d = resumed(storage, rom);
+    assert!(!matches!(d.game.engine().boot_plan(), BootPlan::Suspended(_)));
 }
 
 /// Writes the screen as a PPM under `target/acceptance/` for a person to look at.
