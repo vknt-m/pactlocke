@@ -120,6 +120,10 @@ pub enum Message {
     Setup(Vec<u8>),
     /// An entry for the Run log, or one the Host ordered, carried unread.
     Log(Vec<u8>),
+    /// A Player's input stream (key masks, stamped changes, hashes) or a
+    /// request for part of one, carried unread: the Run engine's stream
+    /// messages, which Shadow Games replay.
+    Input(Vec<u8>),
 }
 
 /// Why bytes aren't a message.
@@ -158,6 +162,7 @@ const ROM_CHECK: u8 = 4;
 const LOBBY: u8 = 5;
 const SETUP: u8 = 6;
 const LOG: u8 = 7;
+const INPUT: u8 = 8;
 
 /// A message as bytes. Text longer than the format allows is cut short.
 pub fn encode(message: &Message) -> Vec<u8> {
@@ -199,6 +204,10 @@ pub fn encode(message: &Message) -> Vec<u8> {
             payload.extend_from_slice(&bytes[..bytes.len().min(MAX_MESSAGE - HEADER)]);
             LOG
         }
+        Message::Input(bytes) => {
+            payload.extend_from_slice(&bytes[..bytes.len().min(MAX_MESSAGE - HEADER)]);
+            INPUT
+        }
         Message::Lobby { players } => {
             let players = &players[..players.len().min(MAX_PLAYERS)];
             payload.push(players.len() as u8);
@@ -217,6 +226,12 @@ pub fn encode(message: &Message) -> Vec<u8> {
     out.extend_from_slice(&(payload.len() as u16).to_le_bytes());
     out.extend_from_slice(&payload);
     out
+}
+
+/// Whether `bytes` claim to be an input stream message, by their header
+/// alone, so the Host can rate-limit those apart from the rest.
+pub fn is_input(bytes: &[u8]) -> bool {
+    bytes.len() >= HEADER && bytes[..2] == MAGIC && bytes[4] == INPUT
 }
 
 /// The message in `bytes`, which must be exactly one message.
@@ -267,6 +282,7 @@ pub fn decode(bytes: &[u8]) -> Result<Message, WireError> {
         ROM_CHECK => Message::RomCheck { sha1: reader.text()? },
         SETUP => Message::Setup(std::mem::take(&mut reader.0).to_vec()),
         LOG => Message::Log(std::mem::take(&mut reader.0).to_vec()),
+        INPUT => Message::Input(std::mem::take(&mut reader.0).to_vec()),
         LOBBY => {
             let count = usize::from(reader.byte()?);
             if count > MAX_PLAYERS {

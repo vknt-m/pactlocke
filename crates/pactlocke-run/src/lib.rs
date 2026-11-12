@@ -16,8 +16,11 @@ mod live;
 mod rules;
 mod running;
 mod setup;
+mod shadow;
+mod shadow_runner;
 mod shared_log;
 mod storage;
+mod stream;
 mod view;
 
 pub use boot::{BootPlan, Booted, boot_core};
@@ -25,14 +28,20 @@ pub use clock::{RunClock, SystemRunClock};
 pub use engine::RunEngine;
 pub use event::{AreaRef, CheckpointReason, DeathCause, Recorded, ResumedFrom, RunEvent};
 pub use file::{RunFile, RunId, RunLibrary, RunSummary};
-pub use live::LiveGame;
+pub use live::{LiveGame, PlayedGame};
 pub use running::{RunCommand, RunningGame};
 pub use setup::{
     COUNTDOWN_MS, Locked, Mismatch, Preset, RosterEntry, RunSetup, SetupCheck, SetupError, SetupMessage, SetupPlayer,
     SetupView, settle, unavailable,
 };
+pub use shadow::{BUFFER_FRAMES, CATCH_UP_SPEED, PREDICT_FRAMES, ShadowGame, ShadowState};
+pub use shadow_runner::{ShadowRunner, ShadowStatus};
 pub use shared_log::{LogBody, LogEntry, LogError, RunLog, Signer, Submission, Tallies};
 pub use storage::{InputBatch, MemoryStorage, RunInfo, RunStorage, Stamped, StorageError, StoredCheckpoint, StoredRun};
+pub use stream::{
+    Added, CHUNK_FRAMES, FrameHash, HASH_EVERY, InputChunk, Outgoing, PlayerKey, StreamHub, StreamMessage, StreamOut,
+    StreamStore, StreamWant,
+};
 pub use view::{FeedEntry, FeedKind, Grave, LevelCapView, NicknameWanted, RunView};
 
 use pactlocke_game::LevelCap;

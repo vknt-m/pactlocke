@@ -142,6 +142,10 @@ impl FeedEntry {
             RunEvent::Checkpoint { .. } | RunEvent::Closed => return None,
             RunEvent::Suspended => (FeedKind::Run, "Run suspended".to_owned()),
             RunEvent::GameReset => (FeedKind::Run, "The game was reset to an older save".to_owned()),
+            RunEvent::OutOfSync { player, .. } => (
+                FeedKind::Problem,
+                format!("Can't watch {player} right now: their game and its copy here are out of sync"),
+            ),
             RunEvent::PokeBallsObtained => (
                 FeedKind::Run,
                 "You have Poké Balls: wild Encounters count from now on".to_owned(),

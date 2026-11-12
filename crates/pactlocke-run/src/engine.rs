@@ -192,6 +192,16 @@ impl RunEngine {
         }
     }
 
+    /// Which time this Run's game has been booted, from 1.
+    pub fn boot(&self) -> u32 {
+        self.boot
+    }
+
+    /// Another Player's Shadow Game here no longer matches their game: the feed says so.
+    pub fn out_of_sync(&mut self, player: String, frame: u64) {
+        self.record(RunEvent::OutOfSync { player, frame });
+    }
+
     /// Asks for a Run Checkpoint at this frame boundary, such as at a Sync Gate.
     pub fn want_checkpoint(&mut self) {
         self.checkpoint_due = Some(CheckpointReason::Asked);
@@ -696,7 +706,7 @@ impl RunEngine {
     }
 
     /// Stamps each change with this frame boundary, then applies it.
-    fn apply(&mut self, changes: Vec<Change>, game: &mut impl LiveGame) {
+    pub(crate) fn apply(&mut self, changes: Vec<Change>, game: &mut impl LiveGame) {
         for change in changes {
             game.apply(&change);
             if let Change::Patch { addr, bytes } = &change {

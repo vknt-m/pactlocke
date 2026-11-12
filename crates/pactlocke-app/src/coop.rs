@@ -8,8 +8,8 @@ use eframe::egui;
 use pactlocke_game::{CapabilityReport, LevelCap, MAX_LEVEL, Rule};
 use pactlocke_net::{APP_VERSION, HostNode, JoinNode, Message, PeerKey, RunAdvert, new_key};
 use pactlocke_run::{
-    Locked, LogBody, LogEntry, Preset, Ruleset, RunEvent, RunLog, RunSetup, SetupCheck, SetupMessage, SetupPlayer,
-    SetupView, Signer, Submission,
+    Locked, LogBody, LogEntry, PlayerKey, Preset, Ruleset, RunEvent, RunLog, RunSetup, SetupCheck, SetupMessage,
+    SetupPlayer, SetupView, Signer, Submission,
 };
 
 /// How often the Host sends setup again, for a Player who reconnected.
@@ -88,6 +88,8 @@ pub struct HostCoop {
     sent: Option<(SetupView, i64)>,
     started: bool,
     error: Option<String>,
+    /// Input stream messages from Players, for Spectate: from whom, and the bytes.
+    stream_inbox: Vec<(PlayerKey, Vec<u8>)>,
 }
 
 impl HostCoop {
@@ -119,6 +121,7 @@ impl HostCoop {
             sent: None,
             started: false,
             error: None,
+            stream_inbox: Vec::new(),
         };
         let mut nonce = [0; 16];
         nonce.copy_from_slice(&new_key()[..16]);
@@ -185,6 +188,7 @@ impl HostCoop {
                         self.order(Some(node), submission);
                     }
                 }
+                Message::Input(bytes) => self.stream_inbox.push((from.0, bytes)),
                 _ => {}
             }
         }
@@ -238,6 +242,11 @@ impl HostCoop {
             rom: std::mem::take(&mut self.rom),
             path: self.path.clone(),
         })
+    }
+
+    /// Input stream messages since the last call: from whom, and the bytes.
+    pub fn take_stream(&mut self) -> Vec<(PlayerKey, Vec<u8>)> {
+        std::mem::take(&mut self.stream_inbox)
     }
 
     /// The Host's own Run state, into the log.
@@ -349,6 +358,7 @@ fn ready_message(ready: bool, version: u64) -> SetupMessage {
 /// A joiner's side: setup as the Host last sent it, and their copy of the log.
 pub struct JoinCoop {
     signer: Signer,
+    host: PlayerKey,
     log: RunLog,
     view: Option<SetupView>,
     rom: Option<PathBuf>,
@@ -363,6 +373,8 @@ pub struct JoinCoop {
     unordered: Vec<(u64, i64)>,
     started: bool,
     error: Option<String>,
+    /// Input stream messages from the Host, for Spectate.
+    stream_inbox: Vec<Vec<u8>>,
 }
 
 impl JoinCoop {
@@ -374,6 +386,7 @@ impl JoinCoop {
         let (rom, sha1) = rom.unzip();
         Self {
             signer,
+            host: host.0,
             log,
             view: None,
             rom,
@@ -385,7 +398,17 @@ impl JoinCoop {
             unordered: Vec::new(),
             started: false,
             error: None,
+            stream_inbox: Vec::new(),
         }
+    }
+
+    /// Input stream messages since the last call: all from the Host, who passes every stream on.
+    pub fn take_stream(&mut self) -> Vec<(PlayerKey, Vec<u8>)> {
+        let host = self.host;
+        std::mem::take(&mut self.stream_inbox)
+            .into_iter()
+            .map(|bytes| (host, bytes))
+            .collect()
     }
 
     /// The Player picked their ROM in the lobby.
@@ -416,6 +439,7 @@ impl JoinCoop {
                     }
                 }
                 Message::Log(bytes) => self.accept(&bytes),
+                Message::Input(bytes) => self.stream_inbox.push(bytes),
                 _ => {}
             }
         }

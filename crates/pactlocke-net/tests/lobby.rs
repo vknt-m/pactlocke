@@ -261,6 +261,54 @@ fn setup_and_log_messages_cross_the_lobby_unread() {
 }
 
 #[test]
+fn input_streams_cross_the_lobby_unread_both_ways() {
+    let mut net = MemoryNet::new(host_lobby());
+    let blue = joiner(&mut net, "Blue", Some(FIRERED));
+    net.connect(BLUE, blue);
+
+    let bytes = net.joiner(BLUE).send(&Message::Input(b"keys".to_vec()));
+    net.send_raw(BLUE, bytes);
+    assert_eq!(net.host_inbox(), vec![(BLUE, Message::Input(b"keys".to_vec()))]);
+
+    net.host_sends(Some(BLUE), &Message::Input(b"red's keys".to_vec()));
+    assert_eq!(
+        net.joiner_mut(BLUE).take_inbox(),
+        vec![Message::Input(b"red's keys".to_vec())]
+    );
+}
+
+#[test]
+fn a_player_at_4x_streams_input_without_starving_setup_and_log() {
+    let mut net = MemoryNet::new(host_lobby());
+    let blue = joiner(&mut net, "Blue", Some(FIRERED));
+    net.connect(BLUE, blue);
+    let input = encode(&Message::Input(vec![0; 64]));
+    let log = encode(&Message::Log(b"entry".to_vec()));
+
+    // Sixteen input messages a second (4x at one per 15 frames) and a log
+    // entry every 100 ms, for a minute, plus a resend burst now and then.
+    for tick in 0..600 {
+        net.advance_ms(100);
+        for _ in 0..2 {
+            net.send_raw(BLUE, input.clone());
+        }
+        net.send_raw(BLUE, log.clone());
+        if tick % 100 == 0 {
+            for _ in 0..40 {
+                net.send_raw(BLUE, input.clone());
+            }
+        }
+    }
+    assert_eq!(net.closed(BLUE), None);
+    let inbox = net.host_inbox();
+    assert_eq!(
+        inbox.iter().filter(|(_, m)| matches!(m, Message::Log(_))).count(),
+        600,
+        "every log entry got through"
+    );
+}
+
+#[test]
 fn after_the_lock_nobody_new_joins_but_the_roster_reconnects() {
     let mut net = MemoryNet::new(host_lobby());
     let blue = joiner(&mut net, "Blue", Some(FIRERED));

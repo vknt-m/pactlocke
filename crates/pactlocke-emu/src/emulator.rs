@@ -90,6 +90,7 @@ const MAX_LAG: Duration = Duration::from_millis(250);
 
 struct Shared {
     stop: AtomicBool,
+    paused: AtomicBool,
     keys: AtomicU16,
     speed: AtomicU8,
 }
@@ -109,6 +110,7 @@ impl<C: CoreAdapter + 'static> Emulator<C> {
         let frames = Arc::new(FrameSlot::new());
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
             keys: AtomicU16::new(0),
             speed: AtomicU8::new(options.speed.multiplier() as u8),
         });
@@ -140,6 +142,11 @@ impl<C: CoreAdapter + 'static> Emulator<C> {
     /// Run at this speed from the next frame on.
     pub fn set_speed(&self, speed: Speed) {
         self.shared.speed.store(speed.multiplier() as u8, Ordering::Release);
+    }
+
+    /// Pause or resume at the next frame boundary; a paused game runs no frames.
+    pub fn set_paused(&self, paused: bool) {
+        self.shared.paused.store(paused, Ordering::Release);
     }
 
     pub fn speed(&self) -> Speed {
@@ -181,6 +188,11 @@ fn run<C: CoreAdapter>(mut core: C, options: EmulatorOptions, frames: &FrameSlot
     let mut seq = 0u64;
     let mut deadline = clock.now();
     while !shared.stop.load(Ordering::Acquire) {
+        if shared.paused.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(10));
+            deadline = clock.now();
+            continue;
+        }
         core.run_frame(Keys(shared.keys.load(Ordering::Acquire)));
         seq += 1;
         frames.publish(seq, core.frame());

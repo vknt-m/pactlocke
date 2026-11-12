@@ -29,6 +29,9 @@ fn every_message_round_trips() {
         }),
         Message::Refused(Refusal::Misbehaving),
         Message::RomCheck { sha1: run().game_sha1 },
+        Message::Setup(b"setup".to_vec()),
+        Message::Log(b"entry".to_vec()),
+        Message::Input(b"keys".to_vec()),
         Message::Lobby {
             players: vec![
                 LobbyPlayer {

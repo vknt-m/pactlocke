@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use pactlocke_game::sha1_hex;
-use pactlocke_run::{RunClock, RunEvent, SystemRunClock};
+use pactlocke_run::{Outgoing, PlayerKey, RunClock, RunEvent, SystemRunClock};
 
 use crate::coop::{CoopStart, HostCoop, HostRom, JoinCoop};
 use pactlocke_net::{
-    APP_VERSION, HostLobby, HostNode, Invite, JoinLobby, JoinNode, LobbyView, Relays, RomStatus, RunAdvert,
+    APP_VERSION, HostLobby, HostNode, Invite, JoinLobby, JoinNode, LobbyView, Message, Relays, RomStatus, RunAdvert,
     load_or_create_key,
 };
 
@@ -82,6 +82,41 @@ impl Lobbies {
             coop.share(node, events);
         } else if let Some((node, coop)) = &mut self.join {
             coop.share(node, events, SystemRunClock.now_ms());
+        }
+    }
+
+    /// This install's key as other Players know it, if it could be kept.
+    pub fn public_key(&self) -> Option<PlayerKey> {
+        let key = self.key.as_ref().ok()?;
+        Some(pactlocke_run::Signer::from_secret(*key).public())
+    }
+
+    /// Input stream messages from other Players since the last call: from
+    /// whom it came (for a joiner, always the Host), and the bytes.
+    pub fn take_stream(&mut self) -> Vec<(PlayerKey, Vec<u8>)> {
+        match (&mut self.host, &mut self.join) {
+            (Some((_, coop)), _) => coop.take_stream(),
+            (None, Some((_, coop))) => coop.take_stream(),
+            (None, None) => Vec::new(),
+        }
+    }
+
+    /// Sends an input stream message where the stream hub says. A joiner
+    /// sends everything to the Host, who passes it on.
+    pub fn send_stream(&self, out: Outgoing) {
+        let (to, but, message) = match out {
+            Outgoing::To(to, message) => (Some(to), None, message),
+            Outgoing::AllBut(but, message) => (None, Some(but), message),
+        };
+        let bytes = message.to_bytes();
+        if let Some((node, _)) = &self.host {
+            for (peer, _) in node.view().roster {
+                if to.is_none_or(|to| to == peer.0) && but != Some(peer.0) {
+                    node.send(Some(peer), Message::Input(bytes.clone()));
+                }
+            }
+        } else if let Some((node, _)) = &self.join {
+            node.send(Message::Input(bytes));
         }
     }
 

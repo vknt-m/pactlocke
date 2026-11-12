@@ -14,6 +14,7 @@ mod data_dir;
 mod lobby_ui;
 mod rom_report;
 mod run_panel;
+mod spectate;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -28,7 +29,7 @@ use pactlocke_game::{
 };
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
-    NewRun, Ruleset, RunClock, RunCommand, RunEngine, RunEvent, RunLibrary, RunSummary, RunView, RunningGame,
+    Locked, NewRun, Ruleset, RunClock, RunCommand, RunEngine, RunEvent, RunLibrary, RunSummary, RunView, RunningGame,
     SystemRunClock,
 };
 
@@ -97,7 +98,7 @@ fn main() -> eframe::Result {
 enum Play {
     Free(Emulator<MgbaCore>),
     Run {
-        emulator: Emulator<RunningGame<MgbaCore>>,
+        emulator: Emulator<RunningGame<ProfileGame<MgbaCore>>>,
         view: Arc<Mutex<RunView>>,
         /// What the side panel asks of the Run, carried out at a frame boundary.
         commands: Sender<RunCommand>,
@@ -127,17 +128,28 @@ impl Play {
             Play::Run { emulator, .. } => emulator.frames(),
         }
     }
+
+    fn set_paused(&self, paused: bool) {
+        match self {
+            Play::Free(emulator) => emulator.set_paused(paused),
+            Play::Run { emulator, .. } => emulator.set_paused(paused),
+        }
+    }
 }
 
 struct Playing {
     play: Play,
     /// Kept alive for as long as the game plays.
-    _audio: Option<audio::AudioOut>,
+    audio_out: Option<audio::AudioOut>,
     texture: Option<egui::TextureHandle>,
     shown_seq: u64,
     name: String,
     /// What the ROM is, and what its Game Profile can enforce.
     identity: RomIdentity,
+    /// In a Run with other Players: their Shadow Games, and Spectate.
+    spectate: Option<spectate::Spectate>,
+    /// Whose game the screen shows: `None` for this Player's own.
+    shown_source: Option<String>,
 }
 
 /// The folder of a developer's local Game Profiles, if the developer setting names one.
@@ -414,7 +426,7 @@ impl PactlockeApp {
                 draft.rom,
                 draft.identity,
                 SystemRunClock.now_ms(),
-                false,
+                None,
             )
         });
         self.show_result(result);
@@ -442,7 +454,15 @@ impl PactlockeApp {
                 ruleset: locked.ruleset.clone(),
             };
             let engine = RunEngine::start(new, Box::new(file), Box::new(SystemRunClock)).map_err(|e| e.to_string())?;
-            self.play_run(engine, core, profile, start.rom, identity, locked.start_ms, true)
+            self.play_run(
+                engine,
+                core,
+                profile,
+                start.rom,
+                identity,
+                locked.start_ms,
+                Some(&locked),
+            )
         });
         self.show_result(result);
         self.refresh_runs();
@@ -459,7 +479,7 @@ impl PactlockeApp {
             let file = library.open_run(&summary.id).map_err(|e| e.to_string())?;
             let engine = RunEngine::resume(Box::new(file), Box::new(SystemRunClock)).map_err(|e| e.to_string())?;
             let core = Self::core_with_rom(&rom)?;
-            self.play_run(engine, core, profile, rom, identity, SystemRunClock.now_ms(), false)
+            self.play_run(engine, core, profile, rom, identity, SystemRunClock.now_ms(), None)
         });
         self.show_result(result);
         self.refresh_runs();
@@ -496,8 +516,9 @@ impl PactlockeApp {
     /// Boots a Run's game the way its Run engine planned (from power-on,
     /// the last in-game save, the suspend slot, or rebuilt after a crash),
     /// then plays it with the engine watching. The game clock starts at
-    /// `clock_ms`: now, or the lock's start time in a Run with friends,
-    /// whose Run state is `shared` to the Run log.
+    /// `clock_ms`: now, or the lock's start time in a Run with friends
+    /// (`coop`), whose Run state goes to the Run log, whose input stream goes
+    /// to the other Players, and whose other Players get Shadow Games here.
     #[allow(clippy::too_many_arguments)]
     fn play_run(
         &self,
@@ -507,16 +528,28 @@ impl PactlockeApp {
         rom: Vec<u8>,
         identity: RomIdentity,
         clock_ms: i64,
-        shared: bool,
+        coop: Option<&Locked>,
     ) -> Result<Playing, String> {
         let name = engine.info().name.clone();
-        let mut running = RunningGame::boot(ProfileGame::new(profile, rom, core), engine, clock_ms)
+        let rom: Arc<[u8]> = rom.into();
+        let mut running = RunningGame::boot(ProfileGame::new(profile, rom.clone(), core), engine, clock_ms)
             .map_err(|e| format!("The Run's game couldn't be booted: {e}"))?;
         let view = running.view();
         let commands = running.commands();
-        let shared = shared.then(|| running.share());
+        let shared = coop.map(|_| running.share());
+        let spectate = match coop {
+            Some(locked) => {
+                let me = self
+                    .lobbies
+                    .public_key()
+                    .ok_or("This install has no network key, so the Run can't be shared.")?;
+                let outbox = running.stream_as(me);
+                Some(spectate::Spectate::new(me, locked, &rom, outbox, &commands)?)
+            }
+            None => None,
+        };
         let (emulator, audio) = self.spawn(running);
-        Ok(Playing::new(
+        let mut playing = Playing::new(
             Play::Run {
                 emulator,
                 view,
@@ -526,7 +559,9 @@ impl PactlockeApp {
             audio,
             name,
             identity,
-        ))
+        );
+        playing.spectate = spectate;
+        Ok(playing)
     }
 
     /// Stops the game. A Run's file has finished writing when this returns.
@@ -812,9 +847,45 @@ impl PactlockeApp {
             return;
         };
 
+        // Spectate: the watched Player's Shadow Game, with a way back.
+        let watched = playing.spectate.as_ref().and_then(|s| s.watched()).map(|shadow| {
+            (
+                shadow.name.clone(),
+                shadow.frames(),
+                shadow.status(),
+                shadow.cant_watch(),
+            )
+        });
+        let frames = match &watched {
+            Some((name, frames, status, cant_watch)) => {
+                let mut back = false;
+                ui.horizontal(|ui| {
+                    ui.strong(format!("Watching {name}"));
+                    if let Some(why) = cant_watch {
+                        ui.colored_label(ui.visuals().error_fg_color, why);
+                    } else if status.catching_up {
+                        ui.weak("catching up…");
+                    }
+                    back = ui.button("Back to your game").clicked();
+                });
+                if back && let Some(spectate) = playing.spectate.as_mut() {
+                    spectate.stop_watching();
+                    playing.play.set_paused(false);
+                }
+                ui.ctx().request_repaint();
+                frames.clone()
+            }
+            None => playing.play.frames(),
+        };
+        let source = watched.as_ref().map(|(name, ..)| name.clone());
+        if source != playing.shown_source {
+            playing.shown_source = source;
+            playing.texture = None;
+        }
+
         // Hold the keys that are down right now (only while the window has focus).
         let keys = ui.input(|i| {
-            if !i.focused {
+            if !i.focused || watched.is_some() {
                 return Keys::NONE;
             }
             KEY_MAP
@@ -825,7 +896,7 @@ impl PactlockeApp {
         playing.play.set_keys(keys);
 
         // Show the newest published frame.
-        if let Some(newest) = playing.play.frames().latest()
+        if let Some(newest) = frames.latest()
             && (playing.texture.is_none() || newest.seq != playing.shown_seq)
         {
             let image = egui::ColorImage::from_rgba_unmultiplied(
@@ -856,11 +927,13 @@ impl Playing {
     fn new(play: Play, audio: Option<audio::AudioOut>, name: String, identity: RomIdentity) -> Self {
         Self {
             play,
-            _audio: audio,
+            audio_out: audio,
             texture: None,
             shown_seq: 0,
             name,
             identity,
+            spectate: None,
+            shown_source: None,
         }
     }
 }
@@ -881,12 +954,17 @@ impl eframe::App for PactlockeApp {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             });
         }
-        if let Some(playing) = &self.playing {
+        if let Some(playing) = &mut self.playing {
+            let mut asked = None;
             egui::Panel::right("side panel")
                 .resizable(true)
                 .default_size(360.0)
                 .show(ui, |ui| match &playing.play {
                     Play::Run { view, commands, .. } => {
+                        if let Some(spectate) = &playing.spectate {
+                            asked = spectate::panel(ui, spectate);
+                            ui.separator();
+                        }
                         let view = view.lock().unwrap_or_else(|e| e.into_inner()).clone();
                         if let Some(command) = run_panel::show(ui, &view) {
                             // The emulator thread only stops when the Run is closed.
@@ -895,6 +973,20 @@ impl eframe::App for PactlockeApp {
                     }
                     Play::Free(_) => rom_report::rules_panel(ui, &playing.identity),
                 });
+            if let Some(spectate) = playing.spectate.as_mut() {
+                match asked {
+                    // Spectate pauses this Player's own game until they come back.
+                    Some(spectate::Asked::Watch(i)) => {
+                        spectate.watch(i, playing.audio_out.as_ref());
+                        playing.play.set_paused(true);
+                    }
+                    Some(spectate::Asked::BatterySaver(on)) => spectate.set_battery_saver(on),
+                    None => {}
+                }
+                spectate.pump(&mut self.lobbies);
+                // Streams are passed on from the UI thread: keep it awake.
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+            }
         }
         egui::CentralPanel::default_margins().show(ui, |ui| self.game_screen(ui));
         let ctx = ui.ctx().clone();

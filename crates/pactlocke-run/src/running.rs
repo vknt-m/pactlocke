@@ -1,41 +1,51 @@
-//! A real game in a Run: the core, read through its Game Profile, with the
-//! Run engine looking at it after every frame. It is itself a core adapter,
-//! so the emulator thread runs it like any other core. Its write and patch
-//! methods are there for the interface; in a Run only the engine changes the
-//! game, at frame boundaries.
+//! A game in a Run: the core, read through the game interface (its Game
+//! Profile, or the fake in tests), with the Run engine looking at it after
+//! every frame. It is itself a core adapter, so the emulator thread runs it
+//! like any other core. Its write and patch methods are there for the
+//! interface; in a Run only the engine changes the game, at frame boundaries.
+//! In a Run with other Players it also builds this Player's input stream,
+//! which their Shadow Games replay.
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
 use pactlocke_emu::{Checkpoint, CoreAdapter, CoreError, Frame, Keys};
-use pactlocke_game::ProfileGame;
+use pactlocke_game::Change;
 
-use crate::{RunEngine, RunEvent, RunView, boot_core};
+use crate::stream::{FrameHash, HASH_EVERY, InputChunk, PlayerKey, StreamOut};
+use crate::{PlayedGame, RunEngine, RunEvent, RunView, boot_core};
 
 /// What the side panel asks of the Run, carried out at the next frame boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunCommand {
     /// Must nickname: name the Pokémon the side panel asked about.
     Nickname { pid: u32, name: String },
+    /// Another Player's Shadow Game here no longer matches their game.
+    OutOfSync { player: String, frame: u64 },
 }
 
 /// How often the game's save memory is checked for an in-game save.
 const SAVE_CHECK_FRAMES: u64 = 60;
 
-pub struct RunningGame<C: CoreAdapter> {
-    game: ProfileGame<C>,
+pub struct RunningGame<G: PlayedGame> {
+    game: G,
     engine: RunEngine,
     view: Arc<Mutex<RunView>>,
     published_version: u64,
     commands: (Sender<RunCommand>, Receiver<RunCommand>),
     /// In a Run with other Players: the Run state to put in the shared log.
     shared: Option<Arc<Mutex<Vec<RunEvent>>>>,
+    /// In a Run with other Players: this Player's input stream, and where
+    /// its chunks collect for the app to send on.
+    stream: Option<(StreamOut, Arc<Mutex<Vec<InputChunk>>>)>,
+    /// How many of the engine's stamped changes are in the stream.
+    streamed: usize,
 }
 
-impl<C: CoreAdapter> RunningGame<C> {
+impl<G: PlayedGame> RunningGame<G> {
     /// `game` is freshly booted: its ROM loaded and, on a resume, the Run's
     /// save memory loaded too. Its first checkpoint is taken now.
-    pub fn new(game: ProfileGame<C>, engine: RunEngine) -> Self {
+    pub fn new(game: G, engine: RunEngine) -> Self {
         let view = Arc::new(Mutex::new(engine.view().clone()));
         let mut running = Self {
             published_version: engine.view_version(),
@@ -44,6 +54,8 @@ impl<C: CoreAdapter> RunningGame<C> {
             view,
             commands: channel(),
             shared: None,
+            stream: None,
+            streamed: 0,
         };
         running.checkpoint_if_wanted();
         running
@@ -52,8 +64,8 @@ impl<C: CoreAdapter> RunningGame<C> {
     /// Boots `game`, whose core has the ROM loaded and nothing run, the way
     /// the Run engine planned: from power-on, the last in-game save, the
     /// suspend slot, or rebuilt after a crash.
-    pub fn boot(mut game: ProfileGame<C>, mut engine: RunEngine, now_ms: i64) -> Result<Self, CoreError> {
-        let booted = boot_core(game.memory_mut(), engine.boot_plan(), now_ms)?;
+    pub fn boot(mut game: G, mut engine: RunEngine, now_ms: i64) -> Result<Self, CoreError> {
+        let booted = boot_core(game.core_mut(), engine.boot_plan(), now_ms)?;
         engine.booted(booted);
         Ok(Self::new(game, engine))
     }
@@ -82,6 +94,7 @@ impl<C: CoreAdapter> RunningGame<C> {
         while let Ok(command) = self.commands.1.try_recv() {
             match command {
                 RunCommand::Nickname { pid, name } => self.engine.name_pokemon(pid, &name, &mut self.game),
+                RunCommand::OutOfSync { player, frame } => self.engine.out_of_sync(player, frame),
             }
         }
     }
@@ -90,6 +103,26 @@ impl<C: CoreAdapter> RunningGame<C> {
     /// collects, from the emulator thread, for the app to send on.
     pub fn share(&mut self) -> Arc<Mutex<Vec<RunEvent>>> {
         self.shared.get_or_insert_with(Arc::default).clone()
+    }
+
+    /// In a Run with other Players: this Player's input stream, as `player`,
+    /// from this boot's first frame. Its chunks collect here, oldest first,
+    /// for the app to send to every other Player.
+    pub fn stream_as(&mut self, player: PlayerKey) -> Arc<Mutex<Vec<InputChunk>>> {
+        let outbox: Arc<Mutex<Vec<InputChunk>>> = Arc::default();
+        let mut out = StreamOut::new(player, self.engine.boot());
+        let closed = out.stamp(self.engine.stamped());
+        debug_assert!(closed.is_none(), "nothing to close before the first frame");
+        self.streamed = self.engine.stamped().len();
+        self.stream = Some((out, outbox.clone()));
+        outbox
+    }
+
+    /// A change made outside the rules, such as a test's or a developer
+    /// tool's setup write, stamped at this frame boundary like the Run's
+    /// own, so Shadow Games see it.
+    pub fn apply_stamped(&mut self, change: Change) {
+        self.engine.apply(vec![change], &mut self.game);
     }
 
     /// The Run's side-panel view, updated from the emulator thread.
@@ -112,28 +145,36 @@ impl<C: CoreAdapter> RunningGame<C> {
         self.engine.flush();
     }
 
-    pub fn game_mut(&mut self) -> &mut ProfileGame<C> {
+    pub fn game_mut(&mut self) -> &mut G {
         &mut self.game
     }
 
-    fn core(&mut self) -> &mut C {
-        self.game.memory_mut()
+    fn core(&mut self) -> &mut G::Core {
+        self.game.core_mut()
     }
 
     fn check_save_memory(&mut self) {
-        let save = self.game.memory_mut().save_memory();
+        let save = self.game.core_mut().save_memory();
         self.engine.save_memory_seen(&save);
+    }
+
+    /// The engine's changes stamped since the stream last took them.
+    fn newly_stamped(&mut self) -> &[crate::Stamped] {
+        let all = self.engine.stamped();
+        let new = &all[self.streamed.min(all.len())..];
+        self.streamed = all.len();
+        new
     }
 }
 
-impl<C: CoreAdapter> Drop for RunningGame<C> {
+impl<G: PlayedGame> Drop for RunningGame<G> {
     fn drop(&mut self) {
         self.check_save_memory();
         self.engine.flush();
     }
 }
 
-impl<C: CoreAdapter> CoreAdapter for RunningGame<C> {
+impl<G: PlayedGame> CoreAdapter for RunningGame<G> {
     fn load_rom(&mut self, rom: &[u8]) -> Result<(), CoreError> {
         self.core().load_rom(rom)
     }
@@ -141,8 +182,30 @@ impl<C: CoreAdapter> CoreAdapter for RunningGame<C> {
     fn run_frame(&mut self, keys: Keys) {
         self.take_commands();
         let keys = self.engine.keys_for_frame(keys, &mut self.game);
+        if self.stream.is_some() {
+            // Everything stamped at this boundary, then its hash if one is due.
+            let boundary = self.engine.frames_run();
+            let stamped = self.newly_stamped().to_vec();
+            let hash = boundary
+                .is_multiple_of(HASH_EVERY)
+                .then(|| FrameHash::of(self.game.core_mut(), boundary));
+            let (out, outbox) = self.stream.as_mut().expect("streaming");
+            if let Some(chunk) = out.stamp(&stamped) {
+                outbox.lock().unwrap_or_else(|e| e.into_inner()).push(chunk);
+            }
+            if let Some(hash) = hash {
+                out.hash(hash);
+            }
+        }
         self.core().run_frame(keys);
         self.engine.frame(keys, &mut self.game);
+        if self.stream.is_some() {
+            let stamped = self.newly_stamped().to_vec();
+            let (out, outbox) = self.stream.as_mut().expect("streaming");
+            if let Some(chunk) = out.frame(keys, &stamped) {
+                outbox.lock().unwrap_or_else(|e| e.into_inner()).push(chunk);
+            }
+        }
         let events = self.engine.take_shared();
         if let Some(shared) = &self.shared
             && !events.is_empty()
@@ -200,11 +263,11 @@ impl<C: CoreAdapter> CoreAdapter for RunningGame<C> {
     }
 
     fn frame(&self) -> Frame {
-        self.game.memory().frame()
+        self.game.core().frame()
     }
 
     fn audio_sample_rate(&self) -> u32 {
-        self.game.memory().audio_sample_rate()
+        self.game.core().audio_sample_rate()
     }
 
     fn drain_audio(&mut self, out: &mut Vec<i16>) {

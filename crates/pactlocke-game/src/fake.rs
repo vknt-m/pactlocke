@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use crate::game::{
     Actions, Badges, Battle, Change, Game, GameError, Pokemon, ScriptContext, ScriptStatus, StoredPokemon,
 };
-use crate::{Area, Source, SourceDef, text};
+use crate::{Area, FakeCore, Source, SourceDef, text};
 
 /// The fake's changes are addressed here, where no real game has memory, with
 /// the action in the low bits and its arguments as the bytes.
@@ -83,6 +83,10 @@ pub struct FakeGame {
     /// Battler positions given a perish count of zero; the game faints them
     /// at the end of the turn.
     pub perishing: Vec<u8>,
+
+    /// The emulator under the fake: driven by keys and changed by every
+    /// change applied, so a copy fed the same input stream matches it.
+    pub core: FakeCore,
 }
 
 impl Default for FakeGame {
@@ -123,6 +127,7 @@ impl Default for FakeGame {
             bag_locked: false,
             nickname_cursor_kept: 0,
             perishing: Vec::new(),
+            core: FakeCore::default(),
         }
     }
 }

@@ -1,4 +1,4 @@
-//! Seam 2, local only: a solo Run on the real
+//! Seam 2, local only: a Run on the real
 //! FireRed (USA) 1.0, driven through the Run engine on the real game
 //! interface. Skipped unless `PACTLOCKE_ROMS` names a folder holding
 //! `Pokemon - FireRed Version (USA).gba`. Never runs in CI; the ROM is only
@@ -10,10 +10,12 @@
 use std::path::PathBuf;
 
 use pactlocke_emu::{CoreAdapter, Keys};
+use pactlocke_game::Change;
 use pactlocke_game::{Game, LevelCap, ProfileGame, ProfileStore, RomIdentity};
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
-    BootPlan, FeedKind, MemoryStorage, NewRun, Ruleset, RunCommand, RunEngine, RunningGame, SystemRunClock,
+    BootPlan, FeedKind, InputChunk, MemoryStorage, NewRun, Ruleset, RunCommand, RunEngine, RunningGame, ShadowGame,
+    ShadowState, StreamStore, SystemRunClock,
 };
 
 const FIRERED_FILE: &str = "Pokemon - FireRed Version (USA).gba";
@@ -68,13 +70,52 @@ const ITEM_SIZE: usize = 44;
 const ITEM_COUNT: usize = 375;
 const ITEM_BATTLE_USAGE: usize = 32;
 
-type Running = RunningGame<MgbaCore>;
+type Running = RunningGame<ProfileGame<MgbaCore>>;
 
 struct Driver {
     game: Running,
     /// The Run as stored, shared with the engine.
     storage: MemoryStorage,
     rom: Vec<u8>,
+    /// Another Player's app keeping a Shadow Game of this one, if any.
+    watcher: Option<Watcher>,
+}
+
+/// About one GBA frame.
+const FRAME_MS: i64 = 17;
+
+/// Another Player's app: this Player's stream arrives after `lag_ms`, goes
+/// through a stream store and is replayed by a Shadow Game on its own core.
+struct Watcher {
+    shadow: ShadowGame<MgbaCore>,
+    outbox: std::sync::Arc<std::sync::Mutex<Vec<InputChunk>>>,
+    store: StreamStore,
+    in_flight: std::collections::VecDeque<(i64, InputChunk)>,
+    now_ms: i64,
+    lag_ms: i64,
+}
+
+impl Watcher {
+    /// One frame's time: chunks are sent, those due land, and the Shadow runs.
+    fn tick(&mut self) {
+        self.now_ms += FRAME_MS;
+        let sent: Vec<InputChunk> = std::mem::take(&mut *self.outbox.lock().unwrap());
+        for chunk in sent {
+            self.in_flight.push_back((self.now_ms + self.lag_ms, chunk));
+        }
+        while let Some((lands, _)) = self.in_flight.front()
+            && *lands <= self.now_ms
+        {
+            let (_, chunk) = self.in_flight.pop_front().unwrap();
+            if let pactlocke_run::Added::New(new) = self.store.add(chunk) {
+                for chunk in new {
+                    self.shadow.receive(&chunk, self.now_ms);
+                }
+            }
+        }
+        let frames = self.shadow.frames_for(FRAME_MS);
+        self.shadow.advance(self.now_ms, frames);
+    }
 }
 
 /// The game clock a test Run starts with: 2026-01-01T00:00:00Z.
@@ -83,6 +124,42 @@ const CLOCK: i64 = 1_767_225_600_000;
 impl Driver {
     fn frame(&mut self, keys: Keys) {
         self.game.run_frame(keys);
+        if let Some(watcher) = self.watcher.as_mut() {
+            watcher.tick();
+        }
+    }
+
+    /// Another Player's app starts keeping a Shadow Game of this game, which
+    /// must be fresh from power-on. Test setup writes are stamped from now on.
+    fn watched(&mut self) {
+        let mut core = MgbaCore::new();
+        core.load_rom(&self.rom).unwrap();
+        let outbox = self.game.stream_as([1; 32]);
+        self.watcher = Some(Watcher {
+            shadow: ShadowGame::power_on(core, CLOCK),
+            outbox,
+            store: StreamStore::new(),
+            in_flight: Default::default(),
+            now_ms: 0,
+            lag_ms: 0,
+        });
+    }
+
+    fn watcher(&mut self) -> &mut Watcher {
+        self.watcher.as_mut().expect("watched")
+    }
+
+    /// A test setup write. In a watched game it is stamped into the input
+    /// stream like the Run's own changes, so the Shadow Game sees it too.
+    fn write(&mut self, addr: u32, bytes: &[u8]) {
+        if self.watcher.is_some() {
+            self.game.apply_stamped(Change::Write {
+                addr,
+                bytes: bytes.to_vec(),
+            });
+        } else {
+            self.game.write(addr, bytes);
+        }
     }
 
     fn read(&mut self, addr: u32, len: usize) -> Vec<u8> {
@@ -196,8 +273,8 @@ impl Driver {
     fn give(&mut self, pocket: u32, item: u16, quantity: u16) {
         let slot = self.u32(SAVE_BLOCK_1_POINTER) + pocket;
         let key = self.bag_key();
-        self.game.write(slot, &item.to_le_bytes());
-        self.game.write(slot + 2, &(quantity ^ key).to_le_bytes());
+        self.write(slot, &item.to_le_bytes());
+        self.write(slot + 2, &(quantity ^ key).to_le_bytes());
     }
 
     fn quantity(&mut self, pocket: u32, item: u16) -> u16 {
@@ -212,7 +289,7 @@ impl Driver {
     fn fast_text(&mut self) {
         let addr = self.u32(SAVE_BLOCK_2_POINTER) + TEXT_SPEED;
         let speed = self.read(addr, 1)[0];
-        self.game.write(addr, &[(speed & !7) | 2]);
+        self.write(addr, &[(speed & !7) | 2]);
     }
 
     fn feed(&self, kind: FeedKind) -> Vec<String> {
@@ -291,6 +368,7 @@ fn booted(engine: RunEngine, storage: MemoryStorage, rom: Vec<u8>) -> Driver {
         game: RunningGame::boot(game, engine, CLOCK).unwrap(),
         storage,
         rom,
+        watcher: None,
     }
 }
 
@@ -706,8 +784,7 @@ fn rival_battle_with_two_pokemon_each(d: &mut Driver) {
 
 /// Leaves the rival's Pokémon out in battle on 1 HP (test setup).
 fn rivals_pokemon_on_1_hp(d: &mut Driver) {
-    d.game
-        .write(BATTLE_MONS + BATTLE_MON_SIZE + BATTLE_MON_HP, &1u16.to_le_bytes());
+    d.write(BATTLE_MONS + BATTLE_MON_SIZE + BATTLE_MON_HP, &1u16.to_le_bytes());
 }
 
 /// Whether the battle style option is on Set.
@@ -1134,4 +1211,79 @@ fn dump_screen(game: &Running, name: &str) {
     let path = dir.join(format!("{name}.ppm"));
     std::fs::write(&path, ppm).unwrap();
     eprintln!("screen: {}", path.display());
+}
+
+#[test]
+fn a_shadow_game_of_a_firered_player_stays_matched_through_route_1_and_a_network_hiccup() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
+        return;
+    };
+    let mut d = firered_run(rom);
+    d.watched();
+
+    // From power-on through the starter, the rival battle and Route 1's
+    // Encounter to a closed Route 1 battle with the catch block patched on,
+    // with the stream held up for two seconds on the way.
+    d.play(FR_STARTER);
+    d.watcher().lag_ms = 2000;
+    d.play("w 180");
+    d.watcher().lag_ms = 0;
+    to_a_closed_route_1_battle_from_the_lab(&mut d);
+    d.run_away();
+    d.play("w 300");
+
+    let shadow = &d.watcher.as_ref().unwrap().shadow;
+    assert_eq!(shadow.state(), ShadowState::Matched);
+    assert!(shadow.rewinds() >= 1, "the hiccup made it guess, then rewind");
+    let checked = shadow.hashes_matched();
+    let frames = d.game.engine().frames_run();
+    assert!(
+        checked >= frames / pactlocke_run::HASH_EVERY - 2,
+        "{checked} hashes matched over {frames} frames"
+    );
+    let stamped = d.game.engine().stamped();
+    assert!(
+        stamped
+            .iter()
+            .any(|s| matches!(&s.change, Change::Patch { addr, .. } if *addr == CATCH_SITE)),
+        "the catch block went through the stream"
+    );
+}
+
+#[test]
+fn a_memory_edit_on_firered_makes_its_shadow_game_diverge() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
+        return;
+    };
+    let mut d = firered_run(rom);
+    d.watched();
+    d.play("m A 1200");
+    // A cheat tool's edit: straight into the core, not stamped.
+    d.game.write(PARTY_COUNT, &[6]);
+    d.play("m A 600");
+    assert!(
+        matches!(d.watcher().shadow.state(), ShadowState::Diverged { .. }),
+        "{:?}",
+        d.watcher().shadow.state()
+    );
+}
+
+/// After the starter is chosen: the rival battle, then Route 1 to a closed battle there.
+fn to_a_closed_route_1_battle_from_the_lab(d: &mut Driver) {
+    d.fast_text();
+    d.play("h D 64\nw 60");
+    d.until_action_menu(Keys::A, 3000);
+    rivals_pokemon_on_1_hp(d);
+    d.until_battle_over(Keys::A, 6000);
+    d.play(FR_TO_ROUTE_1);
+    d.give(BALLS_POCKET, POKE_BALL, 5);
+    d.play("w 120");
+    d.walk_in_grass(6000);
+    d.until_action_menu(Keys::B, 3000);
+    d.run_away();
+    d.walk_in_grass(6000);
+    d.until_action_menu(Keys::B, 3000);
+    assert_eq!(d.read(CATCH_SITE, 4), [0x01, 0x20, 0x70, 0x47], "catch block on");
 }

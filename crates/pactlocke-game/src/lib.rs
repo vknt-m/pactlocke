@@ -4,6 +4,7 @@
 mod capability;
 mod caps;
 mod fake;
+mod fake_core;
 mod game;
 mod profile;
 mod profile_game;
@@ -14,6 +15,7 @@ pub mod text;
 pub use capability::{Capability, CapabilityReport, Rule};
 pub use caps::{LevelCap, LevelCapDef, MAX_LEVEL, level_cap_sites};
 pub use fake::FakeGame;
+pub use fake_core::FakeCore;
 pub use game::{
     Actions, Badges, Battle, BattleKind, Battler, Change, Game, GameError, Memory, PartyStats, Pokemon, ScriptContext,
     ScriptStatus, Side, StoredPokemon,

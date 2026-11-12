@@ -126,3 +126,22 @@ fn the_game_audio_goes_to_the_sink_after_every_frame() {
     assert_eq!(pushes[0], (vec![1i16; 8], 32768));
     assert_eq!(pushes[4], (vec![5i16; 8], 32768));
 }
+
+#[test]
+fn a_paused_game_runs_no_frames_until_it_is_resumed() {
+    let core = FakeCore::new();
+    let probe = core.probe();
+    let emu = Emulator::spawn(core, EmulatorOptions::new(FakeClock::new()));
+    probe.wait_for_frames(5);
+    emu.set_paused(true);
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    let paused_at = probe.frames_run();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(
+        probe.frames_run() <= paused_at + 1,
+        "at most the frame under way finishes"
+    );
+    emu.set_paused(false);
+    probe.wait_for_frames(paused_at + 5);
+    emu.stop();
+}

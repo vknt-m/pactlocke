@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod coop;
+pub mod streams;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -336,7 +337,7 @@ impl Player {
     }
 }
 
-fn battle(kind: BattleKind, species: u16) -> Battle {
+pub fn battle(kind: BattleKind, species: u16) -> Battle {
     Battle {
         kind,
         double: false,

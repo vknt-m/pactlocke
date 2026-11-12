@@ -22,6 +22,9 @@ pub enum RunEvent {
     /// The game was reset to an older save, or a new game was started (its
     /// play time ran backwards).
     GameReset,
+    /// Another Player's Shadow Game here stopped matching their game at
+    /// this frame boundary, so it can't be watched for now.
+    OutOfSync { player: String, frame: u64 },
     /// The Player first holds Poké Balls; wild Encounters count from here on.
     PokeBallsObtained,
     /// A wild battle before the Player had Poké Balls: no Encounter is used.

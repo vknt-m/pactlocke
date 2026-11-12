@@ -11,6 +11,10 @@ const PER_SECOND: f64 = 20.0;
 /// Messages dropped (malformed, unexpected or too fast) before the Host
 /// closes the connection.
 const DROPS_ALLOWED: u32 = 20;
+/// Input stream messages have a bucket of their own: a Player at 4x sends
+/// several a second, and a resend after a gap comes in a burst.
+const INPUT_BURST: f64 = 120.0;
+const INPUT_PER_SECOND: f64 = 60.0;
 
 /// A name as other Players see it: trimmed, with no control or
 /// direction-changing characters.
@@ -58,6 +62,7 @@ struct Member {
     rom: RomStatus,
     connected: bool,
     tokens: f64,
+    input_tokens: f64,
     last_ms: i64,
     dropped: u32,
 }
@@ -123,6 +128,7 @@ impl HostLobby {
             rom: RomStatus::NotYet,
             connected: true,
             tokens: BURST,
+            input_tokens: INPUT_BURST,
             last_ms: 0,
             dropped: 0,
         });
@@ -139,9 +145,15 @@ impl HostLobby {
             let member = &mut self.members[at];
             let elapsed = (now_ms - member.last_ms).max(0) as f64 / 1000.0;
             member.tokens = (member.tokens + elapsed * PER_SECOND).min(BURST);
+            member.input_tokens = (member.input_tokens + elapsed * INPUT_PER_SECOND).min(INPUT_BURST);
             member.last_ms = now_ms;
-            if member.tokens >= 1.0 {
-                member.tokens -= 1.0;
+            let bucket = if wire::is_input(bytes) {
+                &mut member.input_tokens
+            } else {
+                &mut member.tokens
+            };
+            if *bucket >= 1.0 {
+                *bucket -= 1.0;
                 wire::decode(bytes).ok()
             } else {
                 None
@@ -176,7 +188,7 @@ impl HostLobby {
                 };
                 self.broadcast()
             }
-            Some(message @ (Message::Setup(_) | Message::Log(_))) if named => {
+            Some(message @ (Message::Setup(_) | Message::Log(_) | Message::Input(_))) if named => {
                 vec![HostAction::Deliver { from: peer, message }]
             }
             _ => {
@@ -361,7 +373,7 @@ impl JoinLobby {
                 self.state = JoinState::Refused(format!("The Host closed the connection: {refusal}."));
                 Vec::new()
             }
-            Ok(message @ (Message::Setup(_) | Message::Log(_))) => {
+            Ok(message @ (Message::Setup(_) | Message::Log(_) | Message::Input(_))) => {
                 self.inbox.push(message);
                 Vec::new()
             }
