@@ -40,6 +40,11 @@ impl<M: Memory> ProfileGame<M> {
         }
     }
 
+    /// The clean ROM, as loaded.
+    pub fn rom(&self) -> &[u8] {
+        &self.rom
+    }
+
     pub fn memory(&self) -> &M {
         &self.memory
     }

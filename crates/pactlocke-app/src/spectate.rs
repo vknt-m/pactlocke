@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use pactlocke_emu::{CoreAdapter, FrameSlot};
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
-    InputChunk, Locked, PlayerKey, RunCommand, ShadowGame, ShadowRunner, ShadowState, ShadowStatus, StreamHub,
-    StreamMessage, SystemRunClock,
+    InputChunk, Locked, LogFollower, PlayerKey, RunCommand, RunEvent, RunLog, ShadowGame, ShadowRunner, ShadowState,
+    ShadowStatus, StreamHub, StreamMessage, SystemRunClock,
 };
 
 use crate::audio::AudioOut;
@@ -49,6 +49,9 @@ impl Shadow {
 
 /// This app's side of every input stream, and a Shadow Game of every other Player.
 pub struct Spectate {
+    me: PlayerKey,
+    /// Joins other Players' Run Checkpoints and goes back on a Retry.
+    follower: LogFollower,
     hub: StreamHub,
     outbox: Arc<Mutex<Vec<InputChunk>>>,
     pub shadows: Vec<Shadow>,
@@ -87,6 +90,8 @@ impl Spectate {
             });
         }
         Ok(Self {
+            me,
+            follower: LogFollower::new(me),
             hub: StreamHub::new(me, host),
             outbox,
             shadows,
@@ -117,6 +122,16 @@ impl Spectate {
                 }
             }
         }
+    }
+
+    /// This Player's key.
+    pub fn me(&self) -> PlayerKey {
+        self.me
+    }
+
+    /// What this Player's Run should do about the log's new entries.
+    pub fn follow(&mut self, log: &RunLog) -> Vec<RunCommand> {
+        self.follower.follow(log)
     }
 
     /// Watches Shadow `i`, playing its sound through `audio`.
@@ -198,4 +213,57 @@ struct Silent;
 
 impl pactlocke_emu::AudioSink for Silent {
     fn push(&mut self, _samples: &[i16], _sample_rate: u32) {}
+}
+
+/// Retries in a Run with other Players: what is left of the pool, and the
+/// vote. Returns this Player's vote when they cast one.
+pub fn votes(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey) -> Option<RunEvent> {
+    let pool = log.locked().map_or(0, |l| l.ruleset.retries);
+    if pool == 0 {
+        return None;
+    }
+    let left = log.retries_left();
+    let players = log.locked().map_or(0, |l| l.roster.len());
+    let mut cast = None;
+    match log.vote() {
+        Some(vote) => {
+            ui.label(format!(
+                "Retry vote: back to Run Checkpoint {} · {} of {players} said Yes",
+                vote.call,
+                vote.yes.len()
+            ));
+            if !vote.yes.contains(&me) {
+                ui.horizontal(|ui| {
+                    if ui.button("Yes").clicked() {
+                        cast = Some(RunEvent::RetryVote {
+                            call: vote.call,
+                            yes: true,
+                        });
+                    }
+                    if ui.button("No").clicked() {
+                        cast = Some(RunEvent::RetryVote {
+                            call: vote.call,
+                            yes: false,
+                        });
+                    }
+                });
+            }
+        }
+        None => {
+            let latest = log.latest_complete();
+            let start = ui.add_enabled(
+                left > 0 && latest.is_some(),
+                eframe::egui::Button::new(format!("Start a Retry vote · {left} left")),
+            );
+            let start = start.on_hover_text(
+                "Everyone goes back to the latest Run Checkpoint if everyone says Yes; the first No ends the vote",
+            );
+            if start.clicked()
+                && let Some(call) = latest
+            {
+                cast = Some(RunEvent::RetryVote { call, yes: true });
+            }
+        }
+    }
+    cast
 }

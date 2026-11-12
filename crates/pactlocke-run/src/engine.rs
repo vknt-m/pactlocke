@@ -7,7 +7,6 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use pactlocke_emu::{Checkpoint, Keys};
 use pactlocke_game::{Area, Battle, BattleKind, Change, Game, GameError, Pokemon, ScriptStatus, Side};
-use sha1::{Digest, Sha1};
 
 use crate::boot::{BootPlan, Booted};
 use crate::event::{AreaRef, CheckpointReason, DeathCause, SourceRef};
@@ -76,7 +75,7 @@ pub struct RunEngine {
     /// How this boot's game is to be started, decided from the Run file.
     boot_plan: BootPlan,
     /// The checkpoint the game should be given at this frame boundary, and why.
-    checkpoint_due: Option<CheckpointReason>,
+    checkpoints_due: VecDeque<CheckpointReason>,
     /// Whether this boot started from a checkpoint (a suspend or a crash
     /// rebuild), so a battle under way is the one the log already decided.
     resumed_mid_game: bool,
@@ -97,6 +96,15 @@ pub struct RunEngine {
     logged_pids: BTreeSet<u32>,
     /// Run state recorded since it was last taken, for the shared Run log.
     shared: Vec<RunEvent>,
+    /// Each Run Checkpoint's event, by the checkpoint's hash, and the newest one's hash.
+    run_checkpoints: BTreeMap<String, u64>,
+    latest_run_checkpoint: Option<String>,
+    /// Retries this Player took (solo Runs spend the pool this way).
+    retries_taken: u8,
+    /// Handed its Run over to the engine after a Retry: it records nothing more.
+    retired: bool,
+    /// The newest events recorded, for a Retry to hand on without waiting for storage.
+    recorded_since: VecDeque<Recorded>,
 }
 
 /// A battle in progress, as the engine saw it begin.
@@ -138,16 +146,97 @@ impl RunEngine {
     /// Opens a Run again from its storage, for a game booted afresh.
     pub fn resume(mut storage: Box<dyn RunStorage>, clock: Box<dyn RunClock>) -> Result<Self, StorageError> {
         let stored = storage.load()?;
-        let boot = stored.events.iter().map(|e| e.boot).max().unwrap_or(0) + 1;
-        let mut engine = Self::with(stored.info.clone(), storage, clock, boot, stored.save_memory.clone());
-        for recorded in &stored.events {
-            engine.take_in(recorded);
-        }
-        engine.next_seq = stored.events.iter().map(|e| e.seq).max().unwrap_or(0) + 1;
+        let mut engine = Self::reopened(&stored, storage, clock);
         let (plan, from) = crate::boot::plan(&stored);
         engine.boot_plan = plan;
         engine.record(RunEvent::Resumed { from });
         Ok(engine)
+    }
+
+    /// The Run as stored, for a new boot: every event that isn't void taken in.
+    fn reopened(stored: &crate::storage::StoredRun, storage: Box<dyn RunStorage>, clock: Box<dyn RunClock>) -> Self {
+        let boot = stored.events.iter().map(|e| e.boot).max().unwrap_or(0) + 1;
+        let mut engine = Self::with(stored.info.clone(), storage, clock, boot, stored.save_memory.clone());
+        for recorded in standing(&stored.events) {
+            engine.take_in(recorded);
+        }
+        engine.next_seq = stored.events.iter().map(|e| e.seq).max().unwrap_or(0) + 1;
+        // Every Retry spends one, even one a later Retry went back before.
+        let retries = stored
+            .events
+            .iter()
+            .filter(|e| matches!(e.event, RunEvent::Retried { .. }));
+        engine.retries_taken = u8::try_from(retries.count()).unwrap_or(u8::MAX);
+        engine.view.retries_left = (engine.info.ruleset.retries > 0).then(|| engine.retries_left());
+        engine
+    }
+
+    /// Retries left in the pool, for a solo Run (a Run with other Players
+    /// counts its Retries in the shared log).
+    pub fn retries_left(&self) -> u8 {
+        self.info.ruleset.retries.saturating_sub(self.retries_taken)
+    }
+
+    /// The newest Run Checkpoint's hash, if there is one to go back to.
+    pub fn latest_run_checkpoint(&self) -> Option<&str> {
+        self.latest_run_checkpoint.as_deref()
+    }
+
+    /// Another Player's Run Checkpoint, the `call`th in the Run log: this
+    /// Player's game is captured with it at this frame boundary.
+    pub fn join_checkpoint(&mut self, call: u64) {
+        self.checkpoints_due.push_back(CheckpointReason::Joined { call });
+    }
+
+    /// The Run Checkpoint with this hash, as stored (the newest few are kept
+    /// in RAM too).
+    pub(crate) fn find_run_checkpoint(&mut self, hash: &str) -> Option<(u64, StoredCheckpoint)> {
+        let seq = *self.run_checkpoints.get(hash)?;
+        let checkpoint = self
+            .recent_checkpoints
+            .iter()
+            .find(|c| c.hash() == hash)
+            .cloned()
+            .or_else(|| self.storage.checkpoint(seq))?;
+        Some((seq, checkpoint))
+    }
+
+    /// A Retry back to the Run Checkpoint stored with event `to_seq`: it is
+    /// recorded, and this engine hands its Run on to the one the game is
+    /// booted again with (see [`RunEngine::after_retry`]).
+    /// The Run as stored, as a Retry rebuilds it from.
+    pub(crate) fn stored(&mut self) -> Result<crate::storage::StoredRun, StorageError> {
+        self.flush();
+        self.storage.load()
+    }
+
+    /// A Retry back to the Run Checkpoint `to`, stored with event `to_seq`,
+    /// once the game is back there: the Retry is recorded and this engine
+    /// hands its Run (`stored`, from just before) to a new one for the next
+    /// boot of the game. What was recorded after that checkpoint is void.
+    pub(crate) fn retry(&mut self, mut stored: crate::storage::StoredRun, to_seq: u64, to: StoredCheckpoint) -> Self {
+        let hash = to.hash();
+        self.record(RunEvent::Retried { to_seq, hash });
+        self.flush();
+        self.retired = true;
+        stored.events.extend(self.stored_since(&stored));
+        let mut storage = std::mem::replace(&mut self.storage, Box::new(Retired));
+        let clock = std::mem::replace(&mut self.clock, Box::new(crate::SystemRunClock));
+        if !to.core.save_memory.is_empty() {
+            storage.store_save_memory(&to.core.save_memory);
+        }
+        let mut engine = Self::reopened(&stored, storage, clock);
+        engine.shared = std::mem::take(&mut self.shared);
+        engine.save_memory = (!to.core.save_memory.is_empty()).then(|| to.core.save_memory.clone());
+        engine.recent_checkpoints.push_back(to.clone());
+        engine.boot_plan = BootPlan::Retry(to);
+        engine
+    }
+
+    /// The events this engine recorded after `stored` was loaded.
+    fn stored_since(&self, stored: &crate::storage::StoredRun) -> Vec<Recorded> {
+        let last = stored.events.last().map_or(0, |e| e.seq);
+        self.recorded_since.iter().filter(|e| e.seq > last).cloned().collect()
     }
 
     /// How the game is to be booted for this Run: see [`crate::boot_core`].
@@ -165,7 +254,7 @@ impl RunEngine {
                 self.storage.clear_suspend();
                 self.resumed_mid_game = true;
             }
-            BootPlan::Rebuild { .. } => self.resumed_mid_game = true,
+            BootPlan::Rebuild { .. } | BootPlan::Retry(_) => self.resumed_mid_game = true,
             BootPlan::PowerOn | BootPlan::FromSave(_) => {}
         }
     }
@@ -173,23 +262,45 @@ impl RunEngine {
     /// Whether the game should be checkpointed now, at this frame boundary:
     /// once a boot starts, and after each in-game save.
     pub fn checkpoint_wanted(&self) -> bool {
-        self.checkpoint_due.is_some()
+        !self.checkpoints_due.is_empty()
     }
 
-    /// Stores a Run Checkpoint from the core's checkpoint taken at this
-    /// frame boundary, with the event that refers to it.
-    pub fn take_checkpoint(&mut self, core: Checkpoint) {
-        let reason = self.checkpoint_due.take().unwrap_or(CheckpointReason::Asked);
+    /// Stores a checkpoint from the core's taken at this frame boundary,
+    /// with the event that refers to it. Says whether it is a Run Checkpoint
+    /// (not a boot checkpoint).
+    pub fn take_checkpoint(&mut self, core: Checkpoint) -> bool {
+        let reason = self.checkpoints_due.pop_front().unwrap_or(CheckpointReason::Asked);
         self.game_running = true;
         let checkpoint = self.run_checkpoint(reason, core);
-        let hash = checkpoint_hash(&checkpoint);
-        self.record_with(RunEvent::Checkpoint { reason, hash }, Stored::Checkpoint(&checkpoint));
-        if reason != CheckpointReason::Boot {
-            self.recent_checkpoints.push_back(checkpoint);
-            while self.recent_checkpoints.len() > RUN_CHECKPOINTS_IN_RAM {
-                self.recent_checkpoints.pop_front();
-            }
+        let hash = checkpoint.hash();
+        let (boot, frame) = (self.boot, self.frame);
+        self.record_with(
+            RunEvent::Checkpoint {
+                reason,
+                hash,
+                boot,
+                frame,
+            },
+            Stored::Checkpoint(&checkpoint),
+        );
+        if reason == CheckpointReason::Boot {
+            return false;
         }
+        self.recent_checkpoints.push_back(checkpoint);
+        while self.recent_checkpoints.len() > RUN_CHECKPOINTS_IN_RAM {
+            self.recent_checkpoints.pop_front();
+        }
+        true
+    }
+
+    /// A Retry couldn't be made: the feed says why.
+    pub fn retry_failed(&mut self, reason: String) {
+        self.record(RunEvent::RetryFailed { reason });
+    }
+
+    /// Every ROM patch active in this boot, by address.
+    pub fn patches(&self) -> &BTreeMap<u32, Vec<u8>> {
+        &self.patches
     }
 
     /// Which time this Run's game has been booted, from 1.
@@ -204,7 +315,7 @@ impl RunEngine {
 
     /// Asks for a Run Checkpoint at this frame boundary, such as at a Sync Gate.
     pub fn want_checkpoint(&mut self) {
-        self.checkpoint_due = Some(CheckpointReason::Asked);
+        self.checkpoints_due.push_back(CheckpointReason::Asked);
     }
 
     /// The Run state recorded since this was last called, oldest first, for
@@ -286,7 +397,7 @@ impl RunEngine {
             party_before: None,
             type_clause_failed: BTreeSet::new(),
             boot_plan: BootPlan::PowerOn,
-            checkpoint_due: Some(CheckpointReason::Boot),
+            checkpoints_due: VecDeque::from([CheckpointReason::Boot]),
             resumed_mid_game: false,
             game_running: false,
             patches: BTreeMap::new(),
@@ -296,6 +407,11 @@ impl RunEngine {
             last_play_time: None,
             logged_pids: BTreeSet::new(),
             shared: Vec::new(),
+            run_checkpoints: BTreeMap::new(),
+            latest_run_checkpoint: None,
+            retries_taken: 0,
+            retired: false,
+            recorded_since: VecDeque::new(),
         }
     }
 
@@ -336,8 +452,8 @@ impl RunEngine {
         self.storage.store_save_memory(save);
         // A Run Checkpoint at every in-game save. The first save memory a new
         // game shows is its blank cartridge, not a save.
-        if self.save_memory.replace(save.to_vec()).is_some() && self.checkpoint_due.is_none() {
-            self.checkpoint_due = Some(CheckpointReason::InGameSave);
+        if self.save_memory.replace(save.to_vec()).is_some() {
+            self.checkpoints_due.push_back(CheckpointReason::InGameSave);
         }
     }
 
@@ -745,6 +861,10 @@ impl RunEngine {
         if recorded.event.is_run_state() {
             self.shared.push(recorded.event.clone());
         }
+        self.recorded_since.push_back(recorded.clone());
+        if self.recorded_since.len() > 16 {
+            self.recorded_since.pop_front();
+        }
         self.take_in(&recorded);
     }
 
@@ -758,6 +878,16 @@ impl RunEngine {
         }
         if let RunEvent::Encounter { area, .. } = &recorded.event {
             self.view.closed_areas.push(area.name.clone());
+        }
+        if recorded.event.is_run_checkpoint()
+            && let RunEvent::Checkpoint { hash, .. } = &recorded.event
+        {
+            self.run_checkpoints.insert(hash.clone(), recorded.seq);
+            self.latest_run_checkpoint = Some(hash.clone());
+        }
+        if let RunEvent::Retried { hash, .. } = &recorded.event {
+            self.retries_taken = self.retries_taken.saturating_add(1);
+            self.latest_run_checkpoint = Some(hash.clone());
         }
         match &recorded.event {
             RunEvent::LevelCapSet { level, next, .. } => {
@@ -788,6 +918,8 @@ impl RunEngine {
         if let Some(grave) = Grave::of(recorded) {
             self.view.graveyard.insert(0, grave);
         }
+        self.view.retries_left = (self.info.ruleset.retries > 0).then(|| self.retries_left());
+        self.view.run_checkpoint = self.latest_run_checkpoint.is_some();
         if let Some(entry) = FeedEntry::of(recorded) {
             self.view.feed.insert(0, entry);
         }
@@ -800,6 +932,9 @@ impl Drop for RunEngine {
     /// panic is a crash, so the next resume rebuilds the game instead of
     /// booting from its save.
     fn drop(&mut self) {
+        if self.retired {
+            return;
+        }
         if self.game_running && !self.suspended && !std::thread::panicking() {
             self.record(RunEvent::Closed);
         }
@@ -814,17 +949,41 @@ enum Stored<'a> {
     Suspend(&'a StoredCheckpoint),
 }
 
-/// A checkpoint's SHA-1, over everything a restore puts back: the save
-/// memory, the savestate and the patch set.
-fn checkpoint_hash(checkpoint: &StoredCheckpoint) -> String {
-    let mut sha = Sha1::new();
-    sha.update(&checkpoint.core.save_memory);
-    sha.update(&checkpoint.core.state);
-    for (addr, bytes) in &checkpoint.patches {
-        sha.update(addr.to_le_bytes());
-        sha.update(bytes);
+/// The events that stand: a Retry voids everything recorded after the Run
+/// Checkpoint it went back to, though not the Retry itself.
+pub(crate) fn standing(events: &[Recorded]) -> Vec<&Recorded> {
+    let mut standing: Vec<&Recorded> = Vec::new();
+    for recorded in events {
+        if let RunEvent::Retried { to_seq, .. } = recorded.event {
+            standing.retain(|e| e.seq <= to_seq);
+        }
+        standing.push(recorded);
     }
-    sha.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    standing
+}
+
+/// Where a retired engine's writes would go: nowhere, since it records nothing.
+struct Retired;
+
+impl RunStorage for Retired {
+    fn create(&mut self, _info: &RunInfo) -> Result<(), StorageError> {
+        Err(StorageError::NoRun)
+    }
+    fn append(&mut self, _event: &Recorded) {}
+    fn record_inputs(&mut self, _batch: &InputBatch) {}
+    fn store_save_memory(&mut self, _save: &[u8]) {}
+    fn append_with_checkpoint(&mut self, _event: &Recorded, _checkpoint: &StoredCheckpoint) {}
+    fn store_suspend(&mut self, _event: &Recorded, _checkpoint: &StoredCheckpoint) {}
+    fn clear_suspend(&mut self) {}
+    fn load(&mut self) -> Result<crate::storage::StoredRun, StorageError> {
+        Err(StorageError::NoRun)
+    }
+    fn write_failure(&mut self) -> Option<String> {
+        None
+    }
+    fn checkpoint(&mut self, _event_seq: u64) -> Option<StoredCheckpoint> {
+        None
+    }
 }
 
 /// Moves a party Pokémon to the Dead box or, when that is full, to the

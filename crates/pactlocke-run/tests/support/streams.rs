@@ -2,6 +2,9 @@
 //! real running game, which builds their input stream, and every other app
 //! keeps a Shadow Game of them. Messages cross as bytes through a network
 //! the test controls: it can hold them back (lag), lose them, or change them.
+//! The Run log is shared too: each app's Run state goes to the Host, who
+//! orders it, and every app follows the log (joining Run Checkpoints, going
+//! back on a Retry). The Host records a Retry when a vote passes.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -9,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use pactlocke_emu::{CoreAdapter, Keys};
 use pactlocke_game::{Area, BattleKind, FakeCore, FakeGame};
 use pactlocke_run::{
-    InputChunk, MemoryStorage, Outgoing, PlayerKey, Ruleset, RunEngine, RunningGame, ShadowGame, StreamHub,
-    StreamMessage,
+    InputChunk, Locked, LogBody, LogEntry, LogFollower, MemoryStorage, Outgoing, PlayerKey, RosterEntry, Ruleset,
+    RunEngine, RunEvent, RunLog, RunningGame, ShadowGame, Signer, StreamHub, StreamMessage,
 };
 
 use super::{CHARMANDER, PIDGEY, RATTATA, START_MS, TestClock, battle, new_solo_run, wild_pokemon};
@@ -18,8 +21,13 @@ use super::{CHARMANDER, PIDGEY, RATTATA, START_MS, TestClock, battle, new_solo_r
 /// About one GBA frame.
 pub const FRAME_MS: i64 = 17;
 
+fn signer(i: usize) -> Signer {
+    Signer::from_secret([i as u8 + 1; 32])
+}
+
+/// Player `i`'s install key.
 pub fn key(i: usize) -> PlayerKey {
-    [i as u8 + 1; 32]
+    signer(i).public()
 }
 
 /// One Player's app: their own game, streaming, and a Shadow Game of every other Player.
@@ -32,6 +40,12 @@ pub struct App {
     pub shadows: BTreeMap<PlayerKey, ShadowGame<FakeCore>>,
     /// Frames this Player has played, so their keys vary.
     played: usize,
+    /// This app's own copy of the Run log, checked entry by entry.
+    pub log: RunLog,
+    shared: Arc<Mutex<Vec<RunEvent>>>,
+    follower: LogFollower,
+    /// Entries this app refused from the Host, and why.
+    pub refused: Vec<String>,
 }
 
 impl App {
@@ -69,6 +83,10 @@ pub struct Table {
     pub lose: Lose,
     /// May change a message from one Player to another before it lands.
     pub tamper: Tamper,
+    /// The Host's log, which orders every entry.
+    pub host_log: RunLog,
+    /// Whether the Host records a Retry by itself when a vote passes.
+    pub host_records_retries: bool,
 }
 
 /// From, to, the message: whether it is lost.
@@ -103,6 +121,7 @@ impl Table {
                 }
                 let mut running = RunningGame::boot(game, engine, START_MS).unwrap();
                 let outbox = running.stream_as(key(i));
+                let shared = running.share();
                 let shadows = (0..names.len())
                     .filter(|&j| j != i)
                     .map(|j| (key(j), ShadowGame::power_on(FakeCore::default(), START_MS)))
@@ -115,17 +134,91 @@ impl Table {
                     hub: StreamHub::new(key(i), host),
                     shadows,
                     played: 0,
+                    log: RunLog::new(host),
+                    shared,
+                    follower: LogFollower::new(key(i)),
+                    refused: Vec::new(),
                 }
             })
             .collect();
-        Self {
+        let mut table = Self {
             apps,
             clock,
             in_flight: Vec::new(),
             lag_ms: 0,
             lose: Box::new(|_, _, _| false),
             tamper: Box::new(|_, _, _| {}),
+            host_log: RunLog::new(host),
+            host_records_retries: true,
+        };
+        table.submit(
+            0,
+            &LogBody::Genesis {
+                nonce: [9; 16],
+                run_name: "Kanto with friends".into(),
+                game_name: "Pokémon FireRed (USA) 1.0".into(),
+                game_sha1: super::coop::FIRERED_SHA1.into(),
+            },
+        );
+        let roster = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| RosterEntry {
+                key: key(i),
+                name: (*name).into(),
+            })
+            .collect();
+        table.submit(
+            0,
+            &LogBody::Locked(Locked {
+                run_name: "Kanto with friends".into(),
+                game_name: "Pokémon FireRed (USA) 1.0".into(),
+                game_sha1: super::coop::FIRERED_SHA1.into(),
+                ruleset,
+                roster,
+                start_ms: START_MS,
+            }),
+        );
+        table
+    }
+
+    /// Player `i` signs an entry and the Host orders it; every app checks it.
+    pub fn submit(&mut self, i: usize, body: &LogBody) {
+        let counter = self.host_log.next_counter(&key(i));
+        let submission = self.apps[i].log.sign(&signer(i), counter, body);
+        match self.host_log.order(&signer(0), submission) {
+            Ok(entry) => self.send_entry(&entry),
+            Err(e) => self.apps[i].refused.push(e.to_string()),
         }
+    }
+
+    /// An entry, as bytes, to every app, each of which checks it.
+    pub fn send_entry(&mut self, entry: &LogEntry) {
+        let bytes = entry.to_bytes();
+        for app in &mut self.apps {
+            if let Err(e) = app.log.accept(LogEntry::from_bytes(&bytes).unwrap()) {
+                app.refused.push(e.to_string());
+            }
+        }
+    }
+
+    /// Player `i` votes on a Retry back to the `call`th Run Checkpoint.
+    pub fn votes(&mut self, i: usize, call: u64, yes: bool) {
+        self.submit(i, &LogBody::Event(RunEvent::RetryVote { call, yes }));
+        self.tick();
+    }
+
+    /// Player `i` saves in-game (the fake saves on START and SELECT together).
+    pub fn saves(&mut self, i: usize) {
+        self.apps[i].running.run_frame(pactlocke_game::SAVE_KEYS);
+        self.tick();
+        // The running game looks for a save every second.
+        self.plays(i, 70);
+    }
+
+    /// The Run's shared tallies as Player `i`'s app recomputes them.
+    pub fn tallies(&self, i: usize) -> pactlocke_run::Tallies {
+        self.apps[i].log.tallies()
     }
 
     fn index(&self, key: PlayerKey) -> usize {
@@ -140,7 +233,8 @@ impl Table {
     pub fn plays(&mut self, i: usize, n: usize) {
         for _ in 0..n {
             let app = &mut self.apps[i];
-            let keys = Keys(((app.played * 37) % 0x400) as u16 & 0x3FF);
+            // Never SELECT: with START it would save the fake game.
+            let keys = Keys(((app.played * 37) % 0x400) as u16 & 0x3FF).without(Keys::SELECT);
             app.played += 1;
             app.running.run_frame(keys);
             self.tick();
@@ -157,6 +251,7 @@ impl Table {
     /// One slice of time: every app sends its new chunks, messages land, and Shadows run.
     fn tick(&mut self) {
         self.clock.advance_ms(FRAME_MS);
+        self.share_the_log();
         let now = self.now();
         for i in 0..self.apps.len() {
             let chunks: Vec<InputChunk> = std::mem::take(&mut *self.apps[i].outbox.lock().unwrap());
@@ -202,6 +297,28 @@ impl Table {
                     .commands()
                     .send(pactlocke_run::RunCommand::OutOfSync { player, frame })
                     .unwrap();
+            }
+        }
+    }
+
+    /// Each app's Run state into the log, then each app follows the log; the
+    /// Host records a Retry when a vote has passed.
+    fn share_the_log(&mut self) {
+        for i in 0..self.apps.len() {
+            let events = std::mem::take(&mut *self.apps[i].shared.lock().unwrap());
+            for event in events {
+                self.submit(i, &LogBody::Event(event));
+            }
+        }
+        if self.host_records_retries
+            && let Some(call) = self.host_log.retry_due()
+        {
+            self.submit(0, &LogBody::Retry { call });
+        }
+        for app in &mut self.apps {
+            let commands = app.follower.follow(&app.log);
+            for command in commands {
+                app.running.commands().send(command).unwrap();
             }
         }
     }

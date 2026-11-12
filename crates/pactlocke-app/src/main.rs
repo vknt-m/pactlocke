@@ -778,6 +778,11 @@ impl PactlockeApp {
                 draft.unavailable.get(&Rule::TypeClause).cloned(),
             );
             level_caps_editor(ui, draft);
+            ui.horizontal(|ui| {
+                ui.label("Retries");
+                ui.add(egui::DragValue::new(&mut draft.ruleset.retries).range(0..=pactlocke_run::MAX_RETRIES))
+                    .on_hover_text("Each sends you back to your latest in-game save, undoing everything since. 0 is off.");
+            });
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label("Name");
@@ -956,6 +961,7 @@ impl eframe::App for PactlockeApp {
         }
         if let Some(playing) = &mut self.playing {
             let mut asked = None;
+            let mut votes = None;
             egui::Panel::right("side panel")
                 .resizable(true)
                 .default_size(360.0)
@@ -966,7 +972,11 @@ impl eframe::App for PactlockeApp {
                             ui.separator();
                         }
                         let view = view.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                        if let Some(command) = run_panel::show(ui, &view) {
+                        if let (Some(spectate), Some(log)) = (&playing.spectate, self.lobbies.log()) {
+                            votes = spectate::votes(ui, log, spectate.me());
+                            ui.separator();
+                        }
+                        if let Some(command) = run_panel::show(ui, &view, playing.spectate.is_none()) {
                             // The emulator thread only stops when the Run is closed.
                             let _ = commands.send(command);
                         }
@@ -984,6 +994,15 @@ impl eframe::App for PactlockeApp {
                     None => {}
                 }
                 spectate.pump(&mut self.lobbies);
+                if let Some(vote) = votes {
+                    self.lobbies.share(vec![vote]);
+                }
+                if let (Play::Run { commands, .. }, Some(log)) = (&playing.play, self.lobbies.log()) {
+                    for command in spectate.follow(log) {
+                        // The emulator thread only stops when the Run is closed.
+                        let _ = commands.send(command);
+                    }
+                }
                 // Streams are passed on from the UI thread: keep it awake.
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
             }

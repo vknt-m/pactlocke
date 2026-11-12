@@ -15,7 +15,7 @@ pub mod text;
 pub use capability::{Capability, CapabilityReport, Rule};
 pub use caps::{LevelCap, LevelCapDef, MAX_LEVEL, level_cap_sites};
 pub use fake::FakeGame;
-pub use fake_core::FakeCore;
+pub use fake_core::{FakeCore, SAVE_KEYS};
 pub use game::{
     Actions, Badges, Battle, BattleKind, Battler, Change, Game, GameError, Memory, PartyStats, Pokemon, ScriptContext,
     ScriptStatus, Side, StoredPokemon,

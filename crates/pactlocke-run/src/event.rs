@@ -12,8 +12,28 @@ pub enum RunEvent {
         #[serde(default)]
         from: ResumedFrom,
     },
-    /// A Run Checkpoint was stored with this event; `hash` is its savestate's SHA-1.
-    Checkpoint { reason: CheckpointReason, hash: String },
+    /// A checkpoint was stored with this event; `hash` is its SHA-1 (save
+    /// memory, savestate and patch set). A Run Checkpoint (any reason but
+    /// a boot) goes in the shared Run log, with the boot and frame boundary
+    /// it was taken at, so every app checkpoints that Player's Shadow Game there.
+    Checkpoint {
+        reason: CheckpointReason,
+        hash: String,
+        #[serde(default)]
+        boot: u32,
+        #[serde(default)]
+        frame: u64,
+    },
+    /// A Retry: the game went back to the Run Checkpoint whose event is
+    /// `to_seq` (in this Player's own Run file) and whose hash is `hash`.
+    /// Everything this Player recorded after it is void. In the shared Run
+    /// log it says this Player's game is back.
+    Retried { to_seq: u64, hash: String },
+    /// A Retry was called for but couldn't be made.
+    RetryFailed { reason: String },
+    /// A Player's vote on a Retry back to the `call`th Run Checkpoint: the
+    /// first Yes starts the vote, and the first No ends it.
+    RetryVote { call: u64, yes: bool },
     /// The Player suspended and quit; the suspend slot holds where.
     Suspended,
     /// The Run was closed cleanly. A boot that ends without this or
@@ -212,6 +232,9 @@ pub enum CheckpointReason {
     InGameSave,
     /// Asked for at a moment that needs one, such as a Sync Gate.
     Asked,
+    /// Another Player's Run Checkpoint, the `call`th in the Run log (from
+    /// 1): every Player's game is captured with it.
+    Joined { call: u64 },
 }
 
 impl RunEvent {
@@ -228,7 +251,15 @@ impl RunEvent {
                 | RunEvent::Traded { .. }
                 | RunEvent::Released { .. }
                 | RunEvent::Died { .. }
-        ) || self.is_violation()
+                | RunEvent::RetryVote { .. }
+                | RunEvent::Retried { .. }
+        ) || self.is_run_checkpoint()
+            || self.is_violation()
+    }
+
+    /// A Run Checkpoint: one a Retry can go back to (not a boot checkpoint).
+    pub fn is_run_checkpoint(&self) -> bool {
+        matches!(self, RunEvent::Checkpoint { reason, .. } if *reason != CheckpointReason::Boot)
     }
 
     /// A rule broken in a way the app couldn't stop, shown in red to everyone.

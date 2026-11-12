@@ -109,6 +109,25 @@ pub trait RunStorage: Send {
     fn load(&mut self) -> Result<StoredRun, StorageError>;
     /// Why a write failed, if one has since the Run was opened.
     fn write_failure(&mut self) -> Option<String>;
+    /// The checkpoint stored with the event numbered `event_seq`, if it
+    /// hasn't been pruned. It waits for writes, like `load`.
+    fn checkpoint(&mut self, event_seq: u64) -> Option<StoredCheckpoint>;
+}
+
+impl StoredCheckpoint {
+    /// Its SHA-1 over everything a restore puts back: the save memory, the
+    /// savestate and the patch set, as hex.
+    pub fn hash(&self) -> String {
+        use sha1::{Digest, Sha1};
+        let mut sha = Sha1::new();
+        sha.update(&self.core.save_memory);
+        sha.update(&self.core.state);
+        for (addr, bytes) in &self.patches {
+            sha.update(addr.to_le_bytes());
+            sha.update(bytes);
+        }
+        sha.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    }
 }
 
 /// Storage in memory, for tests. Clones share the same Run, so a test can
@@ -117,6 +136,8 @@ pub trait RunStorage: Send {
 pub struct MemoryStorage {
     run: Arc<Mutex<Option<StoredRun>>>,
     failure: Arc<Mutex<Option<String>>>,
+    /// Every checkpoint stored, by its event: memory doesn't prune.
+    checkpoints: Arc<Mutex<Vec<(u64, StoredCheckpoint)>>>,
 }
 
 impl MemoryStorage {
@@ -126,6 +147,7 @@ impl MemoryStorage {
         MemoryStorage {
             run: Arc::new(Mutex::new(self.run.lock().unwrap().clone())),
             failure: Arc::new(Mutex::new(None)),
+            checkpoints: Arc::new(Mutex::new(self.checkpoints.lock().unwrap().clone())),
         }
     }
 
@@ -178,10 +200,14 @@ impl RunStorage for MemoryStorage {
     }
 
     fn append_with_checkpoint(&mut self, event: &Recorded, checkpoint: &StoredCheckpoint) {
+        if self.failing() {
+            return;
+        }
         self.with(|run| {
             run.events.push(event.clone());
             run.latest_checkpoint = Some(checkpoint.clone());
         });
+        self.checkpoints.lock().unwrap().push((event.seq, checkpoint.clone()));
     }
 
     fn store_suspend(&mut self, event: &Recorded, checkpoint: &StoredCheckpoint) {
@@ -201,5 +227,13 @@ impl RunStorage for MemoryStorage {
 
     fn write_failure(&mut self) -> Option<String> {
         self.failure.lock().unwrap().clone()
+    }
+
+    fn checkpoint(&mut self, event_seq: u64) -> Option<StoredCheckpoint> {
+        let checkpoints = self.checkpoints.lock().unwrap();
+        checkpoints
+            .iter()
+            .find(|(seq, _)| *seq == event_seq)
+            .map(|(_, c)| c.clone())
     }
 }

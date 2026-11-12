@@ -7,6 +7,10 @@
 //! RAM and save hashes are checked against the Player's at every boundary
 //! both have; a mismatch on real frames is real divergence.
 //!
+//! It takes its own checkpoint wherever the Player's stream marks a Run
+//! Checkpoint. When the Player's game goes back to one in a Retry, their
+//! stream's new boot says which, and the Shadow goes back to its own.
+//!
 //! It is plain state with no thread or clock of its own: the caller gives it
 //! chunks in order (see [`crate::StreamStore`]) and the time, and runs it.
 
@@ -15,7 +19,6 @@ use std::collections::{BTreeMap, VecDeque};
 use pactlocke_emu::{Checkpoint, CoreAdapter, Frame, Keys};
 use pactlocke_game::Change;
 
-use crate::Stamped;
 use crate::stream::{FrameHash, HASH_EVERY, InputChunk};
 
 /// How far behind the newest frame received a Shadow plays.
@@ -25,6 +28,8 @@ pub const BUFFER_FRAMES: u64 = 30;
 pub const PREDICT_FRAMES: u64 = 120;
 /// How much faster than the Player a Shadow that is behind catches up.
 pub const CATCH_UP_SPEED: u64 = 20;
+/// How many of its own Run Checkpoints a Shadow keeps.
+const CHECKPOINTS_KEPT: usize = 8;
 /// Behind by more than this, a Shadow is catching up rather than watchable live.
 const CATCHING_UP_FRAMES: u64 = 3 * BUFFER_FRAMES;
 /// A GBA's frame rate, in frames per millisecond, before the stream shows the Player's.
@@ -53,8 +58,16 @@ pub struct ShadowGame<C: CoreAdapter> {
     /// Real keys received and not yet run, from frame `confirmed + predicted.len()`
     /// on, unless guesses are pending (then from `confirmed`).
     keys: VecDeque<Keys>,
-    /// Changes received and not yet applied, in order.
-    stamped: VecDeque<Stamped>,
+    /// Changes and Run Checkpoints received and not yet reached, in order,
+    /// with the boundary each comes at.
+    items: VecDeque<(u64, Item)>,
+    /// Its own Run Checkpoints of the Player's game, newest last.
+    checkpoints: VecDeque<Kept>,
+    /// The ROM's own bytes wherever a patch landed, to put back on a Retry.
+    originals: BTreeMap<u32, Vec<u8>>,
+    /// The Player's next boot after a Retry, waiting until this Shadow has
+    /// its own checkpoint to go back to.
+    next_boot: Option<NextBoot>,
     /// Frames run past `confirmed` on guessed keys, and the checkpoint
     /// taken at `confirmed` before the first guess.
     guessed: Vec<Keys>,
@@ -86,7 +99,10 @@ impl<C: CoreAdapter> ShadowGame<C> {
             boot: 1,
             confirmed: 0,
             keys: VecDeque::new(),
-            stamped: VecDeque::new(),
+            items: VecDeque::new(),
+            checkpoints: VecDeque::new(),
+            originals: BTreeMap::new(),
+            next_boot: None,
             guessed: Vec::new(),
             rollback: None,
             received: 0,
@@ -111,7 +127,7 @@ impl<C: CoreAdapter> ShadowGame<C> {
             return;
         }
         if chunk.boot > self.boot {
-            self.state = ShadowState::Restarted { boot: chunk.boot };
+            self.next_boot_chunk(chunk);
             return;
         }
         if chunk.boot < self.boot || chunk.first_frame != self.received || chunk.keys.is_empty() {
@@ -128,7 +144,22 @@ impl<C: CoreAdapter> ShadowGame<C> {
         self.last_arrival_ms = Some(now_ms);
         self.received = chunk.end();
         self.keys.extend(chunk.keys.iter().copied());
-        self.stamped.extend(chunk.stamped.iter().cloned());
+        let mut marks = chunk.marks.iter().peekable();
+        let mut seen_at = (u64::MAX, 0u16);
+        for stamped in &chunk.stamped {
+            let count = if seen_at.0 == stamped.frame { seen_at.1 } else { 0 };
+            while let Some(mark) =
+                marks.next_if(|m| m.frame < stamped.frame || (m.frame == stamped.frame && m.after <= count))
+            {
+                self.items.push_back((mark.frame, Item::Checkpoint));
+            }
+            self.items
+                .push_back((stamped.frame, Item::Change(stamped.change.clone())));
+            seen_at = (stamped.frame, count + 1);
+        }
+        for mark in marks {
+            self.items.push_back((mark.frame, Item::Checkpoint));
+        }
         for hash in &chunk.hashes {
             self.theirs.insert(hash.frame, *hash);
         }
@@ -139,8 +170,14 @@ impl<C: CoreAdapter> ShadowGame<C> {
     /// Plays toward where the Player is now, less the buffer, running at
     /// most `max_frames`. Returns how many frames ran.
     pub fn advance(&mut self, now_ms: i64, max_frames: u64) -> u64 {
-        let target = self.target(now_ms);
         let mut ran = 0;
+        if self.next_boot.is_some() {
+            ran = self.toward_next_boot(max_frames);
+            if self.next_boot.is_some() {
+                return ran;
+            }
+        }
+        let target = self.target(now_ms);
         while ran < max_frames && self.state == ShadowState::Matched && self.frame() < target {
             if self.guessed.is_empty() && !self.keys.is_empty() {
                 self.run_real();
@@ -183,6 +220,11 @@ impl<C: CoreAdapter> ShadowGame<C> {
     /// The frame after the newest one received.
     pub fn received(&self) -> u64 {
         self.received
+    }
+
+    /// Which boot of the Player's game it copies.
+    pub fn boot(&self) -> u32 {
+        self.boot
     }
 
     /// Whether it matches, and if not, why.
@@ -229,7 +271,7 @@ impl<C: CoreAdapter> ShadowGame<C> {
     /// this boundary land first, then the hash is taken if one is due.
     fn run_real(&mut self) {
         let boundary = self.confirmed;
-        self.apply_stamped(boundary);
+        self.reach(boundary);
         if boundary.is_multiple_of(HASH_EVERY) {
             let hash = FrameHash::of(&mut self.core, boundary);
             self.ours.insert(boundary, hash);
@@ -257,18 +299,130 @@ impl<C: CoreAdapter> ShadowGame<C> {
         self.guessed.push(keys);
     }
 
-    fn apply_stamped(&mut self, boundary: u64) {
-        while let Some(stamped) = self.stamped.front().filter(|s| s.frame <= boundary) {
-            let change = stamped.change.clone();
-            self.stamped.pop_front();
-            match change {
-                Change::Write { addr, bytes } => self.core.write(addr, &bytes),
-                Change::Patch { addr, bytes } => {
+    /// Lands every change and takes every Run Checkpoint up to this boundary, in order.
+    fn reach(&mut self, boundary: u64) {
+        while let Some((frame, _)) = self.items.front()
+            && *frame <= boundary
+        {
+            let (frame, item) = self.items.pop_front().expect("just looked");
+            match item {
+                Item::Change(Change::Write { addr, bytes }) => self.core.write(addr, &bytes),
+                Item::Change(Change::Patch { addr, bytes }) => {
+                    if !self.originals.contains_key(&addr) {
+                        let mut original = vec![0; bytes.len()];
+                        self.core.read(addr, &mut original);
+                        self.originals.insert(addr, original);
+                    }
                     self.core.patch_rom(addr, &bytes);
                     self.patches.insert(addr, bytes);
                 }
+                Item::Checkpoint => {
+                    self.checkpoints.push_back(Kept {
+                        boot: self.boot,
+                        frame,
+                        core: self.core.checkpoint(),
+                        patches: self.patches.clone(),
+                    });
+                    while self.checkpoints.len() > CHECKPOINTS_KEPT {
+                        self.checkpoints.pop_front();
+                    }
+                }
             }
         }
+    }
+
+    /// A chunk of a later boot: the first of a boot after a Retry waits
+    /// (with what follows it) until this Shadow can go back to its own
+    /// checkpoint. Any other new boot is one a Shadow can't follow yet.
+    fn next_boot_chunk(&mut self, chunk: &InputChunk) {
+        match (&mut self.next_boot, chunk.booted_from) {
+            (None, Some(from)) if chunk.first_frame == 0 => {
+                self.next_boot = Some(NextBoot {
+                    boot: chunk.boot,
+                    from,
+                    chunks: vec![chunk.clone()],
+                });
+            }
+            (Some(next), _)
+                if next.boot == chunk.boot && next.chunks.last().is_some_and(|c| c.end() == chunk.first_frame) =>
+            {
+                next.chunks.push(chunk.clone());
+            }
+            _ => self.state = ShadowState::Restarted { boot: chunk.boot },
+        }
+    }
+
+    /// Plays the old boot up to the checkpoint the next boot began from,
+    /// then goes back to it and takes in the next boot's chunks.
+    fn toward_next_boot(&mut self, max_frames: u64) -> u64 {
+        let (from_boot, from_frame) = self.next_boot.as_ref().expect("a next boot").from;
+        if !self.guessed.is_empty() {
+            self.drop_guesses();
+        }
+        let mut ran = 0;
+        if from_boot == self.boot {
+            while ran < max_frames && self.confirmed < from_frame && !self.keys.is_empty() {
+                self.run_real();
+                ran += 1;
+            }
+            if self.confirmed == from_frame {
+                self.reach(from_frame);
+            }
+        }
+        let Some(kept) = self
+            .checkpoints
+            .iter()
+            .rev()
+            .find(|k| (k.boot, k.frame) == (from_boot, from_frame))
+            .cloned()
+        else {
+            let stuck = from_boot != self.boot || (self.confirmed < from_frame && self.keys.is_empty());
+            if stuck || self.confirmed >= from_frame {
+                let boot = self.next_boot.take().expect("a next boot").boot;
+                self.state = ShadowState::Restarted { boot };
+            }
+            return ran;
+        };
+        for (addr, original) in &self.originals {
+            self.core.patch_rom(*addr, original);
+        }
+        if self.core.restore(&kept.core).is_err() {
+            self.next_boot = None;
+            self.state = ShadowState::Diverged { frame: self.confirmed };
+            return ran;
+        }
+        for (addr, bytes) in &kept.patches {
+            self.core.patch_rom(*addr, bytes);
+        }
+        let next = self.next_boot.take().expect("a next boot");
+        self.boot = next.boot;
+        self.patches = kept.patches;
+        self.confirmed = 0;
+        self.received = 0;
+        self.keys.clear();
+        self.items.clear();
+        self.theirs.clear();
+        self.ours.clear();
+        let now = self.last_arrival_ms.unwrap_or(0);
+        for chunk in &next.chunks {
+            self.receive(chunk, now);
+        }
+        ran
+    }
+
+    /// Back to the checkpoint before the guesses, keeping the real frames received.
+    fn drop_guesses(&mut self) {
+        let checkpoint = self.rollback.take().expect("a checkpoint before the guesses");
+        if self.core.restore(&checkpoint).is_err() {
+            self.state = ShadowState::Diverged { frame: self.confirmed };
+            return;
+        }
+        for (addr, bytes) in &self.patches {
+            self.core.patch_rom(*addr, bytes);
+        }
+        self.guessed.clear();
+        self.guessed_hashes.clear();
+        self.rewinds += 1;
     }
 
     /// With the real frames for the guesses here: keeps the guesses if they
@@ -282,7 +436,7 @@ impl<C: CoreAdapter> ShadowGame<C> {
         }
         let n = self.guessed.len();
         let right_so_far = self.keys.iter().zip(&self.guessed).all(|(real, guess)| real == guess)
-            && !self.stamped.iter().any(|s| s.frame < self.confirmed + n as u64);
+            && !self.items.iter().any(|(frame, _)| *frame < self.confirmed + n as u64);
         if right_so_far && self.keys.len() < n {
             return;
         }
@@ -295,17 +449,7 @@ impl<C: CoreAdapter> ShadowGame<C> {
             self.ours.append(&mut self.guessed_hashes);
             return;
         }
-        let checkpoint = self.rollback.take().expect("a checkpoint before the guesses");
-        if self.core.restore(&checkpoint).is_err() {
-            self.state = ShadowState::Diverged { frame: self.confirmed };
-            return;
-        }
-        for (addr, bytes) in &self.patches {
-            self.core.patch_rom(*addr, bytes);
-        }
-        self.guessed.clear();
-        self.guessed_hashes.clear();
-        self.rewinds += 1;
+        self.drop_guesses();
     }
 
     /// Compares every boundary both sides have hashed, then forgets them.
@@ -326,4 +470,28 @@ impl<C: CoreAdapter> ShadowGame<C> {
             }
         }
     }
+}
+
+/// What a Player's stream puts at a boundary.
+enum Item {
+    Change(Change),
+    /// A Run Checkpoint: the Shadow takes its own here.
+    Checkpoint,
+}
+
+/// A Shadow's own Run Checkpoint of the Player's game.
+#[derive(Clone)]
+struct Kept {
+    boot: u32,
+    frame: u64,
+    core: Checkpoint,
+    patches: BTreeMap<u32, Vec<u8>>,
+}
+
+/// The Player's boot after a Retry, before the Shadow follows it.
+struct NextBoot {
+    boot: u32,
+    /// The boot and frame of the Run Checkpoint it began from.
+    from: (u32, u64),
+    chunks: Vec<InputChunk>,
 }

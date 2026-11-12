@@ -6,13 +6,13 @@
 //! can only order entries: changing one breaks its author's signature, and
 //! inventing one needs a key the Host doesn't have.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{Locked, RunEvent};
+use crate::{CheckpointReason, Locked, RunEvent};
 
 /// What an author signs before their counter and the entry: the Run, so an
 /// entry can't be replayed into another Run.
@@ -58,6 +58,10 @@ pub enum LogBody {
     Locked(Locked),
     /// Something that happened in its author's game.
     Event(RunEvent),
+    /// By the Host, once everyone voted Yes: a Retry. Every Player goes back
+    /// to their part of the `call`th Run Checkpoint, and each Player's
+    /// entries after it are void.
+    Retry { call: u64 },
 }
 
 /// An entry as its author signed it, before the Host orders it.
@@ -142,6 +146,9 @@ pub enum LogError {
     NoGenesis,
     /// The roster was locked twice.
     LockedAgain { seq: u64 },
+    /// A Retry without everyone's vote, with no Retry left, or to a Run
+    /// Checkpoint that isn't the latest every Player took.
+    BadRetry { seq: u64 },
 }
 
 impl std::fmt::Display for LogError {
@@ -158,6 +165,10 @@ impl std::fmt::Display for LogError {
             LogError::Body { seq } => write!(f, "entry {seq} can't be read"),
             LogError::NoGenesis => write!(f, "the log doesn't start with the Run"),
             LogError::LockedAgain { seq } => write!(f, "entry {seq} locks the Run a second time"),
+            LogError::BadRetry { seq } => write!(
+                f,
+                "entry {seq} is a Retry nobody agreed to: not everyone voted Yes, no Retry is left, or it isn't the latest Run Checkpoint"
+            ),
         }
     }
 }
@@ -274,6 +285,15 @@ impl RunLog {
             Kind::Locked if s.author != self.host => return Err(LogError::NotHost { seq }),
             Kind::Locked if self.roster.is_some() => return Err(LogError::LockedAgain { seq }),
             Kind::Locked => {}
+            Kind::Retry if s.author != self.host => return Err(LogError::NotHost { seq }),
+            Kind::Retry => {
+                let Ok(LogBody::Retry { call }) = serde_json::from_slice(&s.body) else {
+                    return Err(LogError::Body { seq });
+                };
+                if self.retry_due() != Some(call) {
+                    return Err(LogError::BadRetry { seq });
+                }
+            }
             Kind::Event => {
                 let in_roster = self.roster.as_ref().is_some_and(|r| r.contains(&s.author));
                 if !in_roster {
@@ -327,11 +347,140 @@ impl RunLog {
         })
     }
 
-    /// The tallies, recomputed from the entries.
-    pub fn tallies(&self) -> Tallies {
-        let mut tallies = Tallies::default();
+    /// Every Run Checkpoint in order, from the 1st: who called it (their
+    /// in-game save, or a Sync Gate) and each Player's part, the checkpoint
+    /// of their own game they took for it. A Retry voids every Run
+    /// Checkpoint after the one it went back to; they keep their numbers.
+    pub fn calls(&self) -> Vec<Call> {
+        let mut calls: Vec<Call> = Vec::new();
+        for (index, (author, body)) in self.bodies().enumerate() {
+            match body {
+                LogBody::Event(RunEvent::Checkpoint {
+                    reason,
+                    hash,
+                    boot,
+                    frame,
+                }) => {
+                    let part = Part {
+                        entry: index,
+                        at: GamePoint { boot, frame },
+                        hash,
+                    };
+                    match reason {
+                        CheckpointReason::Boot => {}
+                        CheckpointReason::Joined { call } => {
+                            if let Some(called) = numbered_mut(&mut calls, call).filter(|c| !c.void) {
+                                called.parts.entry(author).or_insert(part);
+                            }
+                        }
+                        CheckpointReason::InGameSave | CheckpointReason::Asked => calls.push(Call {
+                            n: calls.len() as u64 + 1,
+                            by: author,
+                            parts: BTreeMap::from([(author, part)]),
+                            void: false,
+                        }),
+                    }
+                }
+                LogBody::Retry { call } => {
+                    for later in calls.iter_mut().filter(|c| c.n > call) {
+                        later.void = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        calls
+    }
+
+    /// Whether every Player in the roster has their part of this Run Checkpoint, and it isn't void.
+    fn is_complete(&self, called: &Call) -> bool {
+        !called.void
+            && self
+                .roster
+                .as_ref()
+                .is_some_and(|roster| roster.iter().all(|p| called.parts.contains_key(p)))
+    }
+
+    /// The newest Run Checkpoint every Player has their part of: the one a Retry goes back to.
+    pub fn latest_complete(&self) -> Option<u64> {
+        self.calls().iter().rev().find(|c| self.is_complete(c)).map(|c| c.n)
+    }
+
+    /// Retries left in the Run's shared pool.
+    pub fn retries_left(&self) -> u8 {
+        let pool = self.locked().map_or(0, |l| l.ruleset.retries);
+        let spent = self
+            .bodies()
+            .filter(|(_, b)| matches!(b, LogBody::Retry { .. }))
+            .count();
+        pool.saturating_sub(u8::try_from(spent).unwrap_or(u8::MAX))
+    }
+
+    /// The Retry vote open now, if any: its Run Checkpoint and who said Yes.
+    /// A vote starts at a Yes with none open, for the latest complete Run
+    /// Checkpoint. It ends at the first No, at the Retry, or once a newer
+    /// Run Checkpoint is complete.
+    pub fn vote(&self) -> Option<Vote> {
+        let mut open: Option<Vote> = None;
         for (author, body) in self.bodies() {
-            let LogBody::Event(event) = body else { continue };
+            match body {
+                LogBody::Event(RunEvent::RetryVote { call, yes }) => match &mut open {
+                    None if yes => {
+                        open = Some(Vote {
+                            call,
+                            yes: BTreeSet::from([author]),
+                        });
+                    }
+                    Some(vote) if vote.call == call && yes => {
+                        vote.yes.insert(author);
+                    }
+                    Some(vote) if vote.call == call => open = None,
+                    _ => {}
+                },
+                LogBody::Retry { .. } => open = None,
+                _ => {}
+            }
+        }
+        open.filter(|vote| Some(vote.call) == self.latest_complete())
+    }
+
+    /// The Run Checkpoint a Retry should go back to now: the open vote's,
+    /// once every Player said Yes and a Retry is left. The Host records it;
+    /// every Player checks it.
+    pub fn retry_due(&self) -> Option<u64> {
+        let vote = self.vote()?;
+        let roster = self.roster.as_ref()?;
+        let everyone = roster.iter().all(|p| vote.yes.contains(p));
+        (everyone && self.retries_left() > 0).then_some(vote.call)
+    }
+
+    /// The tallies, recomputed from the entries. A Retry voids each
+    /// Player's entries after their part of its Run Checkpoint, up to the
+    /// entry that says their game went back (any sent from before it on the
+    /// way are void too).
+    pub fn tallies(&self) -> Tallies {
+        let mut standing: Vec<(usize, PlayerKey, RunEvent)> = Vec::new();
+        let mut going_back: BTreeSet<PlayerKey> = BTreeSet::new();
+        let mut calls: Option<Vec<Call>> = None;
+        for (index, (author, body)) in self.bodies().enumerate() {
+            match body {
+                LogBody::Event(RunEvent::Retried { .. }) => {
+                    going_back.remove(&author);
+                }
+                LogBody::Event(_) if going_back.contains(&author) => {}
+                LogBody::Event(event) => standing.push((index, author, event)),
+                LogBody::Retry { call } => {
+                    let calls = calls.get_or_insert_with(|| self.calls());
+                    if let Some(called) = numbered(calls, call) {
+                        standing.retain(|(at, who, _)| called.parts.get(who).is_none_or(|part| *at <= part.entry));
+                        going_back.extend(called.parts.keys());
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut tallies = Tallies::default();
+        for (_, author, event) in standing {
             let counter = match event {
                 RunEvent::Encounter { .. } | RunEvent::StaticEncounter { .. } => &mut tallies.encounters,
                 RunEvent::Caught { .. } => &mut tallies.catches,
@@ -354,6 +503,59 @@ enum Kind {
     Genesis,
     Locked,
     Event,
+    Retry,
+}
+
+/// A Player's install key, as the Run log knows them.
+type PlayerKey = [u8; 32];
+
+/// A moment in one Player's game: a boot of it, and the frame boundary in that boot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GamePoint {
+    pub boot: u32,
+    pub frame: u64,
+}
+
+/// A Run Checkpoint in the log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Call {
+    /// Its place among the Run's Run Checkpoints, from 1.
+    pub n: u64,
+    /// Whose in-game save (or Sync Gate) called it.
+    pub by: PlayerKey,
+    /// Each Player's part of it, by Player.
+    pub parts: BTreeMap<PlayerKey, Part>,
+    /// A Retry went back to an earlier one: it can't be gone back to.
+    pub void: bool,
+}
+
+/// One Player's part of a Run Checkpoint: the checkpoint of their own game.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Part {
+    /// The log entry that says so, counting from the first.
+    pub entry: usize,
+    /// Where in their game it was taken.
+    pub at: GamePoint,
+    /// The checkpoint's hash, as their Run file has it.
+    pub hash: String,
+}
+
+/// An open Retry vote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Vote {
+    /// The Run Checkpoint it would go back to.
+    pub call: u64,
+    /// Who said Yes so far.
+    pub yes: BTreeSet<PlayerKey>,
+}
+
+/// The `n`th Run Checkpoint (from 1), if there is one.
+fn numbered(calls: &[Call], n: u64) -> Option<&Call> {
+    calls.get(usize::try_from(n).ok()?.checked_sub(1)?)
+}
+
+fn numbered_mut(calls: &mut [Call], n: u64) -> Option<&mut Call> {
+    calls.get_mut(usize::try_from(n).ok()?.checked_sub(1)?)
 }
 
 /// The kind of a body, read without trusting the rest of it.
@@ -367,6 +569,7 @@ fn body_kind(body: &[u8]) -> Option<Kind> {
         "genesis" => Some(Kind::Genesis),
         "locked" => Some(Kind::Locked),
         "event" => Some(Kind::Event),
+        "retry" => Some(Kind::Retry),
         _ => None,
     }
 }
@@ -385,4 +588,51 @@ fn verifies(key: &[u8; 32], message: &[u8], signature: &[u8]) -> bool {
         return false;
     };
     key.verify_strict(message, &signature).is_ok()
+}
+
+/// What a Player's app does as the shared Run log grows: it joins every
+/// other Player's Run Checkpoint with its own game, and when the log says
+/// Retry, it goes back to its own part of that Run Checkpoint.
+#[derive(Debug, Clone)]
+pub struct LogFollower {
+    me: PlayerKey,
+    seen: usize,
+}
+
+impl LogFollower {
+    /// For the Player with this key, from the start of the log.
+    pub fn new(me: PlayerKey) -> Self {
+        Self { me, seen: 0 }
+    }
+
+    /// The commands for this Player's Run from the entries since the last call.
+    pub fn follow(&mut self, log: &RunLog) -> Vec<crate::RunCommand> {
+        if log.entries().len() <= self.seen {
+            return Vec::new();
+        }
+        let calls = log.calls();
+        let mut commands = Vec::new();
+        for (index, (author, body)) in log.bodies().enumerate().skip(self.seen) {
+            match body {
+                LogBody::Event(RunEvent::Checkpoint { .. }) if author != self.me => {
+                    let called = calls
+                        .iter()
+                        .find(|c| c.by == author && c.parts.get(&author).is_some_and(|p| p.entry == index));
+                    if let Some(called) = called.filter(|c| !c.void) {
+                        commands.push(crate::RunCommand::JoinCheckpoint { call: called.n });
+                    }
+                }
+                LogBody::Retry { call } => {
+                    if let Some(part) = numbered(&calls, call).and_then(|c| c.parts.get(&self.me)) {
+                        commands.push(crate::RunCommand::Retry {
+                            to: crate::RetryTo::Checkpoint(part.hash.clone()),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.seen = log.entries().len();
+        commands
+    }
 }

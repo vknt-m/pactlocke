@@ -29,7 +29,7 @@ const MAX_CHANGE_BYTES: usize = 1024;
 const MAX_EARLY_CHUNKS: usize = 256;
 
 const MAGIC: [u8; 2] = *b"IS";
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 const CHUNK: u8 = 1;
 const WANT: u8 = 2;
 
@@ -90,6 +90,20 @@ pub struct InputChunk {
     pub stamped: Vec<Stamped>,
     /// Hashes taken at those boundaries, in order.
     pub hashes: Vec<FrameHash>,
+    /// Run Checkpoints taken at those boundaries, each placed among the
+    /// changes stamped there, so a Shadow takes its own at the same point.
+    pub marks: Vec<Mark>,
+    /// For frame 0 of a boot after a Retry: the boot and frame of the
+    /// Player's Run Checkpoint it began from.
+    pub booted_from: Option<(u32, u64)>,
+}
+
+/// A Run Checkpoint in a Player's stream: taken at boundary `frame`, after
+/// the first `after` changes this chunk stamps there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mark {
+    pub frame: u64,
+    pub after: u16,
 }
 
 impl InputChunk {
@@ -106,6 +120,8 @@ impl InputChunk {
                 .map(|s| 15 + change_bytes(&s.change).len())
                 .sum::<usize>()
             + 48 * self.hashes.len()
+            + 11 * self.marks.len()
+            + 13
     }
 }
 
@@ -157,6 +173,19 @@ impl StreamMessage {
                     out.extend_from_slice(&hash.frame.to_le_bytes());
                     out.extend_from_slice(&hash.ram);
                     out.extend_from_slice(&hash.save);
+                }
+                out.push(chunk.marks.len() as u8);
+                for mark in &chunk.marks {
+                    out.extend_from_slice(&mark.frame.to_le_bytes());
+                    out.extend_from_slice(&mark.after.to_le_bytes());
+                }
+                match chunk.booted_from {
+                    Some((boot, frame)) => {
+                        out.push(1);
+                        out.extend_from_slice(&boot.to_le_bytes());
+                        out.extend_from_slice(&frame.to_le_bytes());
+                    }
+                    None => out.push(0),
                 }
             }
             StreamMessage::Want(want) => {
@@ -224,6 +253,23 @@ impl StreamMessage {
                     }
                     hashes.push(FrameHash { frame, ram, save });
                 }
+                let count = usize::from(r.u8()?);
+                let mut marks: Vec<Mark> = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let frame = r.u64()?;
+                    let after = r.u16()?;
+                    let here = stamped.iter().filter(|s| s.frame == frame).count();
+                    let in_order = marks.last().is_none_or(|m| (m.frame, m.after) <= (frame, after));
+                    if !in_order || frame < first_frame || frame >= end || usize::from(after) > here {
+                        return None;
+                    }
+                    marks.push(Mark { frame, after });
+                }
+                let booted_from = match r.u8()? {
+                    0 => None,
+                    1 if first_frame == 0 => Some((r.u32()?, r.u64()?)),
+                    _ => return None,
+                };
                 StreamMessage::Chunk(InputChunk {
                     player,
                     boot,
@@ -231,6 +277,8 @@ impl StreamMessage {
                     keys,
                     stamped,
                     hashes,
+                    marks,
+                    booted_from,
                 })
             }
             WANT => StreamMessage::Want(StreamWant {
@@ -300,8 +348,31 @@ impl StreamOut {
                 keys: Vec::new(),
                 stamped: Vec::new(),
                 hashes: Vec::new(),
+                marks: Vec::new(),
+                booted_from: None,
             },
         }
+    }
+
+    /// A boot after a Retry, from the Player's Run Checkpoint taken at this boot and frame.
+    pub fn after_retry(player: PlayerKey, boot: u32, from: (u32, u64)) -> Self {
+        let mut out = Self::new(player, boot);
+        out.open.booted_from = Some(from);
+        out
+    }
+
+    /// Whose stream it is.
+    pub fn player(&self) -> PlayerKey {
+        self.open.player
+    }
+
+    /// A Run Checkpoint was taken here, after every change stamped so far.
+    pub fn mark_checkpoint(&mut self, frame: u64) {
+        let after = self.open.stamped.iter().filter(|s| s.frame == frame).count();
+        self.open.marks.push(Mark {
+            frame,
+            after: u16::try_from(after).unwrap_or(u16::MAX),
+        });
     }
 
     /// The hash taken at the boundary before this frame ran, if one was due.
@@ -341,14 +412,25 @@ impl StreamOut {
     }
 
     /// The chunk so far, even if not full; the next starts after it.
+    /// What is at the boundary after its last frame (changes, a checkpoint)
+    /// goes on with the next chunk, with the frame it comes before.
     fn close(&mut self) -> InputChunk {
+        let end = self.open.end();
+        let carried = self
+            .open
+            .stamped
+            .iter()
+            .position(|s| s.frame >= end)
+            .unwrap_or(self.open.stamped.len());
         let next = InputChunk {
             player: self.open.player,
             boot: self.open.boot,
-            first_frame: self.open.end(),
+            first_frame: end,
             keys: Vec::new(),
-            stamped: Vec::new(),
+            stamped: self.open.stamped.split_off(carried),
             hashes: Vec::new(),
+            marks: self.open.marks.extract_if(.., |m| m.frame >= end).collect(),
+            booted_from: None,
         };
         std::mem::replace(&mut self.open, next)
     }
@@ -480,11 +562,13 @@ impl StreamStore {
                     if last.keys.len() + chunk.keys.len() <= MAX_CHUNK_FRAMES
                         && last.hashes.len() + chunk.hashes.len() <= usize::from(u8::MAX)
                         && last.stamped.len() + chunk.stamped.len() <= usize::from(u16::MAX)
+                        && last.marks.len() + chunk.marks.len() <= usize::from(u8::MAX)
                         && last.encoded_len() + chunk.encoded_len() <= MAX_MESSAGE =>
                 {
                     last.keys.extend(chunk.keys);
                     last.stamped.extend(chunk.stamped);
                     last.hashes.extend(chunk.hashes);
+                    last.marks.extend(chunk.marks);
                 }
                 _ => out.push(chunk),
             }
@@ -509,6 +593,8 @@ fn trim_front(chunk: &mut InputChunk, from: u64) {
     chunk.first_frame += skip;
     chunk.stamped.retain(|s| s.frame >= chunk.first_frame);
     chunk.hashes.retain(|h| h.frame >= chunk.first_frame);
+    chunk.marks.retain(|m| m.frame >= chunk.first_frame);
+    chunk.booted_from = None;
 }
 
 /// Where a stream message goes. Joiners talk only to the Host, who passes

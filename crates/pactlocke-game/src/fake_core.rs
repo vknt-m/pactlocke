@@ -17,7 +17,12 @@ const ROM_START: u32 = 0x0800_0000;
 
 const SAMPLE_RATE: u32 = 32768;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// The keys that make the fake game save: START and SELECT held together.
+pub const SAVE_KEYS: Keys = Keys(Keys::START.0 | Keys::SELECT.0);
+/// How big the fake game's save memory is.
+const SAVE_LEN: usize = 8;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FakeCore {
     frames: u64,
     /// Mixed from every frame's keys.
@@ -31,6 +36,22 @@ pub struct FakeCore {
     audio: Vec<i16>,
 }
 
+impl Default for FakeCore {
+    /// Powered on, with a blank save (erased flash reads 0xFF).
+    fn default() -> Self {
+        Self {
+            frames: 0,
+            state: 0,
+            writes: 0,
+            ram: BTreeMap::new(),
+            rom_patches: BTreeMap::new(),
+            clock_ms: 0,
+            save: vec![0xFF; SAVE_LEN],
+            audio: Vec::new(),
+        }
+    }
+}
+
 /// SplitMix64's finaliser: a good spread for a fold.
 fn mix(mut x: u64) -> u64 {
     x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -42,6 +63,13 @@ impl FakeCore {
     /// Frames run since power-on.
     pub fn frames_run(&self) -> u64 {
         self.frames
+    }
+
+    /// Undoes the ROM patches over these bytes, as if the ROM were clean there.
+    pub fn unpatch(&mut self, addr: u32, len: usize) {
+        for at in addr..addr + len as u32 {
+            self.rom_patches.remove(&at);
+        }
     }
 
     /// Sets the save memory, as an in-game save would.
@@ -80,6 +108,10 @@ impl CoreAdapter for FakeCore {
             mix(digest ^ (u64::from(addr) << 8) ^ u64::from(byte))
         });
         self.state = mix(self.state ^ u64::from(keys.0) ^ (self.frames << 16) ^ self.clock_ms as u64 ^ patched);
+        // An in-game save, written by the game itself: the same in every copy.
+        if keys == SAVE_KEYS {
+            self.save = self.state.to_le_bytes().to_vec();
+        }
         let sample = self.state as i16;
         self.audio.extend_from_slice(&[sample, sample]);
     }

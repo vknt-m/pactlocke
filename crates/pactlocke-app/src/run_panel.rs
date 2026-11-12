@@ -7,7 +7,8 @@ use eframe::egui;
 use pactlocke_run::{FeedKind, NicknameWanted, RunClock, RunCommand, RunView, SystemRunClock};
 
 /// Shows the panel; returns what the Player asked of the Run, if anything.
-pub fn show(ui: &mut egui::Ui, view: &RunView) -> Option<RunCommand> {
+/// `alone`: a solo Run, where a Retry needs no vote.
+pub fn show(ui: &mut egui::Ui, view: &RunView, alone: bool) -> Option<RunCommand> {
     ui.heading(&view.name);
     ui.weak(&view.game_name);
     if let Some(cap) = &view.level_cap {
@@ -17,10 +18,23 @@ pub fn show(ui: &mut egui::Ui, view: &RunView) -> Option<RunCommand> {
             None => ui.label("No level cap: every cap is passed"),
         };
     }
-    let command = view
+    let mut command = view
         .nickname_wanted
         .first()
         .and_then(|wanted| nickname_prompt(ui, wanted));
+    if alone && let Some(left) = view.retries_left {
+        let retry = ui.add_enabled(
+            left > 0 && view.run_checkpoint,
+            egui::Button::new(format!("Retry · {left} left")),
+        );
+        let retry = retry
+            .on_hover_text("Go back to your latest Run Checkpoint (your last in-game save), undoing everything since");
+        if retry.clicked() {
+            command = Some(RunCommand::Retry {
+                to: pactlocke_run::RetryTo::Latest,
+            });
+        }
+    }
     ui.add_space(6.0);
 
     let closed = &view.closed_areas;

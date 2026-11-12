@@ -208,6 +208,27 @@ fn checkpoints_and_the_suspend_slot_are_kept_in_the_run_file() {
         "the boot checkpoint and the newest three Run Checkpoints; older ones are pruned"
     );
     drop(db);
+    let hashes = stored.events.iter().filter(|e| e.event.is_run_checkpoint()).count();
+    assert_eq!(hashes, 5, "every Run Checkpoint's hash stays in the log");
+    let mut file = library.open_run(&id).unwrap();
+    let first = stored.events.iter().find(|e| e.event.is_run_checkpoint()).unwrap().seq;
+    let newest = stored
+        .events
+        .iter()
+        .rev()
+        .find(|e| e.event.is_run_checkpoint())
+        .unwrap()
+        .seq;
+    assert!(
+        pactlocke_run::RunStorage::checkpoint(&mut file, first).is_none(),
+        "pruned"
+    );
+    assert_eq!(
+        pactlocke_run::RunStorage::checkpoint(&mut file, newest).map(|c| c.core),
+        Some(core_checkpoint(5)),
+        "the newest is kept, found by its event"
+    );
+    drop(file);
 
     // Resuming uses up the slot.
     let player = Player::resumes_from(Box::new(library.open_run(&id).unwrap()), clock);

@@ -120,6 +120,15 @@ impl Lobbies {
         }
     }
 
+    /// The shared Run log, in a Run with other Players.
+    pub fn log(&self) -> Option<&pactlocke_run::RunLog> {
+        match (&self.host, &self.join) {
+            (Some((_, coop)), _) => Some(coop.log()),
+            (None, Some((_, coop))) => Some(coop.log()),
+            (None, None) => None,
+        }
+    }
+
     pub fn open_join_prompt(&mut self) {
         self.prompt = Some(JoinPrompt::default());
     }

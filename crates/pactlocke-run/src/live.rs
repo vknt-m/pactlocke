@@ -15,6 +15,9 @@ pub trait PlayedGame: LiveGame + Send {
     /// The emulator core the game runs on.
     fn core(&self) -> &Self::Core;
     fn core_mut(&mut self) -> &mut Self::Core;
+    /// Puts the ROM's own bytes back over a patch, as a Retry does before
+    /// it restores a checkpoint's patch set.
+    fn unpatch(&mut self, addr: u32, len: usize);
 }
 
 /// The fake's changes land on the fake game and on the fake core under it,
@@ -36,6 +39,10 @@ impl PlayedGame for FakeGame {
     fn core_mut(&mut self) -> &mut FakeCore {
         &mut self.core
     }
+
+    fn unpatch(&mut self, addr: u32, len: usize) {
+        self.core.unpatch(addr, len);
+    }
 }
 
 impl<C: CoreAdapter> LiveGame for ProfileGame<C> {
@@ -53,6 +60,14 @@ impl<C: CoreAdapter> PlayedGame for ProfileGame<C> {
 
     fn core_mut(&mut self) -> &mut C {
         self.memory_mut()
+    }
+
+    fn unpatch(&mut self, addr: u32, len: usize) {
+        let start = addr.wrapping_sub(pactlocke_game::ROM_BASE) as usize;
+        if let Some(original) = self.rom().get(start..start + len) {
+            let original = original.to_vec();
+            self.memory_mut().patch_rom(addr, &original);
+        }
     }
 }
 

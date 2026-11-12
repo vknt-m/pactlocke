@@ -20,6 +20,8 @@ pub enum BootPlan {
     FromSave(Vec<u8>),
     /// Exactly where the Player suspended.
     Suspended(StoredCheckpoint),
+    /// A Retry: back to this Run Checkpoint.
+    Retry(StoredCheckpoint),
     /// After a crash: the checkpoint, then the keys held for each frame after
     /// it and the changes stamped in that stretch, in order.
     Rebuild {
@@ -51,7 +53,7 @@ pub fn boot_core<C: CoreAdapter>(core: &mut C, plan: &BootPlan, now_ms: i64) -> 
                 patches: BTreeMap::new(),
             })
         }
-        BootPlan::Suspended(from) => restore(core, from),
+        BootPlan::Suspended(from) | BootPlan::Retry(from) => restore(core, from),
         BootPlan::Rebuild { from, keys, stamped } => {
             let mut booted = restore(core, from)?;
             let mut stamped = stamped.iter().peekable();
@@ -124,7 +126,8 @@ pub(crate) fn plan(stored: &StoredRun) -> (BootPlan, ResumedFrom) {
             Some(from) => (BootPlan::Suspended(from.clone()), ResumedFrom::Suspend),
             None => from_save(),
         },
-        Some(RunEvent::Closed) | None => from_save(),
+        // A Retry that never got its new boot going: as after a clean close.
+        Some(RunEvent::Closed | RunEvent::Retried { .. }) | None => from_save(),
         Some(_) => stored
             .latest_checkpoint
             .as_ref()

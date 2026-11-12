@@ -221,6 +221,8 @@ fn chunk() -> InputChunk {
             ram: [7; 20],
             save: [8; 20],
         }],
+        marks: vec![pactlocke_run::Mark { frame: 121, after: 1 }],
+        booted_from: None,
     }
 }
 

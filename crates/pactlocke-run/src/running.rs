@@ -22,6 +22,21 @@ pub enum RunCommand {
     Nickname { pid: u32, name: String },
     /// Another Player's Shadow Game here no longer matches their game.
     OutOfSync { player: String, frame: u64 },
+    /// Another Player's Run Checkpoint, the `call`th in the Run log: this
+    /// game is captured with it.
+    JoinCheckpoint { call: u64 },
+    /// A Retry.
+    Retry { to: RetryTo },
+}
+
+/// Where a Retry goes back to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetryTo {
+    /// Alone: the latest Run Checkpoint, spending one of this Run's Retries.
+    Latest,
+    /// With other Players, as the Run log says: this Player's part of the
+    /// Run Checkpoint everyone voted for, by its hash.
+    Checkpoint(String),
 }
 
 /// How often the game's save memory is checked for an in-game save.
@@ -80,8 +95,67 @@ impl<G: PlayedGame> RunningGame<G> {
     fn checkpoint_if_wanted(&mut self) {
         if self.engine.checkpoint_wanted() {
             let checkpoint = self.core().checkpoint();
-            self.engine.take_checkpoint(checkpoint);
+            let run_checkpoint = self.engine.take_checkpoint(checkpoint);
+            if run_checkpoint && let Some((out, outbox)) = self.stream.as_mut() {
+                // Its changes at this boundary go first, so the mark comes after them.
+                let stamped = self.engine.stamped()[self.streamed..].to_vec();
+                self.streamed = self.engine.stamped().len();
+                if let Some(chunk) = out.stamp(&stamped) {
+                    outbox.lock().unwrap_or_else(|e| e.into_inner()).push(chunk);
+                }
+                out.mark_checkpoint(self.engine.frames_run());
+            }
         }
+    }
+
+    /// A Retry: the game goes back to this Player's Run Checkpoint with
+    /// hash `to` (or, alone, to the latest one, spending a Retry), as a new
+    /// boot. Everything recorded after it is void.
+    /// Nothing is recorded unless the game got back there.
+    pub fn retry(&mut self, to: &RetryTo) -> Result<(), String> {
+        let hash = match to {
+            RetryTo::Latest if self.engine.retries_left() == 0 => return Err("no Retries are left".to_owned()),
+            RetryTo::Latest => self
+                .engine
+                .latest_run_checkpoint()
+                .ok_or("there is no Run Checkpoint to go back to yet")?
+                .to_owned(),
+            RetryTo::Checkpoint(hash) => hash.clone(),
+        };
+        let (seq, checkpoint) = self
+            .engine
+            .find_run_checkpoint(&hash)
+            .ok_or("that Run Checkpoint is no longer kept")?;
+        let stored = self
+            .engine
+            .stored()
+            .map_err(|e| format!("the Run file can't be read: {e}"))?;
+        let from = (checkpoint.boot, checkpoint.frame);
+        // Patches made since the checkpoint come off; the checkpoint's own go back on.
+        let patched: Vec<(u32, Vec<u8>)> = self.engine.patches().iter().map(|(a, b)| (*a, b.clone())).collect();
+        for (addr, bytes) in &patched {
+            self.game.unpatch(*addr, bytes.len());
+        }
+        let plan = crate::BootPlan::Retry(checkpoint.clone());
+        let booted = match boot_core(self.game.core_mut(), &plan, 0) {
+            Ok(booted) => booted,
+            Err(e) => {
+                for (addr, bytes) in &patched {
+                    self.game.core_mut().patch_rom(*addr, bytes);
+                }
+                return Err(format!("the checkpoint couldn't be restored: {e}"));
+            }
+        };
+        let mut engine = self.engine.retry(stored, seq, checkpoint);
+        engine.booted(booted);
+        self.engine = engine;
+        self.streamed = 0;
+        if let Some((out, _)) = self.stream.as_mut() {
+            *out = StreamOut::after_retry(out.player(), self.engine.boot(), from);
+        }
+        self.published_version = self.engine.view_version().wrapping_sub(1);
+        self.checkpoint_if_wanted();
+        Ok(())
     }
 
     /// Where the side panel sends what it asks of the Run.
@@ -95,6 +169,12 @@ impl<G: PlayedGame> RunningGame<G> {
             match command {
                 RunCommand::Nickname { pid, name } => self.engine.name_pokemon(pid, &name, &mut self.game),
                 RunCommand::OutOfSync { player, frame } => self.engine.out_of_sync(player, frame),
+                RunCommand::JoinCheckpoint { call } => self.engine.join_checkpoint(call),
+                RunCommand::Retry { to } => {
+                    if let Err(why) = self.retry(&to) {
+                        self.engine.retry_failed(why);
+                    }
+                }
             }
         }
     }

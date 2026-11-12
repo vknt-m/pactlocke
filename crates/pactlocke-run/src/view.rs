@@ -16,6 +16,11 @@ pub struct RunView {
     pub level_cap: Option<LevelCapView>,
     /// Must nickname: the Pokémon the side panel asks the Player to name, oldest first.
     pub nickname_wanted: Vec<NicknameWanted>,
+    /// In a Run with Retries: how many this Player's own pool has left (a
+    /// Run with other Players counts them in the shared log instead).
+    pub retries_left: Option<u8>,
+    /// Whether there is a Run Checkpoint a Retry can go back to.
+    pub run_checkpoint: bool,
 }
 
 /// A Pokémon left with its species name, waiting for the Player to name it.
@@ -139,7 +144,12 @@ impl FeedEntry {
                     ),
                 },
             ),
-            RunEvent::Checkpoint { .. } | RunEvent::Closed => return None,
+            RunEvent::Checkpoint { .. } | RunEvent::Closed | RunEvent::RetryVote { .. } => return None,
+            RunEvent::RetryFailed { reason } => (FeedKind::Problem, format!("The Retry couldn't be made: {reason}")),
+            RunEvent::Retried { .. } => (
+                FeedKind::Run,
+                "Retry: back to the latest Run Checkpoint, and everything since is undone".to_owned(),
+            ),
             RunEvent::Suspended => (FeedKind::Run, "Run suspended".to_owned()),
             RunEvent::GameReset => (FeedKind::Run, "The game was reset to an older save".to_owned()),
             RunEvent::OutOfSync { player, .. } => (

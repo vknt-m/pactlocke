@@ -192,6 +192,9 @@ impl HostCoop {
                 _ => {}
             }
         }
+        if let Some(call) = self.log.retry_due() {
+            self.submit(Some(node), &LogBody::Retry { call });
+        }
         let view = self.setup.view();
         let stale = self
             .sent
@@ -249,6 +252,11 @@ impl HostCoop {
         std::mem::take(&mut self.stream_inbox)
     }
 
+    /// The Run log as the Host has it.
+    pub fn log(&self) -> &RunLog {
+        &self.log
+    }
+
     /// The Host's own Run state, into the log.
     pub fn share(&mut self, node: &HostNode, events: Vec<RunEvent>) {
         for event in events {
@@ -295,6 +303,11 @@ impl HostCoop {
         if caps != ruleset.level_caps.is_some() {
             ruleset.level_caps = caps.then(|| self.level_caps.clone());
         }
+        ui.horizontal(|ui| {
+            ui.label("Retries");
+            ui.add(egui::DragValue::new(&mut ruleset.retries).range(0..=pactlocke_run::MAX_RETRIES))
+                .on_hover_text("A shared pool: each Retry sends everyone back to the latest Run Checkpoint, by everyone's vote. 0 is off.");
+        });
         if let Some(caps) = ruleset.level_caps.as_mut() {
             ui.indent("level caps", |ui| {
                 egui::Grid::new("coop level caps").num_columns(4).show(ui, |ui| {
@@ -400,6 +413,11 @@ impl JoinCoop {
             error: None,
             stream_inbox: Vec::new(),
         }
+    }
+
+    /// This Player's copy of the Run log.
+    pub fn log(&self) -> &RunLog {
+        &self.log
     }
 
     /// Input stream messages since the last call: all from the Host, who passes every stream on.
@@ -566,6 +584,7 @@ impl JoinCoop {
         }
         let mut caps = ruleset.level_caps.is_some();
         ui.add_enabled(false, egui::Checkbox::new(&mut caps, "Level caps"));
+        ui.label(format!("Retries: {}", ruleset.retries));
         ui.separator();
         if let Some(ready) = ready_section(ui, &view, &self.me()) {
             self.set_ready(node, ready);

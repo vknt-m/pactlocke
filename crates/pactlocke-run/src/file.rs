@@ -217,6 +217,7 @@ enum Message {
     Suspend(Recorded, StoredCheckpoint),
     ClearSuspend,
     Load(Sender<Result<StoredRun, StorageError>>),
+    ReadCheckpoint(u64, Sender<Result<Option<StoredCheckpoint>, StorageError>>),
 }
 
 /// One Run's file. Every write goes to its own database thread, so playing
@@ -321,6 +322,12 @@ impl RunStorage for RunFile {
     fn write_failure(&mut self) -> Option<String> {
         self.failure.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
+
+    fn checkpoint(&mut self, event_seq: u64) -> Option<StoredCheckpoint> {
+        self.ask(|reply| Message::ReadCheckpoint(event_seq, reply))
+            .ok()
+            .flatten()
+    }
 }
 
 fn open_database(path: &Path) -> rusqlite::Result<Connection> {
@@ -352,6 +359,10 @@ fn serve(db: &Connection, messages: &Receiver<Message>, failure: &Mutex<Option<S
             Message::ClearSuspend => db.execute("DELETE FROM suspend", []).map(drop),
             Message::Load(reply) => {
                 let _ = reply.send(load(db));
+                Ok(())
+            }
+            Message::ReadCheckpoint(seq, reply) => {
+                let _ = reply.send(read_checkpoint_where(db, Slot::Checkpoints, Some(seq)));
                 Ok(())
             }
         };
@@ -514,14 +525,23 @@ fn decode_patches(mut bytes: &[u8]) -> Option<Vec<(u32, Vec<u8>)>> {
 
 /// The newest checkpoint in a slot, decompressed.
 fn read_checkpoint(db: &Connection, slot: Slot) -> Result<Option<StoredCheckpoint>, StorageError> {
+    read_checkpoint_where(db, slot, None)
+}
+
+/// The newest checkpoint in a slot, or the one stored with event `seq`, decompressed.
+fn read_checkpoint_where(
+    db: &Connection,
+    slot: Slot,
+    seq: Option<u64>,
+) -> Result<Option<StoredCheckpoint>, StorageError> {
     let table = slot.table();
     let row = db
         .query_row(
             &format!(
                 "SELECT reason, boot, frame, stamped_before, clock_ms, patches, core FROM {table}
-                 ORDER BY id DESC LIMIT 1"
+                 WHERE ?1 IS NULL OR event_seq = ?1 ORDER BY id DESC LIMIT 1"
             ),
-            [],
+            [seq.map(|s| s as i64)],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,

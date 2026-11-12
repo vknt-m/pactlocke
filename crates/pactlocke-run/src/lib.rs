@@ -29,18 +29,20 @@ pub use engine::RunEngine;
 pub use event::{AreaRef, CheckpointReason, DeathCause, Recorded, ResumedFrom, RunEvent};
 pub use file::{RunFile, RunId, RunLibrary, RunSummary};
 pub use live::{LiveGame, PlayedGame};
-pub use running::{RunCommand, RunningGame};
+pub use running::{RetryTo, RunCommand, RunningGame};
 pub use setup::{
     COUNTDOWN_MS, Locked, Mismatch, Preset, RosterEntry, RunSetup, SetupCheck, SetupError, SetupMessage, SetupPlayer,
     SetupView, settle, unavailable,
 };
 pub use shadow::{BUFFER_FRAMES, CATCH_UP_SPEED, PREDICT_FRAMES, ShadowGame, ShadowState};
 pub use shadow_runner::{ShadowRunner, ShadowStatus};
-pub use shared_log::{LogBody, LogEntry, LogError, RunLog, Signer, Submission, Tallies};
+pub use shared_log::{
+    Call, GamePoint, LogBody, LogEntry, LogError, LogFollower, Part, RunLog, Signer, Submission, Tallies, Vote,
+};
 pub use storage::{InputBatch, MemoryStorage, RunInfo, RunStorage, Stamped, StorageError, StoredCheckpoint, StoredRun};
 pub use stream::{
-    Added, CHUNK_FRAMES, FrameHash, HASH_EVERY, InputChunk, Outgoing, PlayerKey, StreamHub, StreamMessage, StreamOut,
-    StreamStore, StreamWant,
+    Added, CHUNK_FRAMES, FrameHash, HASH_EVERY, InputChunk, Mark, Outgoing, PlayerKey, StreamHub, StreamMessage,
+    StreamOut, StreamStore, StreamWant,
 };
 pub use view::{FeedEntry, FeedKind, Grave, LevelCapView, NicknameWanted, RunView};
 
@@ -91,7 +93,15 @@ pub struct Ruleset {
     /// every Link-mate. Needs `faint_is_dead` and more than one Player.
     #[serde(default)]
     pub links: bool,
+    /// The shared pool of Retries, 0 to [`MAX_RETRIES`]: each sends every
+    /// Player back to the latest Run Checkpoint, by everyone's vote (a solo
+    /// Player needs no vote). 0 turns Retries off.
+    #[serde(default)]
+    pub retries: u8,
 }
+
+/// The most Retries a Ruleset's pool may hold.
+pub const MAX_RETRIES: u8 = 10;
 
 fn allowed() -> bool {
     true
@@ -112,6 +122,7 @@ impl Default for Ruleset {
             must_nickname: false,
             type_clause: false,
             links: false,
+            retries: 0,
         }
     }
 }

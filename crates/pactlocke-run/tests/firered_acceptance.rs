@@ -1287,3 +1287,50 @@ fn to_a_closed_route_1_battle_from_the_lab(d: &mut Driver) {
     d.until_action_menu(Keys::B, 3000);
     assert_eq!(d.read(CATCH_SITE, 4), [0x01, 0x20, 0x70, 0x47], "catch block on");
 }
+
+#[test]
+fn after_a_retry_on_firered_the_game_is_back_at_its_run_checkpoint_and_its_shadow_follows() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
+        return;
+    };
+    let ruleset = Ruleset {
+        first_encounter: true,
+        retries: 1,
+        ..Ruleset::default()
+    };
+    let mut d = firered_run_with(rom, ruleset);
+    d.watched();
+    d.play(FR_STARTER);
+    d.play("w 60");
+    // A Run Checkpoint (as at a Sync Gate), then on to a closed Route 1 battle.
+    d.game.checkpoint();
+    let at_checkpoint = ram_hash(&mut d);
+    to_a_closed_route_1_battle_from_the_lab(&mut d);
+    let matched_before = d.watcher().shadow.hashes_matched();
+
+    d.game.retry(&pactlocke_run::RetryTo::Latest).unwrap();
+    assert_eq!(ram_hash(&mut d), at_checkpoint, "back exactly at the checkpoint");
+    assert_eq!(
+        d.read(CATCH_SITE, 4),
+        [0x10, 0xB5, 0x00, 0x24],
+        "the catch block patched on since is off again"
+    );
+    assert_eq!(d.game.engine().retries_left(), 0);
+    assert!(
+        d.game.engine().view().closed_areas.is_empty(),
+        "Route 1's Encounter is undone"
+    );
+
+    // Play on from the checkpoint: the Shadow went back to its own and matches.
+    d.play("h D 64\nw 60");
+    d.play("m A 900");
+    let shadow = &d.watcher.as_ref().unwrap().shadow;
+    assert_eq!(shadow.state(), ShadowState::Matched);
+    assert_eq!(shadow.boot(), 2, "following the boot after the Retry");
+    assert!(
+        shadow.hashes_matched() >= matched_before + 6,
+        "{} hashes matched, {matched_before} before the Retry",
+        shadow.hashes_matched()
+    );
+}
