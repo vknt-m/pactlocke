@@ -2,6 +2,7 @@
 //! engine's view of one Player's game.
 
 mod capability;
+mod caps;
 mod fake;
 mod game;
 mod profile;
@@ -11,6 +12,7 @@ mod store;
 mod text;
 
 pub use capability::{Capability, CapabilityReport, Rule};
+pub use caps::{LevelCap, LevelCapDef, MAX_LEVEL, level_cap_sites};
 pub use fake::FakeGame;
 pub use game::{
     Actions, Badges, Battle, BattleKind, Battler, Change, Game, GameError, Memory, PartyStats, Pokemon, ScriptContext,

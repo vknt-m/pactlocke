@@ -47,6 +47,9 @@ pub struct GameProfile {
     /// The Gift and Static catalogue.
     #[serde(default)]
     pub sources: Vec<crate::SourceDef>,
+    /// The stages a level cap rises through, in order.
+    #[serde(default)]
+    pub level_caps: Vec<crate::LevelCapDef>,
 }
 
 impl GameProfile {
@@ -112,6 +115,8 @@ pub struct Symbols {
     /// The evolution table, a fixed number of entries per species.
     pub evolution_table: u32,
     pub items: u32,
+    /// The trainer table, one entry per trainer id.
+    pub trainers: u32,
 }
 
 /// How Pokémon, battlers, items and the PC are laid out.
@@ -168,6 +173,17 @@ pub struct Layout {
     pub trainer_id: u32,
     /// In save block 1: one byte, a bit per badge.
     pub badges: u32,
+    /// In save block 1: the event flags, a bit per flag.
+    pub event_flags: u32,
+    pub trainer_size: u32,
+    /// In a trainer entry: its party flags (a byte), party size and party pointer.
+    pub trainer_party_flags: u32,
+    pub trainer_party_size: u32,
+    pub trainer_party: u32,
+    /// In a trainer's party entry: its level (two bytes).
+    pub trainer_mon_level: u32,
+    /// A trainer's party entry size for each value of its party flags (0 to 3).
+    pub trainer_mon_sizes: Vec<u32>,
     /// In save block 1: the Bag's Poké Balls pocket, 4 bytes a slot (item, quantity).
     pub balls_pocket: u32,
     pub balls_pocket_slots: u8,

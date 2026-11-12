@@ -1,3 +1,4 @@
+mod caps;
 mod gifts;
 
 use std::collections::BTreeSet;
@@ -9,7 +10,7 @@ use crate::event::{AreaRef, DeathCause, SourceRef};
 use crate::families::EvolutionFamilies;
 use crate::rules::{BattleStart, DeadMove, Rules, Verdict};
 use crate::storage::{InputBatch, RunInfo, RunStorage, Stamped, StorageError};
-use crate::view::{FeedEntry, FeedKind, Grave, RunView};
+use crate::view::{FeedEntry, FeedKind, Grave, LevelCapView, RunView};
 use crate::{LiveGame, NewRun, Recorded, RunClock, RunEvent};
 
 /// How often the input stream is flushed to storage, so a crash loses at most this much.
@@ -47,6 +48,9 @@ pub struct RunEngine {
     known: Option<gifts::SeenPokemon>,
     /// Declined Gifts that couldn't be released since the game was booted.
     release_failed: BTreeSet<u32>,
+    /// The level cap patched in since the game was booted (or found
+    /// unpatchable); ROM patches don't survive a boot.
+    cap_patched_for: Option<u8>,
 }
 
 /// A battle in progress, as the engine saw it begin.
@@ -112,7 +116,7 @@ impl RunEngine {
             ..RunView::default()
         };
         Self {
-            rules: Rules::new(info.ruleset),
+            rules: Rules::new(info.ruleset.clone()),
             info,
             storage,
             clock,
@@ -135,6 +139,7 @@ impl RunEngine {
             dead_box_failed: BTreeSet::new(),
             known: None,
             release_failed: BTreeSet::new(),
+            cap_patched_for: None,
         }
     }
 
@@ -185,6 +190,12 @@ impl RunEngine {
         // Only on the overworld: before a game is loaded the Bag reads as garbage.
         if self.rules.waiting_for_poke_balls() && game.at_safe_overworld_point() && game.holds_poke_balls() {
             self.record(RunEvent::PokeBallsObtained);
+        }
+
+        // Badges are won and the League's flags set on the overworld; before
+        // a game is loaded they read as garbage.
+        if game.at_safe_overworld_point() {
+            self.keep_level_cap(game);
         }
 
         let battle = game.battle();
@@ -523,6 +534,21 @@ impl RunEngine {
         self.rules.record(&recorded.event);
         if let RunEvent::Encounter { area, .. } = &recorded.event {
             self.view.closed_areas.push(area.name.clone());
+        }
+        match &recorded.event {
+            RunEvent::LevelCapSet { level, next, .. } => {
+                self.view.level_cap = Some(LevelCapView {
+                    level: *level,
+                    next: next.clone(),
+                    soft: self.rules.is_soft_cap(),
+                });
+            }
+            RunEvent::SoftCap { .. } => {
+                if let Some(cap) = self.view.level_cap.as_mut() {
+                    cap.soft = true;
+                }
+            }
+            _ => {}
         }
         if let Some(grave) = Grave::of(recorded) {
             self.view.graveyard.insert(0, grave);

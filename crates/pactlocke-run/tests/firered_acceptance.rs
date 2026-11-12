@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 
 use pactlocke_emu::{CoreAdapter, Keys};
-use pactlocke_game::{Game, ProfileGame, ProfileStore, RomIdentity};
+use pactlocke_game::{Game, LevelCap, ProfileGame, ProfileStore, RomIdentity};
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{FeedKind, MemoryStorage, NewRun, Ruleset, RunEngine, RunningGame, SystemRunClock};
 
@@ -49,6 +49,11 @@ const PIDGEY: u16 = 16;
 const RATTATA: u16 = 19;
 const POKE_BALL: u16 = 4;
 const POTION: u16 = 13;
+const RARE_CANDY: u16 = 68;
+const CAP_SITES: [u32; 4] = [0x0802_1CFA, 0x0802_1FB6, 0x0804_1834, 0x0804_274E];
+const BADGES: u32 = 0xFE4; // in save block 1
+const BATTLE_MON_SIZE: u32 = 0x58;
+const BATTLE_MON_LEVEL: u32 = 0x2A;
 
 type Running = RunningGame<MgbaCore>;
 
@@ -209,6 +214,7 @@ fn keys(name: &str) -> Keys {
         "D" => Keys::DOWN,
         "L" => Keys::LEFT,
         "R" => Keys::RIGHT,
+        "S" => Keys::START,
         other => panic!("no key {other}"),
     }
 }
@@ -548,6 +554,97 @@ fn the_real_starter_is_the_starter_gift_and_kept_with_gifts_off() {
         "{gifts:?}"
     );
     assert_eq!(d.game.game_mut().party().len(), 1, "the starter is always kept");
+}
+
+/// Moves the START menu's cursor, which the game remembers, from POKéMON to BAG.
+const START_MENU_ON_BAG: &str = "p S 60
+p D 20
+p B 60";
+
+/// START, BAG, the first item of the Items pocket, USE, on the first party
+/// Pokémon, then back out to the overworld.
+const USE_FIRST_ITEM: &str = "p S 60
+p A 120
+p A 40
+p A 120
+p A 180
+m B 600";
+
+#[test]
+fn exp_stops_at_the_cap_and_rare_candy_works_only_below_it() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        return;
+    };
+    let cap = |name: &str, level| LevelCap {
+        name: name.into(),
+        level,
+    };
+    let mut d = firered_run_with(
+        rom,
+        Ruleset {
+            level_caps: Some(vec![cap("Brock", 7), cap("Misty", 8)]),
+            ..Ruleset::default()
+        },
+    );
+    d.play(FR_STARTER);
+    assert_eq!(d.game.engine().view().level_cap.as_ref().map(|c| c.level), Some(7));
+    for site in CAP_SITES {
+        assert_eq!(d.read(site, 2), [7, 0x28], "cap 7 at {site:#010X}");
+    }
+
+    // The rival battle in the lab, against a level-50 foe on 1 HP (test
+    // setup): a win worth many levels from level 5.
+    d.fast_text();
+    d.play(
+        "h D 64
+w 60",
+    );
+    d.until_action_menu(Keys::A, 3000);
+    assert_eq!(d.game.game_mut().party()[0].stats.unwrap().level, 5);
+    let foe = BATTLE_MONS + BATTLE_MON_SIZE;
+    d.game.write(foe + BATTLE_MON_LEVEL, &[50]);
+    d.game.write(foe + BATTLE_MON_HP, &1u16.to_le_bytes());
+    d.until_battle_over(Keys::A, 8000);
+    d.play("m B 900");
+    assert_eq!(
+        d.game.game_mut().party()[0].stats.unwrap().level,
+        7,
+        "EXP stops exactly at the cap"
+    );
+
+    // At the cap a Rare Candy is refused and kept.
+    d.give(ITEMS_POCKET, RARE_CANDY, 2);
+    d.play(START_MENU_ON_BAG);
+    d.play(USE_FIRST_ITEM);
+    dump_screen(&d.game, "candy-at-cap");
+    assert_eq!(d.quantity(ITEMS_POCKET, RARE_CANDY), 2, "the Rare Candy is kept");
+    assert_eq!(d.game.game_mut().party()[0].stats.unwrap().level, 7);
+
+    // A badge (test setup) raises the cap by a patch stamped at that frame.
+    let badges = d.u32(SAVE_BLOCK_1_POINTER) + BADGES;
+    d.game.write(badges, &[1]);
+    d.play("w 30");
+    for site in CAP_SITES {
+        assert_eq!(d.read(site, 2), [8, 0x28], "cap 8 at {site:#010X}");
+    }
+    assert_eq!(d.feed(FeedKind::Run)[0], "Level cap raised to 8 until Misty");
+
+    // Below the cap the Rare Candy works, up to the cap and no further.
+    d.play(USE_FIRST_ITEM);
+    dump_screen(&d.game, "candy-below-cap");
+    assert_eq!(d.game.game_mut().party()[0].stats.unwrap().level, 8);
+    assert_eq!(d.quantity(ITEMS_POCKET, RARE_CANDY), 1);
+    d.play(USE_FIRST_ITEM);
+    assert_eq!(
+        d.game.game_mut().party()[0].stats.unwrap().level,
+        8,
+        "refused at the new cap"
+    );
+    assert_eq!(d.quantity(ITEMS_POCKET, RARE_CANDY), 1);
+    for entry in d.game.engine().view().feed.iter().rev() {
+        eprintln!("feed: {}", entry.text);
+    }
 }
 
 /// Writes the screen as a PPM under `target/acceptance/` for a person to look at.

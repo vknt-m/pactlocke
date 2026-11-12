@@ -41,6 +41,10 @@ pub struct FakeGame {
     /// The running script's return addresses, innermost first.
     pub script_calls: Vec<u32>,
     pub badges: Badges,
+    /// The level cap stage the Player is at (see [`Game::cap_stage`]).
+    pub cap_stage: usize,
+    /// Whether the game has level cap sites to patch; without them only a soft cap applies.
+    pub has_cap_sites: bool,
     /// Option settings by name, such as `battle_style = "shift"`.
     pub options: BTreeMap<String, String>,
     /// The settings each option has.
@@ -83,6 +87,8 @@ impl Default for FakeGame {
             },
             script_calls: Vec::new(),
             badges: Badges::default(),
+            cap_stage: 0,
+            has_cap_sites: true,
             options: BTreeMap::from([("battle_style".to_owned(), "shift".to_owned())]),
             option_values: BTreeMap::from([("battle_style".to_owned(), vec!["shift".to_owned(), "set".to_owned()])]),
             trainer_id: 0,
@@ -207,6 +213,10 @@ impl Game for FakeGame {
         self.badges
     }
 
+    fn cap_stage(&mut self) -> usize {
+        self.cap_stage
+    }
+
     fn option(&mut self, name: &str) -> Option<String> {
         self.options.get(name).cloned()
     }
@@ -258,8 +268,11 @@ impl Game for FakeGame {
     }
 
     fn set_level_cap(&mut self, level: u8) -> Actions {
-        if !(1..=100).contains(&level) {
+        if !(1..=crate::MAX_LEVEL).contains(&level) {
             return Err(GameError::BadLevel(level));
+        }
+        if !self.has_cap_sites {
+            return Err(GameError::NoMethod("level caps"));
         }
         Ok(vec![fake_patch(LEVEL_CAP, vec![level])])
     }

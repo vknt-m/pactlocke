@@ -18,7 +18,9 @@ use std::sync::{Arc, Mutex};
 
 use eframe::egui;
 use pactlocke_emu::{CoreAdapter, Emulator, EmulatorOptions, FrameSlot, Keys, Speed, SystemClock};
-use pactlocke_game::{Capability, GameProfile, ProfileGame, ProfileStore, RomIdentity, Rule, sha1_hex};
+use pactlocke_game::{
+    Capability, GameProfile, LevelCap, MAX_LEVEL, ProfileGame, ProfileStore, RomIdentity, Rule, sha1_hex,
+};
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
     NewRun, Ruleset, RunClock, RunEngine, RunLibrary, RunSummary, RunView, RunningGame, SystemRunClock,
@@ -148,6 +150,41 @@ fn rule_checkbox(ui: &mut egui::Ui, on: &mut bool, text: &str, unavailable: Opti
     }
 }
 
+/// The level caps checkbox and, while it is on, each stage's cap to edit.
+fn level_caps_editor(ui: &mut egui::Ui, draft: &mut NewRunDraft) {
+    if draft.level_caps.is_empty() {
+        rule_checkbox(
+            ui,
+            &mut draft.level_caps_on,
+            "Level caps",
+            Some("this Game Profile lists no gym leaders or Elite Four for caps yet".to_owned()),
+        );
+        return;
+    }
+    let text = match draft.soft_cap {
+        Some(_) => "Level caps (soft cap: over the cap, you can't ready up at a Sync Gate)",
+        None => "Level caps: EXP and Rare Candy stop at the next leader's strongest Pokémon",
+    };
+    let checkbox = ui.checkbox(&mut draft.level_caps_on, text);
+    if let Some(reason) = &draft.soft_cap {
+        checkbox.on_hover_text(format!("The game can't be stopped at the cap on this ROM: {reason}"));
+    }
+    if !draft.level_caps_on {
+        return;
+    }
+    ui.indent("level caps", |ui| {
+        egui::Grid::new("level caps").num_columns(4).show(ui, |ui| {
+            for (i, cap) in draft.level_caps.iter_mut().enumerate() {
+                ui.label(&cap.name);
+                ui.add(egui::DragValue::new(&mut cap.level).range(1..=MAX_LEVEL));
+                if i % 2 == 1 {
+                    ui.end_row();
+                }
+            }
+        });
+    });
+}
+
 /// A New Run waiting for its name.
 struct NewRunDraft {
     rom: Vec<u8>,
@@ -158,6 +195,11 @@ struct NewRunDraft {
     ruleset: Ruleset,
     /// Why each rule this ROM can't enforce can't be chosen.
     unavailable: BTreeMap<Rule, String>,
+    /// Whether the Run has level caps, and each stage's cap as the Host left it.
+    level_caps_on: bool,
+    level_caps: Vec<LevelCap>,
+    /// Why the caps are only soft caps on this ROM, if they are.
+    soft_cap: Option<String>,
 }
 
 struct PactlockeApp {
@@ -293,9 +335,19 @@ impl PactlockeApp {
                 ..Ruleset::default()
             };
             ruleset.dupes_clause = ruleset.dupes_clause_available() && !unavailable.contains_key(&Rule::DupesClause);
+            // Where the level checks can't be patched the caps still apply, as soft caps.
+            let soft_cap = match capabilities.get(Rule::LevelCap) {
+                Capability::GreyedOut { reason } => Some(reason.clone()),
+                _ => None,
+            };
+            let level_caps = profile.default_level_caps(&rom);
             Ok(NewRunDraft {
                 ruleset,
                 unavailable,
+                // On by default; where the game can't be stopped at the cap it is a soft cap.
+                level_caps_on: !level_caps.is_empty(),
+                level_caps,
+                soft_cap,
                 profile: profile.clone(),
                 name: format!("Solo Run {}", self.runs.len() + 1),
                 rom,
@@ -312,8 +364,9 @@ impl PactlockeApp {
         }
     }
 
-    fn start_run(&mut self, draft: NewRunDraft) {
+    fn start_run(&mut self, mut draft: NewRunDraft) {
         self.stop_playing();
+        draft.ruleset.level_caps = draft.level_caps_on.then(|| draft.level_caps.clone());
         let result = self.run_library().and_then(|library| {
             // Boot first, so a game that won't start leaves no Run behind.
             let core = self.boot(&draft.rom, None)?;
@@ -539,6 +592,7 @@ impl PactlockeApp {
                 "Faint = Dead: fainted Pokémon go to the Dead box",
                 draft.unavailable.get(&Rule::FaintIsDead).cloned(),
             );
+            level_caps_editor(ui, draft);
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label("Name");

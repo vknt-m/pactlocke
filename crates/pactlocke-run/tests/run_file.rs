@@ -141,7 +141,7 @@ fn a_run_resumed_from_its_file_keeps_its_dead_and_graveyard() {
         faint_is_dead: true,
         ..Ruleset::default()
     };
-    let mut player = Player::starts_a_run_in(Box::new(library.create().unwrap()), clock.clone(), ruleset);
+    let mut player = Player::starts_a_run_in(Box::new(library.create().unwrap()), clock.clone(), ruleset.clone());
     player.game.party = vec![party_pokemon(PIDGEY, 0x0000_BEEF, "BIRDY")];
     player.walks_into(route_1());
     player.meets_wild(RATTATA);

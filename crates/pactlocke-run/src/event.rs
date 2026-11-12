@@ -111,6 +111,18 @@ pub enum RunEvent {
     DeadBoxFull { pid: u32, name: String, box_number: u8 },
     /// A Violation: a Dead Pokémon couldn't be moved out of the party.
     DeadBoxFailed { pid: u32, name: String, reason: String },
+    /// The Player is at level cap stage `stage` (from 0), so the cap is
+    /// `level` until they pass `next`; with `next` `None` every stage is
+    /// passed and there is no cap. `raised` when it follows an earlier stage.
+    LevelCapSet {
+        stage: usize,
+        level: u8,
+        next: Option<String>,
+        raised: bool,
+    },
+    /// The game's level checks can't be patched, so the cap is only a soft
+    /// cap: a Player over it can't ready up at a Sync Gate.
+    SoftCap { reason: String },
 }
 
 /// A Gift or Static source, as the log keeps it.

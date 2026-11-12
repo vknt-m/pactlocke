@@ -72,6 +72,11 @@ pub(crate) struct Rules {
     used_sources: BTreeSet<String>,
     /// Declined Gifts not yet released.
     to_release: BTreeSet<u32>,
+    /// The level cap stage last reached in this Run, and its cap.
+    cap_stage: Option<usize>,
+    level_cap: Option<u8>,
+    /// Whether the cap is only a soft cap: the game's level checks can't be patched.
+    soft_cap: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +105,9 @@ impl Rules {
             families: None,
             used_sources: BTreeSet::new(),
             to_release: BTreeSet::new(),
+            cap_stage: None,
+            level_cap: None,
+            soft_cap: false,
         }
     }
 
@@ -214,6 +222,19 @@ impl Rules {
         })
     }
 
+    /// The level cap now, once one is set.
+    pub fn level_cap(&self) -> Option<u8> {
+        self.level_cap
+    }
+
+    pub fn cap_stage(&self) -> Option<usize> {
+        self.cap_stage
+    }
+
+    pub fn is_soft_cap(&self) -> bool {
+        self.soft_cap
+    }
+
     /// Takes in an event of the Run, as it happens or when a Run is resumed.
     pub fn record(&mut self, event: &RunEvent) {
         match event {
@@ -230,6 +251,11 @@ impl Rules {
             RunEvent::GiftDeclined { pid, .. } => {
                 self.to_release.insert(*pid);
             }
+            RunEvent::LevelCapSet { stage, level, .. } => {
+                self.cap_stage = Some(*stage);
+                self.level_cap = Some(*level);
+            }
+            RunEvent::SoftCap { .. } => self.soft_cap = true,
             RunEvent::Released { pid, .. } => {
                 self.to_release.remove(pid);
             }

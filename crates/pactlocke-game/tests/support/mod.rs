@@ -16,6 +16,9 @@ pub const COMMAND_TABLE: u32 = 0x0800_2000;
 pub const SPECIES_INFO: u32 = 0x0800_3000;
 pub const SPECIES_NAMES: u32 = 0x0800_4000;
 pub const EVOLUTION_TABLE: u32 = 0x0800_5000;
+pub const TRAINERS: u32 = 0x0800_7000;
+/// Where `put_trainer`-style helpers put each trainer's party.
+pub const TRAINER_PARTIES: u32 = 0x0800_C000;
 
 /// A test ROM of 64 KiB with the given header game code and every test patch
 /// site holding its expected bytes. Its SHA-1 is whatever it is: tests use
@@ -76,6 +79,7 @@ species_info = 0x08003000
 species_names = 0x08004000
 evolution_table = 0x08005000
 items = 0x08001000
+trainers = 0x08007000
 
 [layout]
 party_slot_size = 100
@@ -120,6 +124,13 @@ pc_box_slots = 30
 pc_boxes_offset = 4
 trainer_id = 0x0A
 badges = 0xFE4
+event_flags = 0xEE0
+trainer_size = 40
+trainer_party_flags = 0
+trainer_party_size = 32
+trainer_party = 36
+trainer_mon_level = 2
+trainer_mon_sizes = [8, 16, 8, 16]
 balls_pocket = 0x430
 balls_pocket_slots = 13
 dead_box = 14
@@ -168,6 +179,21 @@ battle_communication = 0x02023E82
 
 [area_renames]
 0x8C = "Pokémon Tower"
+
+[[level_caps]]
+name = "Brock"
+trainers = [414]
+badges = 1
+
+[[level_caps]]
+name = "Misty"
+trainers = [415]
+badges = 2
+
+[[level_caps]]
+name = "Champion"
+trainers = [438, 439, 440]
+flag = 0x4BC
 
 [[sources]]
 key = "starter"

@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use crate::caps::MAX_LEVEL;
 use crate::game::{
     Actions, Badges, Battle, BattleKind, Battler, Change, Game, GameError, Memory, PartyStats, Pokemon, ScriptContext,
     ScriptStatus, Side, StoredPokemon,
@@ -18,7 +19,6 @@ const SUBSTRUCTURE_ORDERS: [&[u8; 4]; 24] = [
 ];
 const SUBSTRUCTURE_SIZE: usize = 12;
 const PARTY_SIZE: u8 = 6;
-const MAX_LEVEL: u8 = 100;
 
 /// A game read and steered through its Game Profile.
 pub struct ProfileGame<M> {
@@ -310,6 +310,21 @@ impl<M: Memory> Game for ProfileGame<M> {
     fn badges(&mut self) -> Badges {
         let block = self.save_block(1);
         Badges(self.u8(block + self.profile.layout.badges))
+    }
+
+    fn cap_stage(&mut self) -> usize {
+        let badges = self.badges();
+        let flags = self.save_block(1) + self.profile.layout.event_flags;
+        let profile = self.profile.clone();
+        profile
+            .level_caps
+            .iter()
+            .take_while(|stage| {
+                stage.passed(badges, |flag| {
+                    self.u8(flags + u32::from(flag / 8)) & (1 << (flag % 8)) != 0
+                })
+            })
+            .count()
     }
 
     fn option(&mut self, name: &str) -> Option<String> {

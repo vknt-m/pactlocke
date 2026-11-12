@@ -6,7 +6,9 @@
 use std::path::PathBuf;
 
 use pactlocke_emu::{CoreAdapter, Keys};
-use pactlocke_game::{Capability, Game, ProfileGame, ProfileStore, RomIdentity, Rule, ScriptStatus, SourceKind};
+use pactlocke_game::{
+    Capability, Game, Method, ProfileGame, ProfileStore, RomIdentity, Rule, ScriptStatus, SourceKind, level_cap_sites,
+};
 use pactlocke_mgba::MgbaCore;
 
 const FIRERED_FILE: &str = "Pokemon - FireRed Version (USA).gba";
@@ -215,5 +217,66 @@ fn every_catalogued_gift_and_static_is_its_script_instruction_in_the_real_rom() 
             let byte = rom[(at - 0x0800_0000) as usize];
             assert_eq!(byte, opcode, "{} at {at:#010X}", source.key);
         }
+    }
+}
+
+#[test]
+fn default_level_caps_are_each_leaders_strongest_pokemon_in_the_real_rom() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        return;
+    };
+    let store = ProfileStore::bundled().unwrap();
+    let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
+        panic!("FireRed should be profiled");
+    };
+    let caps: Vec<(String, u8)> = profile
+        .default_level_caps(&rom)
+        .into_iter()
+        .map(|cap| (cap.name, cap.level))
+        .collect();
+    // Each leader's ace in FireRed: Onix 14, Starmie 21, Raichu 24,
+    // Vileplume 29, Weezing 43, Alakazam 43, Arcanine 47, Rhydon 50, then
+    // the League's Lapras 54, Machamp 56, Gengar 58, Dragonite 60 and the
+    // Champion's starter 63.
+    let expected = [
+        ("Brock", 14),
+        ("Misty", 21),
+        ("Lt. Surge", 24),
+        ("Erika", 29),
+        ("Koga", 43),
+        ("Sabrina", 43),
+        ("Blaine", 47),
+        ("Giovanni", 50),
+        ("Lorelei", 54),
+        ("Bruno", 56),
+        ("Agatha", 58),
+        ("Lance", 60),
+        ("Champion", 63),
+    ]
+    .map(|(name, level)| (name.to_owned(), level));
+    assert_eq!(caps, expected);
+}
+
+#[test]
+fn every_profiled_level_cap_site_is_found_by_byte_pattern_in_the_real_rom() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        return;
+    };
+    let store = ProfileStore::bundled().unwrap();
+    let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
+        panic!("FireRed should be profiled");
+    };
+    let Some(Method::Patch { sites }) = &profile.rules.level_cap else {
+        panic!("FireRed has level cap sites");
+    };
+    let found = level_cap_sites(&rom);
+    for site in sites {
+        assert!(
+            found.contains(&site.at),
+            "{:#010X} isn't a pattern match: {found:x?}",
+            site.at
+        );
     }
 }

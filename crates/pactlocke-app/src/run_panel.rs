@@ -1,4 +1,4 @@
-//! The docked side panel during a Run: what the Run is, the Areas whose
+//! The docked side panel during a Run: what the Run is, its level cap, the Areas whose
 //! Encounter is used, the live feed, newest first, and the Graveyard tab
 //! under it. It only displays the Run engine's view.
 
@@ -8,6 +8,13 @@ use pactlocke_run::{FeedKind, RunClock, RunView, SystemRunClock};
 pub fn show(ui: &mut egui::Ui, view: &RunView) {
     ui.heading(&view.name);
     ui.weak(&view.game_name);
+    if let Some(cap) = &view.level_cap {
+        let soft = if cap.soft { " (soft cap)" } else { "" };
+        match &cap.next {
+            Some(next) => ui.label(format!("Level cap {} until {next}{soft}", cap.level)),
+            None => ui.label("No level cap: every cap is passed"),
+        };
+    }
     ui.add_space(6.0);
 
     let closed = &view.closed_areas;

@@ -24,12 +24,13 @@ pub use file::{RunFile, RunId, RunLibrary, RunSummary};
 pub use live::LiveGame;
 pub use running::RunningGame;
 pub use storage::{InputBatch, MemoryStorage, RunInfo, RunStorage, Stamped, StorageError, StoredRun};
-pub use view::{FeedEntry, FeedKind, Grave, RunView};
+pub use view::{FeedEntry, FeedKind, Grave, LevelCapView, RunView};
 
+use pactlocke_game::LevelCap;
 use serde::{Deserialize, Serialize};
 
 /// The challenge rules chosen for a Run, locked for the rest of it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ruleset {
     /// Only the first wild battle in each Area may be caught.
     pub first_encounter: bool,
@@ -48,6 +49,11 @@ pub struct Ruleset {
     /// the Area's first Encounter. Needs `first_encounter`.
     #[serde(default)]
     pub statics: bool,
+    /// EXP and Rare Candy stop at the current stage's cap, one stage per
+    /// gym leader, Elite Four member and Champion in the Game Profile's order; `None`
+    /// for no caps. The Host may edit the levels before the lock.
+    #[serde(default)]
+    pub level_caps: Option<Vec<LevelCap>>,
 }
 
 fn allowed() -> bool {
@@ -63,6 +69,7 @@ impl Default for Ruleset {
             dupes_clause: false,
             gifts: true,
             statics: false,
+            level_caps: None,
         }
     }
 }

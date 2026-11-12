@@ -58,6 +58,10 @@ _Avoid_: Pair (Links can have three members), soul link (that is the name of the
 A battle chosen in the Ruleset (gym leaders, Elite Four, Champion) that no Player can start until every Player has readied up at it. A Player may leave and come back to ready up when the others arrive.
 _Avoid_: Sync battle, boss lock
 
+**Level cap**:
+The level no Pokémon may pass until the Player beats the next gym leader, Elite Four member or Champion. By default it is that trainer's strongest Pokémon in the loaded ROM; the Host can edit each one before the lock. Where the game can't be patched to stop at it, it is a **soft cap**: nothing stops the Pokémon, but a Player with one over the cap can't ready up at a Sync Gate.
+_Avoid_: Level limit, hard cap (say level cap)
+
 **Spectate**:
 Watching another Player's game screen live, view-only, at any point in the Run.
 _Avoid_: Stream, watch party

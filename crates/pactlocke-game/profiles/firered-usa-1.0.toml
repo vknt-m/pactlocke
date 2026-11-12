@@ -32,6 +32,7 @@ species_info = 0x08254784
 species_names = 0x08245EE0              # gSpeciesNames
 evolution_table = 0x08259754            # gEvolutionTable
 items = 0x083DB028
+trainers = 0x0823EAC8                   # gTrainers
 
 [layout]
 # How a Pokémon is stored (pret's struct Pokemon / BoxPokemon).
@@ -79,6 +80,15 @@ pc_box_slots = 30
 pc_boxes_offset = 4
 trainer_id = 0x0A                      # in save block 2
 badges = 0xFE4                         # in save block 1: flags 0x820-0x827
+event_flags = 0xEE0                    # in save block 1
+# pret's struct Trainer (40 bytes) and its party entries; the party flags say
+# whether entries carry custom moves (16 bytes) or not (8 bytes).
+trainer_size = 40
+trainer_party_flags = 0
+trainer_party_size = 32
+trainer_party = 36
+trainer_mon_level = 2
+trainer_mon_sizes = [8, 16, 8, 16]
 balls_pocket = 0x430                   # in save block 1: gBagPockets' Poké Balls
 balls_pocket_slots = 13
 dead_box = 14
@@ -259,6 +269,75 @@ battle_communication = 0x02023E82
 # Not listed yet: in-game trades (detected as trades), and the event-ticket
 # islands' Lugia, Ho-Oh and Deoxys. The Pokémon Tower ghost isn't a Static:
 # nobody can catch it (see battle_type_uncatchable).
+
+# Level cap stages, in order: each next gym leader, then each Elite Four member and
+# the Champion. A gym stage is passed by badge count (Koga and Sabrina can come in
+# either order); a League stage by its defeat flag. Trainer ids are pret's
+# TRAINER_LEADER_* / TRAINER_ELITE_FOUR_* / TRAINER_CHAMPION_FIRST_* (one per starter).
+[[level_caps]]
+name = "Brock"
+trainers = [414]
+badges = 1
+
+[[level_caps]]
+name = "Misty"
+trainers = [415]
+badges = 2
+
+[[level_caps]]
+name = "Lt. Surge"
+trainers = [416]
+badges = 3
+
+[[level_caps]]
+name = "Erika"
+trainers = [417]
+badges = 4
+
+[[level_caps]]
+name = "Koga"
+trainers = [418]
+badges = 5
+
+[[level_caps]]
+name = "Sabrina"
+trainers = [420]
+badges = 6
+
+[[level_caps]]
+name = "Blaine"
+trainers = [419]
+badges = 7
+
+[[level_caps]]
+name = "Giovanni"
+trainers = [350]
+badges = 8
+
+[[level_caps]]
+name = "Lorelei"
+trainers = [410]
+flag = 0x4B8   # FLAG_DEFEATED_LORELEI
+
+[[level_caps]]
+name = "Bruno"
+trainers = [411]
+flag = 0x4B9   # FLAG_DEFEATED_BRUNO
+
+[[level_caps]]
+name = "Agatha"
+trainers = [412]
+flag = 0x4BA   # FLAG_DEFEATED_AGATHA
+
+[[level_caps]]
+name = "Lance"
+trainers = [413]
+flag = 0x4BB   # FLAG_DEFEATED_LANCE
+
+[[level_caps]]
+name = "Champion"
+trainers = [438, 439, 440]
+flag = 0x4BC   # FLAG_DEFEATED_CHAMP
 
 [[sources]]
 key = "starter"

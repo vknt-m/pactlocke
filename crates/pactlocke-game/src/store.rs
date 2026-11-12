@@ -250,9 +250,24 @@ fn check(profile: &GameProfile) -> Result<(), String> {
         ("species_info", profile.symbols.species_info),
         ("species_names", profile.symbols.species_names),
         ("evolution_table", profile.symbols.evolution_table),
+        ("trainers", profile.symbols.trainers),
     ] {
         if !ROM.contains(&addr) {
             return Err(format!("symbol {table} {addr:#010X} is not in ROM"));
+        }
+    }
+    if profile.layout.trainer_mon_sizes.len() != 4 {
+        return Err("layout trainer_mon_sizes must give a size for each of the 4 party flag values".into());
+    }
+    for stage in &profile.level_caps {
+        if stage.trainers.is_empty() {
+            return Err(format!("level cap {:?}: no trainers", stage.name));
+        }
+        if stage.badges.is_some() == stage.flag.is_some() {
+            return Err(format!(
+                "level cap {:?}: give exactly one of badges or flag for when it is passed",
+                stage.name
+            ));
         }
     }
     let rules = &profile.rules;

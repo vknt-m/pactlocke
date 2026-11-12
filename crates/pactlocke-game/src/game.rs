@@ -176,6 +176,9 @@ pub trait Game {
     /// innermost first: a Gift's own script may be a call or two up.
     fn script_calls(&mut self) -> Vec<u32>;
     fn badges(&mut self) -> Badges;
+    /// Which level cap stage the Player is at: how many of the Game Profile's
+    /// stages, in order, they are past (by badges, then Elite Four defeats).
+    fn cap_stage(&mut self) -> usize;
     /// The named option's current setting, if the game has that option and
     /// it holds a known setting.
     fn option(&mut self, name: &str) -> Option<String>;

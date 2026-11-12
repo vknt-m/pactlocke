@@ -12,6 +12,19 @@ pub struct RunView {
     pub closed_areas: Vec<String>,
     /// The Dead, newest first.
     pub graveyard: Vec<Grave>,
+    /// The level cap now, in a Run with level caps.
+    pub level_cap: Option<LevelCapView>,
+}
+
+/// The current level cap, as the side panel shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LevelCapView {
+    /// 100 once every stage is passed.
+    pub level: u8,
+    /// Who the cap is for, until they are passed.
+    pub next: Option<String>,
+    /// Only a soft cap: the game itself doesn't stop Pokémon at it.
+    pub soft: bool,
 }
 
 /// A Dead Pokémon, as the Graveyard tab shows it.
@@ -246,6 +259,23 @@ impl FeedEntry {
             RunEvent::DeadBoxFailed { name, reason, .. } => (
                 FeedKind::Violation,
                 format!("Violation: {name} is Dead but couldn't be moved out of the party: {reason}"),
+            ),
+            RunEvent::LevelCapSet {
+                level, next, raised, ..
+            } => (
+                FeedKind::Run,
+                match next {
+                    Some(next) if *raised => format!("Level cap raised to {level} until {next}"),
+                    Some(next) => format!("Level cap {level} until {next}"),
+                    None => "No level cap any more: every cap is passed".to_owned(),
+                },
+            ),
+            RunEvent::SoftCap { reason } => (
+                FeedKind::Run,
+                format!(
+                    "The level cap is a soft cap on this game ({reason}): \
+                     a Player with a Pokémon over the cap can't ready up at a Sync Gate"
+                ),
             ),
         };
         Self {
