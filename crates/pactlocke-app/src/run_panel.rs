@@ -1,11 +1,13 @@
-//! The docked side panel during a Run: what the Run is, its level cap, the Areas whose
-//! Encounter is used, the live feed, newest first, and the Graveyard tab
-//! under it. It only displays the Run engine's view.
+//! The docked side panel during a Run: what the Run is, its level cap, the
+//! nickname prompt, the Areas whose Encounter is used, the live feed, newest
+//! first, and the Graveyard tab under it. It displays the Run engine's view,
+//! and its one question, the nickname prompt, answers with a [`RunCommand`].
 
 use eframe::egui;
-use pactlocke_run::{FeedKind, RunClock, RunView, SystemRunClock};
+use pactlocke_run::{FeedKind, NicknameWanted, RunClock, RunCommand, RunView, SystemRunClock};
 
-pub fn show(ui: &mut egui::Ui, view: &RunView) {
+/// Shows the panel; returns what the Player asked of the Run, if anything.
+pub fn show(ui: &mut egui::Ui, view: &RunView) -> Option<RunCommand> {
     ui.heading(&view.name);
     ui.weak(&view.game_name);
     if let Some(cap) = &view.level_cap {
@@ -15,6 +17,10 @@ pub fn show(ui: &mut egui::Ui, view: &RunView) {
             None => ui.label("No level cap: every cap is passed"),
         };
     }
+    let command = view
+        .nickname_wanted
+        .first()
+        .and_then(|wanted| nickname_prompt(ui, wanted));
     ui.add_space(6.0);
 
     let closed = &view.closed_areas;
@@ -77,6 +83,7 @@ pub fn show(ui: &mut egui::Ui, view: &RunView) {
                 });
         });
     });
+    command
 }
 
 /// The Dead, newest first, with what killed each.
@@ -113,4 +120,37 @@ pub fn ago(ms: i64) -> String {
         60..=2879 => format!("{} h ago", minutes / 60),
         _ => format!("{} days ago", minutes / 1440),
     }
+}
+
+/// Must nickname: asks for a name for a Pokémon left with its species name.
+fn nickname_prompt(ui: &mut egui::Ui, wanted: &NicknameWanted) -> Option<RunCommand> {
+    let mut command = None;
+    ui.add_space(6.0);
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.strong(format!("Name your {}", wanted.species_name));
+        ui.label("Must nickname: up to 10 characters, not the species name.");
+        let id = ui.make_persistent_id(("nickname", wanted.pid));
+        let mut name = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_default();
+        let mut send = false;
+        ui.horizontal(|ui| {
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut name)
+                    .char_limit(10)
+                    .desired_width(140.0),
+            );
+            if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                send = true;
+            }
+            send |= ui.button("Name it").clicked();
+        });
+        if send && !name.trim().is_empty() {
+            command = Some(RunCommand::Nickname {
+                pid: wanted.pid,
+                name: name.trim().to_owned(),
+            });
+            name.clear();
+        }
+        ui.data_mut(|d| d.insert_temp(id, name));
+    });
+    command
 }

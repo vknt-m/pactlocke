@@ -276,6 +276,11 @@ impl Player {
         self.plays(10);
     }
 
+    /// A Gift's script runs at this position, until [`Player::script_ends`].
+    pub fn script_at_gift(&mut self, position: u32) {
+        self.script_at(position);
+    }
+
     fn script_at(&mut self, position: u32) {
         self.game.script = ScriptContext {
             status: ScriptStatus::Running,

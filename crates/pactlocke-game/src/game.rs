@@ -187,6 +187,8 @@ pub trait Game {
     fn primary_type(&mut self, species: u16) -> u8;
     /// A species' name as the game shows it, from the loaded ROM.
     fn species_name(&mut self, species: u16) -> String;
+    /// A type's name as the game shows it, from the loaded ROM.
+    fn type_name(&mut self, type_id: u8) -> String;
     /// For each species from 0, the species it can evolve into, from the
     /// loaded ROM (randomizers change evolutions).
     fn evolutions(&mut self) -> Vec<Vec<u16>>;
@@ -197,6 +199,9 @@ pub trait Game {
     fn at_safe_overworld_point(&mut self) -> bool;
     /// Whether the Bag holds any kind of Poké Ball.
     fn holds_poke_balls(&mut self) -> bool;
+    /// Whether "Give a nickname?" is up with its YES/NO box: in battle after
+    /// a catch, or on the overworld for a Gift.
+    fn nickname_prompt_up(&mut self) -> bool;
 
     // Actions. Each returns changes for the Run engine to apply.
 
@@ -218,9 +223,15 @@ pub trait Game {
     fn release_from_party(&mut self, party_slot: u8) -> Actions;
     /// Releases a Pokémon in the PC (box and slot counting from 1).
     fn release_from_pc(&mut self, box_number: u8, slot: u8) -> Actions;
+    /// The PC box (counting from 1) that holds the Dead.
+    fn dead_box(&mut self) -> u8;
     /// Moves a party Pokémon to the Dead box.
     fn move_to_dead_box(&mut self, party_slot: u8) -> Actions;
     fn write_nickname(&mut self, party_slot: u8, name: &str) -> Actions;
+    /// Names a Pokémon in the PC (box and slot counting from 1).
+    fn write_pc_nickname(&mut self, box_number: u8, slot: u8, name: &str) -> Actions;
+    /// Keeps the nickname prompt's cursor on YES, where the game has one to keep.
+    fn keep_nickname_cursor_on_yes(&mut self) -> Actions;
     /// The writes that put the battle style on Set through the game's own
     /// option; none when it is on Set already.
     fn force_set_mode(&mut self) -> Actions;

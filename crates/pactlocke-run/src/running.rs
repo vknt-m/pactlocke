@@ -4,12 +4,20 @@
 //! methods are there for the interface; in a Run only the engine changes the
 //! game, at frame boundaries.
 
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
 use pactlocke_emu::{Checkpoint, CoreAdapter, CoreError, Frame, Keys};
 use pactlocke_game::ProfileGame;
 
 use crate::{RunEngine, RunView};
+
+/// What the side panel asks of the Run, carried out at the next frame boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunCommand {
+    /// Must nickname: name the Pokémon the side panel asked about.
+    Nickname { pid: u32, name: String },
+}
 
 /// How often the game's save memory is checked for an in-game save.
 const SAVE_CHECK_FRAMES: u64 = 60;
@@ -19,6 +27,7 @@ pub struct RunningGame<C: CoreAdapter> {
     engine: RunEngine,
     view: Arc<Mutex<RunView>>,
     published_version: u64,
+    commands: (Sender<RunCommand>, Receiver<RunCommand>),
 }
 
 impl<C: CoreAdapter> RunningGame<C> {
@@ -31,6 +40,21 @@ impl<C: CoreAdapter> RunningGame<C> {
             game,
             engine,
             view,
+            commands: channel(),
+        }
+    }
+
+    /// Where the side panel sends what it asks of the Run.
+    pub fn commands(&self) -> Sender<RunCommand> {
+        self.commands.0.clone()
+    }
+
+    /// Carries out what the side panel asked, at this frame boundary.
+    fn take_commands(&mut self) {
+        while let Ok(command) = self.commands.1.try_recv() {
+            match command {
+                RunCommand::Nickname { pid, name } => self.engine.name_pokemon(pid, &name, &mut self.game),
+            }
         }
     }
 
@@ -70,6 +94,8 @@ impl<C: CoreAdapter> CoreAdapter for RunningGame<C> {
     }
 
     fn run_frame(&mut self, keys: Keys) {
+        self.take_commands();
+        let keys = self.engine.keys_for_frame(keys, &mut self.game);
         self.core().run_frame(keys);
         self.engine.frame(keys, &mut self.game);
         if self.engine.frames_run().is_multiple_of(SAVE_CHECK_FRAMES) {

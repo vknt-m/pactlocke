@@ -83,6 +83,8 @@ pub(crate) struct Rules {
     item_ban_failed_said: bool,
     set_mode_forced_before: bool,
     set_mode_failed_said: bool,
+    /// Must nickname: Pokémon waiting for the Player to name them, with their species names.
+    nickname_wanted: BTreeMap<u32, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +120,7 @@ impl Rules {
             item_ban_failed_said: false,
             set_mode_forced_before: false,
             set_mode_failed_said: false,
+            nickname_wanted: BTreeMap::new(),
         }
     }
 
@@ -232,6 +235,27 @@ impl Rules {
         })
     }
 
+    pub fn must_nickname(&self) -> bool {
+        self.ruleset.must_nickname
+    }
+
+    /// The species name of a Pokémon waiting for a name, if it is waiting.
+    pub fn nickname_wanted(&self, pid: u32) -> Option<&str> {
+        self.nickname_wanted.get(&pid).map(String::as_str)
+    }
+
+    pub fn any_nickname_wanted(&self) -> bool {
+        !self.nickname_wanted.is_empty()
+    }
+
+    pub fn nicknames_wanted(&self) -> impl Iterator<Item = u32> + '_ {
+        self.nickname_wanted.keys().copied()
+    }
+
+    pub fn type_clause(&self) -> bool {
+        self.ruleset.type_clause
+    }
+
     pub fn no_items(&self) -> bool {
         self.ruleset.no_items
     }
@@ -296,6 +320,13 @@ impl Rules {
             RunEvent::SetModeFailed { .. } => self.set_mode_failed_said = true,
             RunEvent::Released { pid, .. } => {
                 self.to_release.remove(pid);
+                self.nickname_wanted.remove(pid);
+            }
+            RunEvent::NicknameWanted { pid, species_name } => {
+                self.nickname_wanted.insert(*pid, species_name.clone());
+            }
+            RunEvent::Nicknamed { pid, .. } => {
+                self.nickname_wanted.remove(pid);
             }
             RunEvent::Died { pid, .. } => {
                 self.dead.insert(*pid, DeadState::NotMovedYet);

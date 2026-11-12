@@ -1,5 +1,6 @@
 mod caps;
 mod gifts;
+mod nicknames_and_types;
 mod no_items_and_set_mode;
 
 use std::collections::BTreeSet;
@@ -11,7 +12,7 @@ use crate::event::{AreaRef, DeathCause, SourceRef};
 use crate::families::EvolutionFamilies;
 use crate::rules::{BattleStart, DeadMove, Rules, Verdict};
 use crate::storage::{InputBatch, RunInfo, RunStorage, Stamped, StorageError};
-use crate::view::{FeedEntry, FeedKind, Grave, LevelCapView, RunView};
+use crate::view::{FeedEntry, FeedKind, Grave, LevelCapView, NicknameWanted, RunView};
 use crate::{LiveGame, NewRun, Recorded, RunClock, RunEvent};
 
 /// How often the input stream is flushed to storage, so a crash loses at most this much.
@@ -54,6 +55,15 @@ pub struct RunEngine {
     cap_patched_for: Option<u8>,
     /// Whether no items is patched in since the game was booted.
     items_patched: bool,
+    /// Pokémon caught or given whose nickname hasn't been looked at yet.
+    names_to_check: BTreeSet<u32>,
+    /// Names the Player gave in the side panel, written at the next quiet moment.
+    names_given: Vec<(u32, String)>,
+    /// The party's PIDs at the type clause's last look, since the game was booted.
+    party_before: Option<Vec<u32>>,
+    /// Pokémon the type clause couldn't move since the game was booted; they
+    /// aren't tried again until it is booted afresh.
+    type_clause_failed: BTreeSet<u32>,
 }
 
 /// A battle in progress, as the engine saw it begin.
@@ -144,6 +154,10 @@ impl RunEngine {
             release_failed: BTreeSet::new(),
             cap_patched_for: None,
             items_patched: false,
+            names_to_check: BTreeSet::new(),
+            names_given: Vec::new(),
+            party_before: None,
+            type_clause_failed: BTreeSet::new(),
         }
     }
 
@@ -241,6 +255,12 @@ impl RunEngine {
                 }
                 None => {}
             }
+        }
+
+        if battle.is_none() && self.quiet(game) {
+            self.check_nicknames(game);
+            self.write_names_given(game);
+            self.keep_type_clause(game);
         }
 
         if self.clock.now_ms() - self.last_flush_ms >= FLUSH_EVERY_MS {
@@ -509,6 +529,11 @@ impl RunEngine {
         }
     }
 
+    /// A quiet moment on the overworld: no battle, no script, no menu over it.
+    fn quiet(&self, game: &mut impl LiveGame) -> bool {
+        game.at_safe_overworld_point() && game.script().status == ScriptStatus::Idle
+    }
+
     /// Stamps each change with this frame boundary, then applies it.
     fn apply(&mut self, changes: Vec<Change>, game: &mut impl LiveGame) {
         for change in changes {
@@ -553,6 +578,17 @@ impl RunEngine {
                 if let Some(cap) = self.view.level_cap.as_mut() {
                     cap.soft = true;
                 }
+            }
+            // Looked at on a resume too, in case the game closed before the look.
+            RunEvent::Caught { pid, .. } | RunEvent::Gift { pid, .. } if self.rules.must_nickname() => {
+                self.names_to_check.insert(*pid);
+            }
+            RunEvent::NicknameWanted { pid, species_name } => self.view.nickname_wanted.push(NicknameWanted {
+                pid: *pid,
+                species_name: species_name.clone(),
+            }),
+            RunEvent::Nicknamed { pid, .. } | RunEvent::Released { pid, .. } => {
+                self.view.nickname_wanted.retain(|w| w.pid != *pid);
             }
             _ => {}
         }

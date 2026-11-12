@@ -29,6 +29,11 @@ impl Keys {
     pub fn contains(self, other: Keys) -> bool {
         self.0 & other.0 == other.0
     }
+
+    /// These keys with `other` let go.
+    pub fn without(self, other: Keys) -> Keys {
+        Keys(self.0 & !other.0)
+    }
 }
 
 impl std::ops::BitOr for Keys {

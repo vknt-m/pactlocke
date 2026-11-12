@@ -14,6 +14,15 @@ pub struct RunView {
     pub graveyard: Vec<Grave>,
     /// The level cap now, in a Run with level caps.
     pub level_cap: Option<LevelCapView>,
+    /// Must nickname: the Pokémon the side panel asks the Player to name, oldest first.
+    pub nickname_wanted: Vec<NicknameWanted>,
+}
+
+/// A Pokémon left with its species name, waiting for the Player to name it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NicknameWanted {
+    pub pid: u32,
+    pub species_name: String,
 }
 
 /// The current level cap, as the side panel shows it.
@@ -286,6 +295,43 @@ impl FeedEntry {
                 "Set mode: the battle style was changed, so it is set back to Set".to_owned(),
             ),
             RunEvent::SetModeFailed { reason } => (FeedKind::Problem, format!("Couldn't force set mode: {reason}")),
+            RunEvent::NicknameWanted { species_name, .. } => (
+                FeedKind::Run,
+                format!("Must nickname: {species_name} needs a nickname, so name it in the side panel"),
+            ),
+            RunEvent::Nicknamed { species_name, name, .. } => (FeedKind::Run, format!("Named {species_name} {name}")),
+            RunEvent::NicknameRefused {
+                species_name,
+                name,
+                reason,
+                ..
+            } => (
+                FeedKind::Problem,
+                format!("Couldn't name {species_name} {name:?}: {reason}"),
+            ),
+            RunEvent::TypeClauseMoved {
+                name,
+                holder,
+                type_name,
+                box_number,
+                ..
+            } => (
+                FeedKind::Block,
+                format!(
+                    "Type clause: your {holder} is the {type_name} type in your party, so {name} went to box {box_number}"
+                ),
+            ),
+            RunEvent::TypeClauseFailed {
+                name,
+                type_name,
+                reason,
+                ..
+            } => (
+                FeedKind::Violation,
+                format!(
+                    "Violation: {name} is a second {type_name} type in your party but couldn't be moved to the PC: {reason}"
+                ),
+            ),
             RunEvent::SoftCap { reason } => (
                 FeedKind::Run,
                 format!(

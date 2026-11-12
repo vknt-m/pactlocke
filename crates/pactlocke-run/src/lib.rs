@@ -22,9 +22,9 @@ pub use engine::RunEngine;
 pub use event::{AreaRef, DeathCause, Recorded, RunEvent};
 pub use file::{RunFile, RunId, RunLibrary, RunSummary};
 pub use live::LiveGame;
-pub use running::RunningGame;
+pub use running::{RunCommand, RunningGame};
 pub use storage::{InputBatch, MemoryStorage, RunInfo, RunStorage, Stamped, StorageError, StoredRun};
-pub use view::{FeedEntry, FeedKind, Grave, LevelCapView, RunView};
+pub use view::{FeedEntry, FeedKind, Grave, LevelCapView, NicknameWanted, RunView};
 
 use pactlocke_game::LevelCap;
 use serde::{Deserialize, Serialize};
@@ -61,6 +61,13 @@ pub struct Ruleset {
     /// The battle style is forced to Set.
     #[serde(default)]
     pub set_mode: bool,
+    /// "Give a nickname?" can't be declined, and a Pokémon left with its
+    /// species name is named from the side panel.
+    #[serde(default)]
+    pub must_nickname: bool,
+    /// Only one Pokémon of each primary type in the party at a time.
+    #[serde(default)]
+    pub type_clause: bool,
 }
 
 fn allowed() -> bool {
@@ -79,6 +86,8 @@ impl Default for Ruleset {
             level_caps: None,
             no_items: false,
             set_mode: false,
+            must_nickname: false,
+            type_clause: false,
         }
     }
 }

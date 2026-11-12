@@ -17,6 +17,7 @@ pub const SPECIES_INFO: u32 = 0x0800_3000;
 pub const SPECIES_NAMES: u32 = 0x0800_4000;
 pub const EVOLUTION_TABLE: u32 = 0x0800_5000;
 pub const TRAINERS: u32 = 0x0800_7000;
+pub const TYPE_NAMES: u32 = 0x0800_8000;
 /// Where `put_trainer`-style helpers put each trainer's party.
 pub const TRAINER_PARTIES: u32 = 0x0800_C000;
 
@@ -80,6 +81,8 @@ species_names = 0x08004000
 evolution_table = 0x08005000
 items = 0x08001000
 trainers = 0x08007000
+type_names = 0x08008000
+message_buffer = 0x02021D18
 
 [layout]
 party_slot_size = 100
@@ -131,6 +134,7 @@ trainer_party_size = 32
 trainer_party = 36
 trainer_mon_level = 2
 trainer_mon_sizes = [8, 16, 8, 16]
+type_name_length = 7
 balls_pocket = 0x430
 balls_pocket_slots = 13
 dead_box = 14
@@ -169,6 +173,8 @@ battle_script_pointer = 0x02023D74
 command_table = 0x08002000
 command = 0x0802DD39
 battle_communication = 0x02023E82
+field_yes_no = [0x08006500]
+question = "give a nickname"
 
 [areas]
 0x58 = "Pallet Town"

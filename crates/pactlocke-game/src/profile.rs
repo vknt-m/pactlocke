@@ -117,6 +117,10 @@ pub struct Symbols {
     pub items: u32,
     /// The trainer table, one entry per trainer id.
     pub trainers: u32,
+    /// The type names table, one fixed-length name per type.
+    pub type_names: u32,
+    /// Where the game expands the message it is showing (`gStringVar4`).
+    pub message_buffer: u32,
 }
 
 /// How Pokémon, battlers, items and the PC are laid out.
@@ -184,6 +188,8 @@ pub struct Layout {
     pub trainer_mon_level: u32,
     /// A trainer's party entry size for each value of its party flags (0 to 3).
     pub trainer_mon_sizes: Vec<u32>,
+    /// One type name's fixed length in the type names table.
+    pub type_name_length: u32,
     /// In save block 1: the Bag's Poké Balls pocket, 4 bytes a slot (item, quantity).
     pub balls_pocket: u32,
     pub balls_pocket_slots: u8,
@@ -239,6 +245,12 @@ pub enum Method {
         command_table: u32,
         command: u32,
         battle_communication: u32,
+        /// Script positions where a field yes/no box waits for its answer.
+        #[serde(default)]
+        field_yes_no: Vec<u32>,
+        /// Words that mark the field yes/no question this filter answers.
+        #[serde(default)]
+        question: Option<String>,
     },
     /// The game's own option does it; the Player turns it on and the lock checks it.
     Native { option: String, value: String },

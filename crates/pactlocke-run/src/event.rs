@@ -133,6 +133,38 @@ pub enum RunEvent {
     SetModeForced { again: bool },
     /// Set mode couldn't be forced on this game. Said once per Run.
     SetModeFailed { reason: String },
+    /// Must nickname: a Pokémon was left with its species name, so the side
+    /// panel asks the Player for one.
+    NicknameWanted { pid: u32, species_name: String },
+    /// The Player named it from the side panel.
+    Nicknamed {
+        pid: u32,
+        species_name: String,
+        name: String,
+    },
+    /// A name the Player gave couldn't be used.
+    NicknameRefused {
+        pid: u32,
+        species_name: String,
+        name: String,
+        reason: String,
+    },
+    /// The type clause: a second Pokémon of a primary type in the party was
+    /// moved to the PC. `holder` has that type in the party.
+    TypeClauseMoved {
+        pid: u32,
+        name: String,
+        holder: String,
+        type_name: String,
+        box_number: u8,
+    },
+    /// A Violation: the type clause couldn't move a Pokémon out of the party.
+    TypeClauseFailed {
+        pid: u32,
+        name: String,
+        type_name: String,
+        reason: String,
+    },
 }
 
 /// A Gift or Static source, as the log keeps it.

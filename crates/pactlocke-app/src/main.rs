@@ -14,6 +14,7 @@ mod run_panel;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 use eframe::egui;
@@ -23,7 +24,7 @@ use pactlocke_game::{
 };
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
-    NewRun, Ruleset, RunClock, RunEngine, RunLibrary, RunSummary, RunView, RunningGame, SystemRunClock,
+    NewRun, Ruleset, RunClock, RunCommand, RunEngine, RunLibrary, RunSummary, RunView, RunningGame, SystemRunClock,
 };
 
 /// Frames the smoke launch draws before it closes itself.
@@ -93,6 +94,8 @@ enum Play {
     Run {
         emulator: Emulator<RunningGame<MgbaCore>>,
         view: Arc<Mutex<RunView>>,
+        /// What the side panel asks of the Run, carried out at a frame boundary.
+        commands: Sender<RunCommand>,
     },
 }
 
@@ -325,6 +328,8 @@ impl PactlockeApp {
                 Rule::FaintIsDead,
                 Rule::NoItems,
                 Rule::SetMode,
+                Rule::MustNickname,
+                Rule::TypeClause,
             ]
             .into_iter()
             .filter_map(|rule| unavailable_reason(capabilities.get(rule)).map(|why| (rule, why)))
@@ -437,8 +442,18 @@ impl PactlockeApp {
         let name = engine.info().name.clone();
         let running = RunningGame::new(ProfileGame::new(profile, rom, core), engine);
         let view = running.view();
+        let commands = running.commands();
         let (emulator, audio) = self.spawn(running);
-        Playing::new(Play::Run { emulator, view }, audio, name, identity)
+        Playing::new(
+            Play::Run {
+                emulator,
+                view,
+                commands,
+            },
+            audio,
+            name,
+            identity,
+        )
     }
 
     /// Stops the game. A Run's file has finished writing when this returns.
@@ -606,6 +621,18 @@ impl PactlockeApp {
                 "Set mode: the battle style is kept on Set",
                 draft.unavailable.get(&Rule::SetMode).cloned(),
             );
+            rule_checkbox(
+                ui,
+                &mut ruleset.must_nickname,
+                "Must nickname: every catch and Gift gets a nickname",
+                draft.unavailable.get(&Rule::MustNickname).cloned(),
+            );
+            rule_checkbox(
+                ui,
+                &mut ruleset.type_clause,
+                "Type clause: one Pokémon of each primary type in your party",
+                draft.unavailable.get(&Rule::TypeClause).cloned(),
+            );
             level_caps_editor(ui, draft);
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -716,9 +743,12 @@ impl eframe::App for PactlockeApp {
                 .resizable(true)
                 .default_size(360.0)
                 .show(ui, |ui| match &playing.play {
-                    Play::Run { view, .. } => {
+                    Play::Run { view, commands, .. } => {
                         let view = view.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                        run_panel::show(ui, &view);
+                        if let Some(command) = run_panel::show(ui, &view) {
+                            // The emulator thread only stops when the Run is closed.
+                            let _ = commands.send(command);
+                        }
                     }
                     Play::Free(_) => rom_report::rules_panel(ui, &playing.identity),
                 });

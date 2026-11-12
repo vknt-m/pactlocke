@@ -24,6 +24,8 @@ const NICKNAME: u32 = 8;
 const SET_OPTION: u32 = 9;
 const RELEASE_FROM_PARTY: u32 = 10;
 const RELEASE_FROM_PC: u32 = 11;
+const PC_NICKNAME: u32 = 12;
+const NICKNAME_YES: u32 = 13;
 
 const PC_BOXES: u8 = 14;
 const PC_BOX_SLOTS: u8 = 30;
@@ -49,6 +51,10 @@ pub struct FakeGame {
     pub has_item_ban: bool,
     /// Whether the game has a battle style option for set mode.
     pub has_set_mode: bool,
+    /// Whether "Give a nickname?" is up with its YES/NO box.
+    pub nickname_prompt_up: bool,
+    /// Type names by type; a type not listed is called `TYPE <number>`.
+    pub type_names: BTreeMap<u8, String>,
     /// Option settings by name, such as `battle_style = "shift"`.
     pub options: BTreeMap<String, String>,
     /// The settings each option has.
@@ -70,6 +76,8 @@ pub struct FakeGame {
     pub level_cap: Option<u8>,
     pub wild_items_banned: bool,
     pub bag_locked: bool,
+    /// Times the nickname prompt's cursor was kept on YES.
+    pub nickname_cursor_kept: u32,
     /// Battler positions given a perish count of zero; the game faints them
     /// at the end of the turn.
     pub perishing: Vec<u8>,
@@ -95,6 +103,8 @@ impl Default for FakeGame {
             has_cap_sites: true,
             has_item_ban: true,
             has_set_mode: true,
+            nickname_prompt_up: false,
+            type_names: BTreeMap::new(),
             options: BTreeMap::from([("battle_style".to_owned(), "shift".to_owned())]),
             option_values: BTreeMap::from([("battle_style".to_owned(), vec!["shift".to_owned(), "set".to_owned()])]),
             trainer_id: 0,
@@ -108,6 +118,7 @@ impl Default for FakeGame {
             level_cap: None,
             wild_items_banned: false,
             bag_locked: false,
+            nickname_cursor_kept: 0,
             perishing: Vec::new(),
         }
     }
@@ -167,6 +178,18 @@ impl FakeGame {
                 NICKNAME => {
                     self.party[usize::from(bytes[0])].nickname = String::from_utf8(bytes[1..].to_vec()).unwrap();
                 }
+                PC_NICKNAME => {
+                    let (box_number, slot) = (bytes[0], bytes[1]);
+                    let name = String::from_utf8(bytes[2..].to_vec()).unwrap();
+                    if let Some(stored) = self
+                        .pc
+                        .iter_mut()
+                        .find(|s| (s.box_number, s.slot) == (box_number, slot))
+                    {
+                        stored.pokemon.nickname = name;
+                    }
+                }
+                NICKNAME_YES => self.nickname_cursor_kept += 1,
                 SET_OPTION => {
                     let text = String::from_utf8(bytes.clone()).unwrap();
                     let (name, value) = text.split_once('=').unwrap();
@@ -235,6 +258,13 @@ impl Game for FakeGame {
         self.primary_types.get(&species).copied().unwrap_or(0)
     }
 
+    fn type_name(&mut self, type_id: u8) -> String {
+        self.type_names
+            .get(&type_id)
+            .cloned()
+            .unwrap_or_else(|| format!("TYPE {type_id}"))
+    }
+
     fn species_name(&mut self, species: u16) -> String {
         self.species_names
             .get(&species)
@@ -263,6 +293,10 @@ impl Game for FakeGame {
 
     fn at_safe_overworld_point(&mut self) -> bool {
         self.safe_point && self.battle.is_none()
+    }
+
+    fn nickname_prompt_up(&mut self) -> bool {
+        self.nickname_prompt_up
     }
 
     fn holds_poke_balls(&mut self) -> bool {
@@ -336,6 +370,10 @@ impl Game for FakeGame {
         Ok(vec![fake_write(RELEASE_FROM_PC, vec![box_number, slot])])
     }
 
+    fn dead_box(&mut self) -> u8 {
+        DEAD_BOX
+    }
+
     fn move_to_dead_box(&mut self, party_slot: u8) -> Actions {
         self.move_to_box(party_slot, DEAD_BOX)
     }
@@ -346,6 +384,20 @@ impl Game for FakeGame {
         let mut bytes = vec![party_slot];
         bytes.extend_from_slice(name.as_bytes());
         Ok(vec![fake_write(NICKNAME, bytes)])
+    }
+
+    fn write_pc_nickname(&mut self, box_number: u8, slot: u8, name: &str) -> Actions {
+        if !self.pc.iter().any(|s| (s.box_number, s.slot) == (box_number, slot)) {
+            return Err(GameError::NoSuchSlot(slot));
+        }
+        text::encode(name, NICKNAME_LENGTH).map_err(GameError::BadName)?;
+        let mut bytes = vec![box_number, slot];
+        bytes.extend_from_slice(name.as_bytes());
+        Ok(vec![fake_write(PC_NICKNAME, bytes)])
+    }
+
+    fn keep_nickname_cursor_on_yes(&mut self) -> Actions {
+        Ok(vec![fake_write(NICKNAME_YES, vec![0])])
     }
 
     fn force_set_mode(&mut self) -> Actions {

@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use pactlocke_emu::{CoreAdapter, Keys};
 use pactlocke_game::{Game, LevelCap, ProfileGame, ProfileStore, RomIdentity};
 use pactlocke_mgba::MgbaCore;
-use pactlocke_run::{FeedKind, MemoryStorage, NewRun, Ruleset, RunEngine, RunningGame, SystemRunClock};
+use pactlocke_run::{FeedKind, MemoryStorage, NewRun, Ruleset, RunCommand, RunEngine, RunningGame, SystemRunClock};
 
 const FIRERED_FILE: &str = "Pokemon - FireRed Version (USA).gba";
 
@@ -843,6 +843,150 @@ fn with_no_items_only_balls_work_in_a_wild_battle_and_items_work_outside_battle(
     // ...while a Poké Ball still throws.
     d.play("p A 60\np R 30\np R 30\np A 40\np A 120");
     assert_eq!(d.quantity(BALLS_POCKET, POKE_BALL), 4, "the ball was thrown");
+}
+
+/// YES on "Give a nickname?", then the naming screen's OK with the name left
+/// blank, which the game keeps as the species name.
+const NAMING_LEFT_BLANK: &str = "p A 120\np S 30\np A 180";
+
+/// BAG, the Poké Balls pocket, the first ball, USE: from FIGHT, then again
+/// from BAG after a ball the wild Pokémon broke out of.
+const THROW_FIRST_BALL: &str = "p R 10\np A 60\np R 30\np R 30\np A 40\np A 120";
+const THROW_AGAIN: &str = "p A 60\np A 40\np A 120";
+
+/// Throws balls at a wild Pokémon on 1 HP (test setup) until it is caught,
+/// then mashes B until "Give a nickname?" is up.
+#[track_caller]
+fn catch_until_the_nickname_prompt(d: &mut Driver) {
+    let wild = BATTLE_MONS + BATTLE_MON_SIZE + BATTLE_MON_HP;
+    d.game.write(wild, &1u16.to_le_bytes());
+    d.play(THROW_FIRST_BALL);
+    for _ in 0..10 {
+        for i in 0..4000 {
+            if d.game.game_mut().nickname_prompt_up() {
+                return;
+            }
+            if i > 200 && d.at_action_menu() {
+                break;
+            }
+            d.frame(if i % 16 < 3 { Keys::B } else { Keys::NONE });
+        }
+        assert!(d.in_battle(), "the battle ended without the nickname prompt");
+        d.game.write(wild, &1u16.to_le_bytes());
+        d.play(THROW_AGAIN);
+    }
+    panic!("the wild Pokémon was never caught");
+}
+
+/// Names the one Pokémon the side panel asks about, as the side panel does.
+fn name_from_the_side_panel(d: &mut Driver, name: &str) -> u32 {
+    let wanted = d.game.engine().view().nickname_wanted.clone();
+    assert_eq!(wanted.len(), 1, "{wanted:?}");
+    d.game
+        .commands()
+        .send(RunCommand::Nickname {
+            pid: wanted[0].pid,
+            name: name.into(),
+        })
+        .unwrap();
+    d.play("w 2");
+    wanted[0].pid
+}
+
+#[test]
+fn must_nickname_names_the_starter_and_a_catch_and_the_type_clause_boxes_a_second_normal() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        return;
+    };
+    let mut d = firered_run_with(
+        rom,
+        Ruleset {
+            must_nickname: true,
+            type_clause: true,
+            ..Ruleset::default()
+        },
+    );
+
+    // The starter's "Do you want to give a nickname…?" outlasts the
+    // script's 1500 frames of B, which decline it in a game without the rule.
+    d.play(FR_STARTER);
+    assert!(
+        d.game.game_mut().nickname_prompt_up(),
+        "B can't decline the starter's nickname"
+    );
+    dump_screen(&d.game, "starter-nickname-prompt");
+    d.play(NAMING_LEFT_BLANK);
+    d.play("m B 1500");
+    let starter = d.game.game_mut().party()[0].clone();
+    assert_eq!(
+        starter.nickname,
+        d.game.game_mut().species_name(starter.species),
+        "left blank"
+    );
+    let pid = name_from_the_side_panel(&mut d, "NIBBLES");
+    assert_eq!(pid, starter.pid);
+    let named = d.game.game_mut().party()[0].clone();
+    assert_eq!(named.nickname, "NIBBLES");
+    assert_eq!(
+        named.species, starter.species,
+        "no Bad Egg: the encrypted data is untouched"
+    );
+    assert!(d.game.engine().view().nickname_wanted.is_empty());
+
+    // The rival, then Route 1 with Poké Balls.
+    d.fast_text();
+    d.play("h D 64\nw 60");
+    d.until_action_menu(Keys::A, 3000);
+    rivals_pokemon_on_1_hp(&mut d);
+    d.until_battle_over(Keys::A, 6000);
+    d.play(FR_TO_ROUTE_1);
+    d.give(BALLS_POCKET, POKE_BALL, 20);
+
+    // A catch: the battle's "Give a nickname?" can't be declined either.
+    d.walk_in_grass(6000);
+    d.until_action_menu(Keys::B, 3000);
+    catch_until_the_nickname_prompt(&mut d);
+    d.play("m B 600");
+    assert!(
+        d.game.game_mut().nickname_prompt_up(),
+        "B can't decline the catch's nickname"
+    );
+    dump_screen(&d.game, "catch-nickname-prompt");
+    d.play(NAMING_LEFT_BLANK);
+    d.until_battle_over(Keys::B, 3000);
+    d.play("w 60");
+    let caught = name_from_the_side_panel(&mut d, "BIRDY");
+    let party = d.game.game_mut().party();
+    assert_eq!(party.len(), 2, "a Normal type joins a party whose only type is GRASS");
+    assert_eq!((party[1].pid, party[1].nickname.as_str()), (caught, "BIRDY"));
+
+    // A second Normal type (Route 1 has only PIDGEY and RATTATA) goes to box 1.
+    d.walk_in_grass(6000);
+    d.until_action_menu(Keys::B, 3000);
+    catch_until_the_nickname_prompt(&mut d);
+    d.play(NAMING_LEFT_BLANK);
+    d.until_battle_over(Keys::B, 3000);
+    d.play("w 60");
+    assert_eq!(
+        d.game.game_mut().party().len(),
+        2,
+        "the second Normal type left the party"
+    );
+    let blocks = d.feed(FeedKind::Block);
+    assert!(
+        blocks[0].starts_with("Type clause: your BIRDY is the NORMAL type in your party, so ")
+            && blocks[0].ends_with(" went to box 1"),
+        "{blocks:?}"
+    );
+    // And it is named where it is, in the PC.
+    let boxed = name_from_the_side_panel(&mut d, "SECOND");
+    let pc = d.game.game_mut().pc();
+    let stored = pc.iter().find(|s| s.pokemon.pid == boxed).expect("in the PC");
+    assert_eq!((stored.box_number, stored.pokemon.nickname.as_str()), (1, "SECOND"));
+    for entry in d.game.engine().view().feed.iter().rev() {
+        eprintln!("feed: {}", entry.text);
+    }
 }
 
 /// Writes the screen as a PPM under `target/acceptance/` for a person to look at.

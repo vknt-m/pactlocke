@@ -20,6 +20,9 @@ const SUBSTRUCTURE_ORDERS: [&[u8; 4]; 24] = [
 const SUBSTRUCTURE_SIZE: usize = 12;
 const PARTY_SIZE: u8 = 6;
 
+/// How much of the message buffer is searched for a question's words.
+const MESSAGE_LENGTH: usize = 0x200;
+
 /// A game read and steered through its Game Profile.
 pub struct ProfileGame<M> {
     profile: Arc<GameProfile>,
@@ -191,6 +194,28 @@ impl<M: Memory> ProfileGame<M> {
         (moved, changes)
     }
 
+    /// Must nickname's key filter, from the Game Profile.
+    fn nickname_filter(&self) -> Option<NicknameFilter> {
+        match self.profile.rules.must_nickname.clone()? {
+            Method::KeyFilter {
+                battle_script_pointer,
+                command_table,
+                command,
+                battle_communication,
+                field_yes_no,
+                question,
+            } => Some(NicknameFilter {
+                battle_script_pointer,
+                command_table,
+                command,
+                battle_communication,
+                field_yes_no,
+                question,
+            }),
+            _ => None,
+        }
+    }
+
     fn check_party_slot(&mut self, slot: u8) -> Result<(), GameError> {
         if slot < self.party_count() {
             Ok(())
@@ -349,6 +374,12 @@ impl<M: Memory> Game for ProfileGame<M> {
         self.u8(addr)
     }
 
+    fn type_name(&mut self, type_id: u8) -> String {
+        let length = self.profile.layout.type_name_length;
+        let addr = self.profile.symbols.type_names + u32::from(type_id) * length;
+        text::decode(&self.bytes(addr, length as usize)).trim_end().to_owned()
+    }
+
     fn species_name(&mut self, species: u16) -> String {
         let length = self.profile.layout.species_name_length;
         let addr = self.profile.symbols.species_names + u32::from(species) * length;
@@ -382,6 +413,40 @@ impl<M: Memory> Game for ProfileGame<M> {
     fn at_safe_overworld_point(&mut self) -> bool {
         let callback = self.u32(self.profile.symbols.main_callback2) & !1;
         callback == self.profile.symbols.overworld_callback & !1 && !self.in_battle()
+    }
+
+    fn nickname_prompt_up(&mut self) -> bool {
+        let Some(NicknameFilter {
+            battle_script_pointer,
+            command_table,
+            command,
+            battle_communication,
+            field_yes_no,
+            question,
+        }) = self.nickname_filter()
+        else {
+            return false;
+        };
+        if self.in_battle() {
+            // The battle script's current byte is its command's index.
+            let instruction = self.u32(battle_script_pointer);
+            let index = self.u8(instruction);
+            let running = self.u32(command_table + u32::from(index) * 4);
+            // The command's first state draws the box, its second waits on it.
+            return running == command && self.u8(battle_communication) == 1;
+        }
+        let script = self.script();
+        let waiting = script.status == ScriptStatus::Waiting
+            && script.position.is_some_and(|position| field_yes_no.contains(&position));
+        let Some(question) = question.filter(|_| waiting && self.at_safe_overworld_point()) else {
+            return false;
+        };
+        let Ok(mut word) = text::encode(&question, question.chars().count()) else {
+            return false;
+        };
+        word.retain(|&b| b != 0xFF);
+        let message = self.bytes(self.profile.symbols.message_buffer, MESSAGE_LENGTH);
+        message.windows(word.len()).any(|w| w == word)
     }
 
     fn holds_poke_balls(&mut self) -> bool {
@@ -524,6 +589,10 @@ impl<M: Memory> Game for ProfileGame<M> {
         }])
     }
 
+    fn dead_box(&mut self) -> u8 {
+        self.profile.layout.dead_box
+    }
+
     fn move_to_dead_box(&mut self, party_slot: u8) -> Actions {
         self.move_to_box(party_slot, self.profile.layout.dead_box)
     }
@@ -535,6 +604,38 @@ impl<M: Memory> Game for ProfileGame<M> {
         Ok(vec![Change::Write {
             addr: self.party_slot_addr(party_slot) + layout.nickname,
             bytes,
+        }])
+    }
+
+    fn write_pc_nickname(&mut self, box_number: u8, slot: u8, name: &str) -> Actions {
+        let layout = self.profile.layout.clone();
+        if !(1..=layout.pc_boxes).contains(&box_number) {
+            return Err(GameError::NoSuchBox(box_number));
+        }
+        if !(1..=layout.pc_box_slots).contains(&slot) {
+            return Err(GameError::NoSuchSlot(slot));
+        }
+        let addr = self.box_slot_addr(box_number - 1, slot - 1);
+        if !self.has_species(addr) {
+            return Err(GameError::NoSuchSlot(slot));
+        }
+        let bytes = text::encode(name, layout.nickname_length as usize).map_err(GameError::BadName)?;
+        Ok(vec![Change::Write {
+            addr: addr + layout.nickname,
+            bytes,
+        }])
+    }
+
+    fn keep_nickname_cursor_on_yes(&mut self) -> Actions {
+        let filter = self.nickname_filter().ok_or(GameError::NoMethod("must nickname"))?;
+        let cursor = filter.battle_communication + 1;
+        // The field's YES/NO box opens on YES, and DOWN is what moves it.
+        if !self.in_battle() || self.u8(cursor) == 0 {
+            return Ok(Vec::new());
+        }
+        Ok(vec![Change::Write {
+            addr: cursor,
+            bytes: vec![0],
         }])
     }
 
@@ -566,4 +667,14 @@ impl<M: Memory> Game for ProfileGame<M> {
             bytes: vec![(current & !def.mask) | setting],
         }])
     }
+}
+
+/// Where must nickname's key filter looks, in battle and on the overworld.
+struct NicknameFilter {
+    battle_script_pointer: u32,
+    command_table: u32,
+    command: u32,
+    battle_communication: u32,
+    field_yes_no: Vec<u32>,
+    question: Option<String>,
 }

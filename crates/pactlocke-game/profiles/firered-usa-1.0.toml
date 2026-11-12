@@ -33,6 +33,8 @@ species_names = 0x08245EE0              # gSpeciesNames
 evolution_table = 0x08259754            # gEvolutionTable
 items = 0x083DB028
 trainers = 0x0823EAC8                   # gTrainers
+type_names = 0x0824F1A0                 # gTypeNames
+message_buffer = 0x02021D18             # gStringVar4
 
 [layout]
 # How a Pokémon is stored (pret's struct Pokemon / BoxPokemon).
@@ -89,6 +91,7 @@ trainer_party_size = 32
 trainer_party = 36
 trainer_mon_level = 2
 trainer_mon_sizes = [8, 16, 8, 16]
+type_name_length = 7
 balls_pocket = 0x430                   # in save block 1: gBagPockets' Poké Balls
 balls_pocket_slots = 13
 dead_box = 14
@@ -141,6 +144,11 @@ battle_script_pointer = 0x02023D74   # gBattlescriptCurrInstr
 command_table = 0x0825011C           # gBattleScriptingCommandsTable
 command = 0x0802DD39                 # Cmd_trygivecaughtmonnick
 battle_communication = 0x02023E82
+# On the overworld (a Gift's "Do you want to give a nickname…?"): the shared MSGBOX_YESNO script
+# waits here, just after its yesnobox, while its box is up. "give a nickname" leaves out the
+# Name Rater's "rate the nicknames".
+field_yes_no = [0x081A4E65]
+question = "give a nickname"
 
 [areas]
 0x58 = "Pallet Town"
