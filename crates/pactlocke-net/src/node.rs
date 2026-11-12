@@ -71,6 +71,8 @@ pub struct LobbyView {
     pub invite_link: Option<String>,
     pub run: Option<RunAdvert>,
     pub players: Vec<LobbyPlayer>,
+    /// The Host's: every Player who has said hello, by key and name.
+    pub roster: Vec<(PeerKey, String)>,
     /// A joiner's own ROM against the Run's game, once both are known.
     pub rom_matches: Option<bool>,
     /// Something went wrong: what to tell the Player.
@@ -195,6 +197,8 @@ impl<C> Drop for Worker<C> {
 
 enum HostCommand {
     NewInvite,
+    Send(Option<PeerKey>, Message),
+    Lock,
     Stop,
 }
 
@@ -203,6 +207,7 @@ enum HostCommand {
 pub struct HostNode {
     worker: Worker<HostCommand>,
     addrs: Arc<Mutex<Vec<SocketAddr>>>,
+    inbox: Arc<Mutex<Vec<(PeerKey, Message)>>>,
 }
 
 /// What the Host's connections share.
@@ -211,6 +216,8 @@ struct Shared {
     lobby: Arc<Mutex<HostLobby>>,
     view: Arc<Mutex<LobbyView>>,
     peers: Arc<Mutex<BTreeMap<PeerKey, Peer>>>,
+    /// Setup and log messages from Players, for the Host's app to read.
+    inbox: Arc<Mutex<Vec<(PeerKey, Message)>>>,
     started: Instant,
 }
 
@@ -234,14 +241,17 @@ impl HostNode {
         let view = Arc::new(Mutex::new(LobbyView {
             run: Some(lobby.run().clone()),
             players: lobby.players(),
+            roster: lobby.roster(),
             ..LobbyView::default()
         }));
         let addrs = Arc::new(Mutex::new(Vec::new()));
         let (commands, receiver) = mpsc::unbounded_channel();
+        let inbox = Arc::new(Mutex::new(Vec::new()));
         let shared = Shared {
             lobby: Arc::new(Mutex::new(lobby)),
             view: view.clone(),
             peers: Arc::default(),
+            inbox: inbox.clone(),
             started: Instant::now(),
         };
         let known = addrs.clone();
@@ -257,7 +267,23 @@ impl HostNode {
                 thread: Some(thread),
             },
             addrs,
+            inbox,
         }
+    }
+
+    /// Setup and log messages from Players since the last call, oldest first.
+    pub fn take_inbox(&self) -> Vec<(PeerKey, Message)> {
+        std::mem::take(&mut lock(&self.inbox))
+    }
+
+    /// A setup or log message to one Player, or to everyone in the lobby.
+    pub fn send(&self, to: Option<PeerKey>, message: Message) {
+        self.worker.send(HostCommand::Send(to, message));
+    }
+
+    /// The Ruleset and roster locked: from now on only the roster connects.
+    pub fn lock_roster(&self) {
+        self.worker.send(HostCommand::Lock);
     }
 
     pub fn view(&self) -> LobbyView {
@@ -321,6 +347,14 @@ async fn host(
                     let link = invite(&shared);
                     publish(&shared.view, |v| v.invite_link = Some(link));
                 }
+                Some(HostCommand::Send(to, message)) => {
+                    let actions = lock(&shared.lobby).send(to, &message);
+                    carry_out(actions, &shared);
+                }
+                Some(HostCommand::Lock) => {
+                    lock(&shared.lobby).lock();
+                    publish(&shared.view, |v| v.invite_link = None);
+                }
                 Some(HostCommand::Stop) | None => break,
             },
         }
@@ -335,6 +369,10 @@ fn carry_out(actions: Vec<HostAction>, shared: &Shared) {
         let peers = lock(&shared.peers);
         for action in actions {
             let (to, outgoing) = match action {
+                HostAction::Deliver { from, message } => {
+                    lock(&shared.inbox).push((from, message));
+                    continue;
+                }
                 HostAction::Send { to, bytes } => (to, Outgoing::Send(bytes)),
                 HostAction::Close { peer, bytes, .. } => (peer, Outgoing::SendAndFinish(bytes)),
             };
@@ -345,8 +383,14 @@ fn carry_out(actions: Vec<HostAction>, shared: &Shared) {
             }
         }
     }
-    let players = lock(&shared.lobby).players();
-    publish(&shared.view, |v| v.players = players);
+    let (players, roster) = {
+        let lobby = lock(&shared.lobby);
+        (lobby.players(), lobby.roster())
+    };
+    publish(&shared.view, |v| {
+        v.players = players;
+        v.roster = roster;
+    });
 }
 
 async fn serve_player(
@@ -436,6 +480,7 @@ async fn serve_player(
 
 enum JoinCommand {
     RomPicked(String),
+    Send(Message),
     Stop,
 }
 
@@ -443,6 +488,7 @@ enum JoinCommand {
 /// lobby and waits for the network to shut down.
 pub struct JoinNode {
     worker: Worker<JoinCommand>,
+    inbox: Arc<Mutex<Vec<Message>>>,
 }
 
 impl JoinNode {
@@ -455,11 +501,12 @@ impl JoinNode {
     /// The same, also trying these direct addresses (a Host on this machine, in tests).
     pub fn start_with(key: [u8; 32], lobby: JoinLobby, relays: Relays, direct: Vec<SocketAddr>) -> Self {
         let view = Arc::new(Mutex::new(LobbyView::default()));
+        let inbox = Arc::new(Mutex::new(Vec::new()));
         let (commands, receiver) = mpsc::unbounded_channel();
-        let shown = view.clone();
+        let (shown, received) = (view.clone(), inbox.clone());
         let thread = std::thread::Builder::new()
             .name("lobby join".into())
-            .spawn(move || runtime().block_on(join(key, lobby, relays, direct, shown, receiver)))
+            .spawn(move || runtime().block_on(join(key, lobby, relays, direct, shown, received, receiver)))
             .expect("a thread for the lobby");
         Self {
             worker: Worker {
@@ -468,7 +515,18 @@ impl JoinNode {
                 stop: || JoinCommand::Stop,
                 thread: Some(thread),
             },
+            inbox,
         }
+    }
+
+    /// The Host's setup and log messages since the last call, oldest first.
+    pub fn take_inbox(&self) -> Vec<Message> {
+        std::mem::take(&mut lock(&self.inbox))
+    }
+
+    /// A setup or log message to the Host.
+    pub fn send(&self, message: Message) {
+        self.worker.send(JoinCommand::Send(message));
     }
 
     pub fn view(&self) -> LobbyView {
@@ -500,6 +558,7 @@ async fn join(
     relays: Relays,
     direct: Vec<SocketAddr>,
     view: Arc<Mutex<LobbyView>>,
+    inbox: Arc<Mutex<Vec<Message>>>,
     mut commands: mpsc::UnboundedReceiver<JoinCommand>,
 ) {
     let fail = |why: String| publish(&view, |v| v.error = Some(why));
@@ -540,6 +599,7 @@ async fn join(
                 for reply in lobby.receive(&bytes) {
                     let _ = write_frame(&mut send, &reply).await;
                 }
+                lock(&inbox).extend(lobby.take_inbox());
                 publish_join(&view, &lobby);
             }
             command = commands.recv() => match command {
@@ -548,6 +608,9 @@ async fn join(
                         let _ = write_frame(&mut send, &message).await;
                     }
                     publish_join(&view, &lobby);
+                }
+                Some(JoinCommand::Send(message)) => {
+                    let _ = write_frame(&mut send, &lobby.send(&message)).await;
                 }
                 Some(JoinCommand::Stop) | None => break,
             },

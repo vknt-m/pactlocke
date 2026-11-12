@@ -245,3 +245,31 @@ fn names_are_shown_without_control_or_direction_characters() {
     net.connect(BLUE, blue);
     assert_eq!(net.host.players()[1].name, "Blue");
 }
+
+#[test]
+fn setup_and_log_messages_cross_the_lobby_unread() {
+    let mut net = MemoryNet::new(host_lobby());
+    let blue = joiner(&mut net, "Blue", Some(FIRERED));
+    net.connect(BLUE, blue);
+
+    let bytes = net.joiner(BLUE).send(&Message::Setup(b"ready".to_vec()));
+    net.send_raw(BLUE, bytes);
+    assert_eq!(net.host_inbox(), vec![(BLUE, Message::Setup(b"ready".to_vec()))]);
+
+    net.host_sends(None, &Message::Log(b"entry".to_vec()));
+    assert_eq!(net.joiner_mut(BLUE).take_inbox(), vec![Message::Log(b"entry".to_vec())]);
+}
+
+#[test]
+fn after_the_lock_nobody_new_joins_but_the_roster_reconnects() {
+    let mut net = MemoryNet::new(host_lobby());
+    let blue = joiner(&mut net, "Blue", Some(FIRERED));
+    let again = blue.clone();
+    let green = joiner(&mut net, "Green", Some(FIRERED));
+    net.connect(BLUE, blue);
+    net.host.lock();
+
+    assert_eq!(net.connect(GREEN, green), Admission::Refuse(Refusal::RunStarted));
+    net.disconnect(BLUE);
+    assert_eq!(net.connect(BLUE, again), Admission::Admit, "Blue is in the roster");
+}

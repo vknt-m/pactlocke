@@ -95,6 +95,8 @@ pub struct RunEngine {
     /// Every Pokémon the Run log says the Player got, so one back from the
     /// Day Care after a reboot isn't taken for a Gift.
     logged_pids: BTreeSet<u32>,
+    /// Run state recorded since it was last taken, for the shared Run log.
+    shared: Vec<RunEvent>,
 }
 
 /// A battle in progress, as the engine saw it begin.
@@ -195,6 +197,12 @@ impl RunEngine {
         self.checkpoint_due = Some(CheckpointReason::Asked);
     }
 
+    /// The Run state recorded since this was last called, oldest first, for
+    /// the Run log every Player shares.
+    pub fn take_shared(&mut self) -> Vec<RunEvent> {
+        std::mem::take(&mut self.shared)
+    }
+
     /// The newest Run Checkpoints kept in RAM, newest last (for Retries).
     pub fn recent_checkpoints(&self) -> &VecDeque<StoredCheckpoint> {
         &self.recent_checkpoints
@@ -277,6 +285,7 @@ impl RunEngine {
             suspended: false,
             last_play_time: None,
             logged_pids: BTreeSet::new(),
+            shared: Vec::new(),
         }
     }
 
@@ -722,6 +731,9 @@ impl RunEngine {
             Stored::EventOnly => self.storage.append(&recorded),
             Stored::Checkpoint(checkpoint) => self.storage.append_with_checkpoint(&recorded, checkpoint),
             Stored::Suspend(checkpoint) => self.storage.store_suspend(&recorded, checkpoint),
+        }
+        if recorded.event.is_run_state() {
+            self.shared.push(recorded.event.clone());
         }
         self.take_in(&recorded);
     }

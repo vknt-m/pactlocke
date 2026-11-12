@@ -169,3 +169,47 @@ fn a_friend_joins_through_the_relay_in_the_invite() {
     assert_eq!(joined.error, None);
     assert_eq!(joined.players[1].name, "Blue");
 }
+
+#[test]
+fn setup_and_log_cross_iroh_and_after_the_lock_nobody_new_joins() {
+    use pactlocke_net::{Message, PeerKey};
+
+    let host = host();
+    let view = wait_for("the invite", || host.view(), |v| v.invite_link.is_some());
+    let invite = Invite::parse(view.invite_link.as_deref().unwrap()).unwrap();
+    let direct = wait_for_addrs(&host);
+    let blue = JoinLobby::new(invite, "Blue", APP_VERSION, Some(FIRERED.into())).unwrap();
+    let blue = JoinNode::start_with(key(6), blue, Relays::Off, direct.clone());
+    wait_for("Blue in the lobby", || blue.view(), |v| v.players.len() == 2);
+
+    // The roster names Blue by the key the Run log will check Blue's signatures with.
+    let roster = wait_for("Blue in the roster", || host.view(), |v| !v.roster.is_empty()).roster;
+    let blue_key = PeerKey(*iroh::SecretKey::from_bytes(&key(6)).public().as_bytes());
+    assert_eq!(roster, [(blue_key, "Blue".to_owned())]);
+    assert_eq!(
+        pactlocke_run::Signer::from_secret(key(6)).public(),
+        blue_key.0,
+        "the Run log key is the network key"
+    );
+
+    blue.send(Message::Setup(b"ready".to_vec()));
+    let start = Instant::now();
+    let mut inbox = Vec::new();
+    while inbox.is_empty() && start.elapsed() < Duration::from_secs(30) {
+        inbox = host.take_inbox();
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(inbox, [(blue_key, Message::Setup(b"ready".to_vec()))]);
+
+    host.send(None, Message::Log(b"entry".to_vec()));
+    let start = Instant::now();
+    let mut inbox = Vec::new();
+    while inbox.is_empty() && start.elapsed() < Duration::from_secs(30) {
+        inbox = blue.take_inbox();
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(inbox, [Message::Log(b"entry".to_vec())]);
+
+    host.lock_roster();
+    wait_for("no invite after the lock", || host.view(), |v| v.invite_link.is_none());
+}

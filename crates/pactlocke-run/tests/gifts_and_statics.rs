@@ -258,7 +258,7 @@ fn the_statics_rule_does_nothing_without_first_encounter() {
 }
 
 #[test]
-fn used_gifts_and_statics_stay_used_after_a_reboot() {
+fn a_used_gift_stays_used_after_a_reboot_and_a_static_comes_back() {
     let mut player = with_starter(rules(true, true));
     player.receives_gift(party_pokemon(ABRA, 0xAB, "ABRA"), PRIZE_AT + 0x20);
     player.walks_into(route_1());
@@ -276,8 +276,25 @@ fn used_gifts_and_statics_stay_used_after_a_reboot() {
         !player.party_pids().contains(&0xAC),
         "the prize's Encounter was used before the reboot"
     );
+    // A reboot from the in-game save is a reset: the Static is back in the game.
     player.meets_static(SNORLAX, SNORLAX_AT + 7);
-    assert!(player.game.catches_blocked);
+    assert!(!player.game.catches_blocked);
+}
+
+#[test]
+fn a_static_met_before_a_reset_to_an_older_save_is_an_encounter_again() {
+    let mut player = with_starter(rules(true, true));
+    player.game.play_time = 5_000;
+    player.walks_into(route_1());
+    player.meets_static(SNORLAX, SNORLAX_AT + 7);
+    player.leaves_battle();
+
+    // Soft reset to a save from before Snorlax.
+    player.game.play_time = 4_000;
+    player.plays(5);
+    player.meets_static(SNORLAX, SNORLAX_AT + 7);
+    assert!(!player.game.catches_blocked);
+    assert_eq!(player.feed(FeedKind::Encounter).len(), 2);
 }
 
 #[test]

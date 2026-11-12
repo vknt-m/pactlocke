@@ -15,6 +15,8 @@ mod file;
 mod live;
 mod rules;
 mod running;
+mod setup;
+mod shared_log;
 mod storage;
 mod view;
 
@@ -25,6 +27,11 @@ pub use event::{AreaRef, CheckpointReason, DeathCause, Recorded, ResumedFrom, Ru
 pub use file::{RunFile, RunId, RunLibrary, RunSummary};
 pub use live::LiveGame;
 pub use running::{RunCommand, RunningGame};
+pub use setup::{
+    COUNTDOWN_MS, Locked, Mismatch, Preset, RosterEntry, RunSetup, SetupCheck, SetupError, SetupMessage, SetupPlayer,
+    SetupView, settle, unavailable,
+};
+pub use shared_log::{LogBody, LogEntry, LogError, RunLog, Signer, Submission, Tallies};
 pub use storage::{InputBatch, MemoryStorage, RunInfo, RunStorage, Stamped, StorageError, StoredCheckpoint, StoredRun};
 pub use view::{FeedEntry, FeedKind, Grave, LevelCapView, NicknameWanted, RunView};
 
@@ -70,6 +77,11 @@ pub struct Ruleset {
     /// Only one Pokémon of each primary type in the party at a time.
     #[serde(default)]
     pub type_clause: bool,
+    /// Links: each Player's Encounter from the same source (an Area, a Gift
+    /// or a Static), caught or not, is bound into a Link, and a Death kills
+    /// every Link-mate. Needs `faint_is_dead` and more than one Player.
+    #[serde(default)]
+    pub links: bool,
 }
 
 fn allowed() -> bool {
@@ -90,6 +102,7 @@ impl Default for Ruleset {
             set_mode: false,
             must_nickname: false,
             type_clause: false,
+            links: false,
         }
     }
 }

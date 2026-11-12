@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use pactlocke_emu::{Checkpoint, CoreAdapter, CoreError, Frame, Keys};
 use pactlocke_game::ProfileGame;
 
-use crate::{RunEngine, RunView, boot_core};
+use crate::{RunEngine, RunEvent, RunView, boot_core};
 
 /// What the side panel asks of the Run, carried out at the next frame boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +28,8 @@ pub struct RunningGame<C: CoreAdapter> {
     view: Arc<Mutex<RunView>>,
     published_version: u64,
     commands: (Sender<RunCommand>, Receiver<RunCommand>),
+    /// In a Run with other Players: the Run state to put in the shared log.
+    shared: Option<Arc<Mutex<Vec<RunEvent>>>>,
 }
 
 impl<C: CoreAdapter> RunningGame<C> {
@@ -41,6 +43,7 @@ impl<C: CoreAdapter> RunningGame<C> {
             engine,
             view,
             commands: channel(),
+            shared: None,
         };
         running.checkpoint_if_wanted();
         running
@@ -81,6 +84,12 @@ impl<C: CoreAdapter> RunningGame<C> {
                 RunCommand::Nickname { pid, name } => self.engine.name_pokemon(pid, &name, &mut self.game),
             }
         }
+    }
+
+    /// In a Run with other Players: where the Run state for the shared log
+    /// collects, from the emulator thread, for the app to send on.
+    pub fn share(&mut self) -> Arc<Mutex<Vec<RunEvent>>> {
+        self.shared.get_or_insert_with(Arc::default).clone()
     }
 
     /// The Run's side-panel view, updated from the emulator thread.
@@ -134,6 +143,12 @@ impl<C: CoreAdapter> CoreAdapter for RunningGame<C> {
         let keys = self.engine.keys_for_frame(keys, &mut self.game);
         self.core().run_frame(keys);
         self.engine.frame(keys, &mut self.game);
+        let events = self.engine.take_shared();
+        if let Some(shared) = &self.shared
+            && !events.is_empty()
+        {
+            shared.lock().unwrap_or_else(|e| e.into_inner()).extend(events);
+        }
         if self.engine.frames_run().is_multiple_of(SAVE_CHECK_FRAMES) {
             self.check_save_memory();
         }

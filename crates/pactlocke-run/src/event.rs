@@ -211,6 +211,36 @@ pub enum CheckpointReason {
     Asked,
 }
 
+impl RunEvent {
+    /// Run state, which goes in the Run log every Player shares: Encounters,
+    /// catches and Gifts, releases, Deaths and Violations. The rest (a
+    /// feed note, a checkpoint, a boot) is this Player's own.
+    pub fn is_run_state(&self) -> bool {
+        matches!(
+            self,
+            RunEvent::Encounter { .. }
+                | RunEvent::StaticEncounter { .. }
+                | RunEvent::Caught { .. }
+                | RunEvent::Gift { .. }
+                | RunEvent::Traded { .. }
+                | RunEvent::Released { .. }
+                | RunEvent::Died { .. }
+        ) || self.is_violation()
+    }
+
+    /// A rule broken in a way the app couldn't stop, shown in red to everyone.
+    pub fn is_violation(&self) -> bool {
+        matches!(
+            self,
+            RunEvent::DeadReturned { .. }
+                | RunEvent::DeadBoxFull { .. }
+                | RunEvent::DeadBoxFailed { .. }
+                | RunEvent::ReleaseFailed { .. }
+                | RunEvent::TypeClauseFailed { .. }
+        )
+    }
+}
+
 /// A Gift or Static source, as the log keeps it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceRef {

@@ -72,6 +72,8 @@ pub(crate) struct Rules {
     used_sources: BTreeSet<String>,
     /// For each used Gift source, the Pokémon it gave and when.
     gift_from: BTreeMap<String, GiftGiven>,
+    /// For each used Static source, when it was met (in events taken in).
+    static_met: BTreeMap<String, u64>,
     /// The number of events taken in so far, as a clock for when things happened.
     events_seen: u64,
     /// When the game was last reset to an older save (or booted from one).
@@ -126,6 +128,7 @@ impl Rules {
             families: None,
             used_sources: BTreeSet::new(),
             gift_from: BTreeMap::new(),
+            static_met: BTreeMap::new(),
             events_seen: 0,
             last_reset: None,
             to_release: BTreeSet::new(),
@@ -164,7 +167,7 @@ impl Rules {
     fn static_started(&self, start: &BattleStart) -> Verdict {
         if self.statics() {
             return match start.static_key {
-                Some(key) if self.used_sources.contains(key) => Verdict::StaticUsed,
+                Some(key) if self.static_used(key) => Verdict::StaticUsed,
                 _ => Verdict::StaticEncounter,
             };
         }
@@ -174,6 +177,12 @@ impl Rules {
             Some(area) if self.closed.contains(&area.id) => Verdict::BlockCatches,
             Some(_) => Verdict::Encounter,
         }
+    }
+
+    /// Whether a Static's Encounter is used. A reset to an older save after
+    /// it was met puts the Static back in the game, and its Encounter with it.
+    fn static_used(&self, key: &str) -> bool {
+        self.used_sources.contains(key) && self.static_met.get(key).is_none_or(|&met| !self.reset_since(met))
     }
 
     /// Whether the game was reset to an older save after the moment `at`.
@@ -349,6 +358,7 @@ impl Rules {
             }
             RunEvent::StaticEncounter { source, .. } => {
                 self.used_sources.insert(source.key.clone());
+                self.static_met.insert(source.key.clone(), self.events_seen);
             }
             RunEvent::GiftDeclined { pid, .. } => {
                 self.to_release.insert(*pid);

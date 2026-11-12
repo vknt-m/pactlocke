@@ -37,6 +37,11 @@ pub enum HostAction {
         to: PeerKey,
         bytes: Vec<u8>,
     },
+    /// Setup or a log entry from a Player, for the Host's app to read.
+    Deliver {
+        from: PeerKey,
+        message: Message,
+    },
     /// Send `bytes` (the refusal) and close the connection.
     Close {
         peer: PeerKey,
@@ -65,6 +70,8 @@ pub struct HostLobby {
     host_name: String,
     open_invites: Vec<RunSecret>,
     members: Vec<Member>,
+    /// Locked: the roster is frozen, so nobody new joins.
+    locked: bool,
 }
 
 impl HostLobby {
@@ -75,6 +82,7 @@ impl HostLobby {
             host_name: host_name.to_owned(),
             open_invites: Vec::new(),
             members: Vec::new(),
+            locked: false,
         }
     }
 
@@ -97,6 +105,9 @@ impl HostLobby {
         if let Some(member) = self.members.iter_mut().find(|m| m.key == peer) {
             member.connected = true;
             return Admission::Admit;
+        }
+        if self.locked {
+            return Admission::Refuse(Refusal::RunStarted);
         }
         // The secret first, so a stranger can't tell a full Run from a wrong invite.
         let Some(at) = proof.and_then(|proof| self.open_invites.iter().position(|s| s.matches(proof))) else {
@@ -165,6 +176,9 @@ impl HostLobby {
                 };
                 self.broadcast()
             }
+            Some(message @ (Message::Setup(_) | Message::Log(_))) if named => {
+                vec![HostAction::Deliver { from: peer, message }]
+            }
             _ => {
                 self.members[at].dropped += 1;
                 if self.members[at].dropped > DROPS_ALLOWED {
@@ -174,6 +188,27 @@ impl HostLobby {
                 }
             }
         }
+    }
+
+    /// The Ruleset and roster locked: from now on only the roster may connect.
+    /// Players who never said hello leave the roster, and open invites are void.
+    pub fn lock(&mut self) {
+        self.locked = true;
+        self.open_invites.clear();
+        self.members.retain(|m| m.name.is_some());
+    }
+
+    /// `message` to one Player, or to every Player in the lobby.
+    pub fn send(&self, to: Option<PeerKey>, message: &Message) -> Vec<HostAction> {
+        let bytes = wire::encode(message);
+        self.members
+            .iter()
+            .filter(|m| m.connected && m.name.is_some() && to.is_none_or(|to| to == m.key))
+            .map(|m| HostAction::Send {
+                to: m.key,
+                bytes: bytes.clone(),
+            })
+            .collect()
     }
 
     /// A Player's connection ended; they stay in the roster and may come back.
@@ -203,6 +238,15 @@ impl HostLobby {
             })
         });
         std::iter::once(host).chain(joined).collect()
+    }
+
+    /// Every Player who has said hello, connected or away, in join order:
+    /// their key and name, for Run setup.
+    pub fn roster(&self) -> Vec<(PeerKey, String)> {
+        self.members
+            .iter()
+            .filter_map(|m| Some((m.key, m.name.clone()?)))
+            .collect()
     }
 
     pub fn run(&self) -> &RunAdvert {
@@ -256,6 +300,8 @@ pub struct JoinLobby {
     app_version: String,
     rom_sha1: Option<String>,
     state: JoinState,
+    /// Setup and log messages from the Host, for the app to read.
+    inbox: Vec<Message>,
 }
 
 impl JoinLobby {
@@ -274,6 +320,7 @@ impl JoinLobby {
             app_version: app_version.to_owned(),
             rom_sha1,
             state: JoinState::Joining,
+            inbox: Vec::new(),
         })
     }
 
@@ -314,6 +361,10 @@ impl JoinLobby {
                 self.state = JoinState::Refused(format!("The Host closed the connection: {refusal}."));
                 Vec::new()
             }
+            Ok(message @ (Message::Setup(_) | Message::Log(_))) => {
+                self.inbox.push(message);
+                Vec::new()
+            }
             // Anything else from the Host is dropped.
             _ => Vec::new(),
         }
@@ -331,6 +382,16 @@ impl JoinLobby {
             (JoinState::InLobby { run, .. }, Some(sha1)) => Some(run.matches_rom(sha1)),
             _ => None,
         }
+    }
+
+    /// The Host's setup and log messages since the last call, oldest first.
+    pub fn take_inbox(&mut self) -> Vec<Message> {
+        std::mem::take(&mut self.inbox)
+    }
+
+    /// A setup or log message to the Host.
+    pub fn send(&self, message: &Message) -> Vec<u8> {
+        wire::encode(message)
     }
 
     pub fn state(&self) -> &JoinState {

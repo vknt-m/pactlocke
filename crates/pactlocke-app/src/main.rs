@@ -1,6 +1,7 @@
 //! Pactlocke: start or resume a solo Run on a supported game and play it
-//! with its rules enforced, or just open a GBA ROM and play it, with keyboard
-//! input, sound and a speed from 1x to 4x.
+//! with its rules enforced, start one with friends from a lobby, or just
+//! open a GBA ROM and play it, with keyboard input, sound and a speed from
+//! 1x to 4x.
 //!
 //! Usage: `pactlocke [ROM]` opens the ROM straight away; `pactlocke --smoke`
 //! starts the UI, draws a few frames and quits (used by CI).
@@ -8,6 +9,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod coop;
 mod data_dir;
 mod lobby_ui;
 mod rom_report;
@@ -26,7 +28,8 @@ use pactlocke_game::{
 };
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
-    NewRun, Ruleset, RunClock, RunCommand, RunEngine, RunLibrary, RunSummary, RunView, RunningGame, SystemRunClock,
+    NewRun, Ruleset, RunClock, RunCommand, RunEngine, RunEvent, RunLibrary, RunSummary, RunView, RunningGame,
+    SystemRunClock,
 };
 
 /// Frames the smoke launch draws before it closes itself.
@@ -98,6 +101,8 @@ enum Play {
         view: Arc<Mutex<RunView>>,
         /// What the side panel asks of the Run, carried out at a frame boundary.
         commands: Sender<RunCommand>,
+        /// In a Run with other Players: Run state for the shared Run log.
+        shared: Option<Arc<Mutex<Vec<RunEvent>>>>,
     },
 }
 
@@ -402,7 +407,42 @@ impl PactlockeApp {
                 ruleset: draft.ruleset,
             };
             let engine = RunEngine::start(new, Box::new(file), Box::new(SystemRunClock)).map_err(|e| e.to_string())?;
-            self.play_run(engine, core, draft.profile, draft.rom, draft.identity)
+            self.play_run(
+                engine,
+                core,
+                draft.profile,
+                draft.rom,
+                draft.identity,
+                SystemRunClock.now_ms(),
+                false,
+            )
+        });
+        self.show_result(result);
+        self.refresh_runs();
+    }
+
+    /// The lock's countdown is over: this Player's Run starts from a new
+    /// game with the locked Ruleset, its game clock at the lock's start time.
+    fn start_coop_run(&mut self, start: coop::CoopStart) {
+        self.stop_playing();
+        let locked = start.locked;
+        let result = self.run_library().and_then(|library| {
+            let identity = self.profiles.as_ref().map_err(Clone::clone)?.identify(&start.rom);
+            let RomIdentity::Profiled { profile, .. } = &identity else {
+                return Err("This build has no Game Profile for the Run's game.".to_owned());
+            };
+            let profile = profile.clone();
+            let core = Self::core_with_rom(&start.rom)?;
+            let file = library.create().map_err(|e| e.to_string())?;
+            let new = NewRun {
+                name: locked.run_name.clone(),
+                game_name: locked.game_name.clone(),
+                game_sha1: locked.game_sha1.clone(),
+                rom_path: Some(start.path.display().to_string()),
+                ruleset: locked.ruleset.clone(),
+            };
+            let engine = RunEngine::start(new, Box::new(file), Box::new(SystemRunClock)).map_err(|e| e.to_string())?;
+            self.play_run(engine, core, profile, start.rom, identity, locked.start_ms, true)
         });
         self.show_result(result);
         self.refresh_runs();
@@ -419,7 +459,7 @@ impl PactlockeApp {
             let file = library.open_run(&summary.id).map_err(|e| e.to_string())?;
             let engine = RunEngine::resume(Box::new(file), Box::new(SystemRunClock)).map_err(|e| e.to_string())?;
             let core = Self::core_with_rom(&rom)?;
-            self.play_run(engine, core, profile, rom, identity)
+            self.play_run(engine, core, profile, rom, identity, SystemRunClock.now_ms(), false)
         });
         self.show_result(result);
         self.refresh_runs();
@@ -455,7 +495,10 @@ impl PactlockeApp {
 
     /// Boots a Run's game the way its Run engine planned (from power-on,
     /// the last in-game save, the suspend slot, or rebuilt after a crash),
-    /// then plays it with the engine watching.
+    /// then plays it with the engine watching. The game clock starts at
+    /// `clock_ms`: now, or the lock's start time in a Run with friends,
+    /// whose Run state is `shared` to the Run log.
+    #[allow(clippy::too_many_arguments)]
     fn play_run(
         &self,
         engine: RunEngine,
@@ -463,19 +506,22 @@ impl PactlockeApp {
         profile: Arc<GameProfile>,
         rom: Vec<u8>,
         identity: RomIdentity,
+        clock_ms: i64,
+        shared: bool,
     ) -> Result<Playing, String> {
         let name = engine.info().name.clone();
-        // The game clock starts now; a co-op Run will start it at the Ruleset lock.
-        let running = RunningGame::boot(ProfileGame::new(profile, rom, core), engine, SystemRunClock.now_ms())
+        let mut running = RunningGame::boot(ProfileGame::new(profile, rom, core), engine, clock_ms)
             .map_err(|e| format!("The Run's game couldn't be booted: {e}"))?;
         let view = running.view();
         let commands = running.commands();
+        let shared = shared.then(|| running.share());
         let (emulator, audio) = self.spawn(running);
         Ok(Playing::new(
             Play::Run {
                 emulator,
                 view,
                 commands,
+                shared,
             },
             audio,
             name,
@@ -737,7 +783,19 @@ impl PactlockeApp {
                 game_name: draft.profile.name.clone(),
                 game_sha1: draft.profile.sha1.clone(),
             };
-            self.lobbies.host(run);
+            let RomIdentity::Profiled { capabilities, .. } = &draft.identity else {
+                unreachable!("a New Run's ROM has a Game Profile")
+            };
+            let rom = coop::HostRom {
+                rom: draft.rom.clone(),
+                path: draft.path.clone(),
+                capabilities: capabilities.clone(),
+                level_caps: draft.level_caps.clone(),
+            };
+            self.lobbies.host(run, rom);
+            // The Ruleset is set in the lobby from here, for everyone.
+            self.new_run = None;
+            return;
         }
         start &= !draft.name.trim().is_empty();
         if start {
@@ -841,7 +899,21 @@ impl eframe::App for PactlockeApp {
         egui::CentralPanel::default_margins().show(ui, |ui| self.game_screen(ui));
         let ctx = ui.ctx().clone();
         self.new_run_prompt(&ctx);
-        self.lobbies.show(&ctx);
+        if let Some(Playing {
+            play: Play::Run {
+                shared: Some(shared), ..
+            },
+            ..
+        }) = &self.playing
+        {
+            let events = std::mem::take(&mut *shared.lock().unwrap_or_else(|e| e.into_inner()));
+            if !events.is_empty() {
+                self.lobbies.share(events);
+            }
+        }
+        if let Some(start) = self.lobbies.show(&ctx) {
+            self.start_coop_run(start);
+        }
 
         if let Some(left) = self.smoke_frames_left.as_mut() {
             *left = left.saturating_sub(1);

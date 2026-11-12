@@ -1,11 +1,14 @@
 //! Inviting friends and joining a friend's Run: the join prompt and the
-//! lobby window. Starting a Run together comes with the Ruleset lock; for
-//! now the lobby shows who has joined and whether their ROM matches.
+//! lobby window, where the Host sets the Ruleset, everyone says Ready, and
+//! the lock starts every Player's Run together.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use pactlocke_game::sha1_hex;
+use pactlocke_run::{RunClock, RunEvent, SystemRunClock};
+
+use crate::coop::{CoopStart, HostCoop, HostRom, JoinCoop};
 use pactlocke_net::{
     APP_VERSION, HostLobby, HostNode, Invite, JoinLobby, JoinNode, LobbyView, Relays, RomStatus, RunAdvert,
     load_or_create_key,
@@ -26,8 +29,8 @@ pub struct Lobbies {
     pub name: String,
     /// The relays to use: blank for n0's public relays, or URLs.
     pub relays: String,
-    host: Option<HostNode>,
-    join: Option<JoinNode>,
+    host: Option<(HostNode, HostCoop)>,
+    join: Option<(JoinNode, JoinCoop)>,
     prompt: Option<JoinPrompt>,
 }
 
@@ -62,24 +65,42 @@ impl Lobbies {
         }
     }
 
-    /// Opens a lobby for this Run and makes an invite link.
-    pub fn host(&mut self, run: RunAdvert) {
+    /// Opens a lobby for this Run on the Host's ROM and makes an invite link.
+    pub fn host(&mut self, run: RunAdvert, rom: HostRom) {
         self.leave();
         let Ok(key) = self.key.clone() else {
             return;
         };
+        let coop = HostCoop::new(key, &self.name, &run, rom);
         let lobby = HostLobby::new(run, &self.name, APP_VERSION);
-        self.host = Some(HostNode::start(key, lobby, self.relay_choice()));
+        self.host = Some((HostNode::start(key, lobby, self.relay_choice()), coop));
+    }
+
+    /// Run state from this Player's game, for the shared Run log.
+    pub fn share(&mut self, events: Vec<RunEvent>) {
+        if let Some((node, coop)) = &mut self.host {
+            coop.share(node, events);
+        } else if let Some((node, coop)) = &mut self.join {
+            coop.share(node, events, SystemRunClock.now_ms());
+        }
     }
 
     pub fn open_join_prompt(&mut self) {
         self.prompt = Some(JoinPrompt::default());
     }
 
-    /// The join prompt and the lobby window, when open.
-    pub fn show(&mut self, ctx: &egui::Context) {
+    /// The join prompt and the lobby window, when open. Returns the Run to
+    /// start when the countdown after the lock is over.
+    pub fn show(&mut self, ctx: &egui::Context) -> Option<CoopStart> {
         self.join_prompt(ctx);
-        self.lobby_window(ctx);
+        let now_ms = SystemRunClock.now_ms();
+        let start = match (&mut self.host, &mut self.join) {
+            (Some((node, coop)), _) => coop.pump(node, now_ms),
+            (None, Some((node, coop))) => coop.pump(node, now_ms),
+            (None, None) => None,
+        };
+        self.lobby_window(ctx, now_ms);
+        start
     }
 
     fn join_prompt(&mut self, ctx: &egui::Context) {
@@ -130,10 +151,15 @@ impl Lobbies {
             let (relays, key, name) = (self.relay_choice(), self.key.clone(), self.name.clone());
             let prompt = self.prompt.as_mut().expect("open");
             let rom = prompt.rom.as_ref().map(|rom| rom.sha1.clone());
+            let picked = prompt.rom.as_ref().map(|rom| (rom.path.clone(), rom.sha1.clone()));
             let started = Invite::parse(&prompt.link)
                 .map_err(|e| format!("{e}."))
                 .and_then(|invite| JoinLobby::new(invite, &name, APP_VERSION, rom))
-                .and_then(|lobby| Ok(JoinNode::start(key?, lobby, relays)));
+                .and_then(|lobby| {
+                    let key = key?;
+                    let coop = JoinCoop::new(key, lobby.invite().host, picked);
+                    Ok((JoinNode::start(key, lobby, relays), coop))
+                });
             match started {
                 Ok(node) => {
                     self.leave();
@@ -147,10 +173,10 @@ impl Lobbies {
         }
     }
 
-    fn lobby_window(&mut self, ctx: &egui::Context) {
+    fn lobby_window(&mut self, ctx: &egui::Context, now_ms: i64) {
         let (view, hosting) = match (&self.host, &self.join) {
-            (Some(host), _) => (host.view(), true),
-            (None, Some(join)) => (join.view(), false),
+            (Some((host, _)), _) => (host.view(), true),
+            (None, Some((join, _))) => (join.view(), false),
             (None, None) => return,
         };
         let mut open = true;
@@ -179,18 +205,21 @@ impl Lobbies {
                     && view.run.is_some()
                     && ui.button("Choose your ROM…").clicked()
                 {
-                    picked = pick_rom().and_then(Result::ok).map(|rom| rom.sha1);
+                    picked = pick_rom().and_then(Result::ok);
                 }
                 ui.separator();
-                ui.weak(
-                    "Starting a Run together comes with the Ruleset lock. For now, the Host's Start plays it solo.",
-                );
+                match (&mut self.host, &mut self.join) {
+                    (Some((node, coop)), _) => coop.show(ui, node, now_ms),
+                    (None, Some((node, coop))) => coop.show(ui, node, now_ms),
+                    (None, None) => {}
+                }
             });
-        if new_invite && let Some(host) = &self.host {
+        if new_invite && let Some((host, _)) = &self.host {
             host.new_invite();
         }
-        if let (Some(sha1), Some(join)) = (picked, &self.join) {
-            join.rom_picked(&sha1);
+        if let (Some(rom), Some((join, coop))) = (picked, &mut self.join) {
+            join.rom_picked(&rom.sha1);
+            coop.rom_picked(rom.path, rom.sha1);
         }
         if !open {
             self.leave();
@@ -242,6 +271,7 @@ fn players_section(ui: &mut egui::Ui, view: &LobbyView) {
 /// A ROM the Player picked: its file name and SHA-1.
 struct PickedRom {
     name: String,
+    path: PathBuf,
     sha1: String,
 }
 
@@ -258,6 +288,7 @@ fn pick_rom() -> Option<Result<PickedRom, String>> {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default(),
+                path: path.clone(),
                 sha1: sha1_hex(&rom),
             })
             .map_err(|e| format!("Couldn't read {}: {e}", path.display())),

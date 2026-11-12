@@ -10,3 +10,6 @@ publish.workspace = true
 getrandom = "0.3"
 iroh = "1.4.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+[dev-dependencies]
+pactlocke-run = { path = "../pactlocke-run" }

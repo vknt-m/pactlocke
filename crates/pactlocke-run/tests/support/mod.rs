@@ -2,6 +2,8 @@
 //! game, in-memory storage and a clock the test moves.
 #![allow(dead_code)]
 
+pub mod coop;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 

@@ -109,6 +109,22 @@ impl CapabilityReport {
         Self { rules }
     }
 
+    /// Every rule enforceable, as on a game that can do them all (the fake game in tests).
+    pub fn everything_enforceable() -> Self {
+        Self {
+            rules: Rule::ALL
+                .into_iter()
+                .map(|rule| (rule, Capability::Enforceable))
+                .collect(),
+        }
+    }
+
+    /// The same report with one rule's capability changed.
+    pub fn with(mut self, rule: Rule, capability: Capability) -> Self {
+        self.rules.insert(rule, capability);
+        self
+    }
+
     pub fn get(&self, rule: Rule) -> &Capability {
         &self.rules[&rule]
     }

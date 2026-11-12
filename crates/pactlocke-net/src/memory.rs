@@ -14,6 +14,8 @@ pub struct MemoryNet {
     connected: BTreeMap<PeerKey, bool>,
     closed: BTreeMap<PeerKey, Refusal>,
     now_ms: i64,
+    /// Setup and log messages the Host's app has to read.
+    host_inbox: Vec<(PeerKey, crate::Message)>,
 }
 
 impl MemoryNet {
@@ -24,6 +26,7 @@ impl MemoryNet {
             connected: BTreeMap::new(),
             closed: BTreeMap::new(),
             now_ms: 0,
+            host_inbox: Vec::new(),
         }
     }
 
@@ -66,6 +69,17 @@ impl MemoryNet {
         self.deliver(actions);
     }
 
+    /// The Host's app sends `message` to one Player or all of them.
+    pub fn host_sends(&mut self, to: Option<PeerKey>, message: &crate::Message) {
+        let actions = self.host.send(to, message);
+        self.deliver(actions);
+    }
+
+    /// The setup and log messages the Host's app hasn't read yet.
+    pub fn host_inbox(&mut self) -> Vec<(PeerKey, crate::Message)> {
+        std::mem::take(&mut self.host_inbox)
+    }
+
     pub fn advance_ms(&mut self, ms: i64) {
         self.now_ms += ms;
     }
@@ -100,6 +114,10 @@ impl MemoryNet {
         let mut queue: VecDeque<HostAction> = actions.into();
         while let Some(action) = queue.pop_front() {
             let (to, bytes, close) = match action {
+                HostAction::Deliver { from, message } => {
+                    self.host_inbox.push((from, message));
+                    continue;
+                }
                 HostAction::Send { to, bytes } => (to, bytes, None),
                 HostAction::Close { peer, refusal, bytes } => (peer, bytes, Some(refusal)),
             };

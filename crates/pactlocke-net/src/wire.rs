@@ -8,7 +8,7 @@ use std::fmt;
 /// The protocol this build speaks. Apps must match exactly to play together.
 pub const PROTOCOL: u16 = 1;
 /// No message is longer than this, header and all.
-pub const MAX_MESSAGE: usize = 4096;
+pub const MAX_MESSAGE: usize = 16 * 1024;
 /// A name, version or SHA-1 is at most this many bytes.
 const MAX_TEXT: usize = 64;
 /// A lobby has at most this many Players.
@@ -81,6 +81,8 @@ pub enum Refusal {
     Version { host_version: String },
     /// Malformed messages, or too many too fast.
     Misbehaving,
+    /// The Ruleset and roster are locked: nobody joins now.
+    RunStarted,
 }
 
 impl fmt::Display for Refusal {
@@ -95,6 +97,7 @@ impl fmt::Display for Refusal {
                 )
             }
             Refusal::Misbehaving => write!(f, "your app sent messages the Host couldn't read"),
+            Refusal::RunStarted => write!(f, "the Run has started: nobody joins after the lock"),
         }
     }
 }
@@ -112,6 +115,11 @@ pub enum Message {
     RomCheck { sha1: String },
     /// The lobby as it is now, from the Host to everyone.
     Lobby { players: Vec<LobbyPlayer> },
+    /// Run setup (the Ruleset, Ready, the lock), which the lobby carries
+    /// without reading: the Run engine's setup messages.
+    Setup(Vec<u8>),
+    /// An entry for the Run log, or one the Host ordered, carried unread.
+    Log(Vec<u8>),
 }
 
 /// Why bytes aren't a message.
@@ -148,6 +156,8 @@ const WELCOME: u8 = 2;
 const REFUSED: u8 = 3;
 const ROM_CHECK: u8 = 4;
 const LOBBY: u8 = 5;
+const SETUP: u8 = 6;
+const LOG: u8 = 7;
 
 /// A message as bytes. Text longer than the format allows is cut short.
 pub fn encode(message: &Message) -> Vec<u8> {
@@ -173,12 +183,21 @@ pub fn encode(message: &Message) -> Vec<u8> {
                     put_text(&mut payload, host_version);
                 }
                 Refusal::Misbehaving => payload.push(3),
+                Refusal::RunStarted => payload.push(4),
             }
             REFUSED
         }
         Message::RomCheck { sha1 } => {
             put_text(&mut payload, sha1);
             ROM_CHECK
+        }
+        Message::Setup(bytes) => {
+            payload.extend_from_slice(&bytes[..bytes.len().min(MAX_MESSAGE - HEADER)]);
+            SETUP
+        }
+        Message::Log(bytes) => {
+            payload.extend_from_slice(&bytes[..bytes.len().min(MAX_MESSAGE - HEADER)]);
+            LOG
         }
         Message::Lobby { players } => {
             let players = &players[..players.len().min(MAX_PLAYERS)];
@@ -242,9 +261,12 @@ pub fn decode(bytes: &[u8]) -> Result<Message, WireError> {
                 host_version: reader.text()?,
             },
             3 => Refusal::Misbehaving,
+            4 => Refusal::RunStarted,
             _ => return Err(WireError::BadPayload),
         }),
         ROM_CHECK => Message::RomCheck { sha1: reader.text()? },
+        SETUP => Message::Setup(std::mem::take(&mut reader.0).to_vec()),
+        LOG => Message::Log(std::mem::take(&mut reader.0).to_vec()),
         LOBBY => {
             let count = usize::from(reader.byte()?);
             if count > MAX_PLAYERS {
