@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use pactlocke_game::{Area, BattleKind};
 
+use crate::families::EvolutionFamilies;
 use crate::{Ruleset, RunEvent};
 
 /// How a battle began.
@@ -14,6 +15,10 @@ pub(crate) struct BattleStart<'a> {
     /// No script was running when it began: the Player met it in the wild.
     pub script_idle: bool,
     pub area: Option<&'a Area>,
+    /// The wild Pokémon's species.
+    pub foe: u16,
+    /// The species in the Player's party and PC as it began.
+    pub owned: &'a [u16],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +31,9 @@ pub(crate) enum Verdict {
     Encounter,
     /// The Area is closed: ball throws are refused for this battle.
     BlockCatches,
+    /// The dupes clause: the Player has had a Pokémon of this species' family
+    /// (`of`), so it isn't the Encounter, and can't be caught.
+    Dupe { of: u16 },
 }
 
 pub(crate) struct Rules {
@@ -36,6 +44,10 @@ pub(crate) struct Rules {
     had_poke_balls: bool,
     /// Dead PIDs, each with where it has got to since the game was booted.
     dead: BTreeMap<u32, DeadState>,
+    /// Every species the Run log has seen caught or Dead, wherever it is now.
+    species_had: BTreeSet<u16>,
+    /// The loaded game's evolution families, once the dupes clause needs them.
+    families: Option<EvolutionFamilies>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +73,8 @@ impl Rules {
             closed: BTreeSet::new(),
             had_poke_balls: false,
             dead: BTreeMap::new(),
+            species_had: BTreeSet::new(),
+            families: None,
         }
     }
 
@@ -73,8 +87,38 @@ impl Rules {
             None => Verdict::Nothing,
             Some(_) if !self.had_poke_balls => Verdict::NotCounted,
             Some(area) if self.closed.contains(&area.id) => Verdict::BlockCatches,
-            Some(_) => Verdict::Encounter,
+            Some(_) => match self.dupe_of(start.foe, start.owned) {
+                Some(of) => Verdict::Dupe { of },
+                None => Verdict::Encounter,
+            },
         }
+    }
+
+    fn dupes_clause(&self) -> bool {
+        self.ruleset.dupes_clause_available() && self.ruleset.dupes_clause
+    }
+
+    /// Whether the rules need the game's evolution families before the next battle.
+    pub fn wants_families(&self) -> bool {
+        self.dupes_clause() && self.families.is_none()
+    }
+
+    pub fn set_families(&mut self, families: EvolutionFamilies) {
+        self.families = Some(families);
+    }
+
+    /// A species the Player has had from the same family as `foe`.
+    fn dupe_of(&self, foe: u16, owned: &[u16]) -> Option<u16> {
+        if !self.dupes_clause() {
+            return None;
+        }
+        let families = self.families.as_ref()?;
+        let family = families.of(foe);
+        owned
+            .iter()
+            .chain(&self.species_had)
+            .copied()
+            .find(|&species| families.of(species) == family)
     }
 
     /// Whether the game should be watched for the Player's first Poké Balls.
@@ -105,8 +149,12 @@ impl Rules {
                 self.closed.insert(area.id);
             }
             RunEvent::PokeBallsObtained => self.had_poke_balls = true,
-            RunEvent::Died { pid, .. } => {
+            RunEvent::Died { pid, species, .. } => {
                 self.dead.insert(*pid, DeadState::NotMovedYet);
+                self.species_had.insert(*species);
+            }
+            RunEvent::Caught { species, .. } => {
+                self.species_had.insert(*species);
             }
             RunEvent::MovedToDeadBox { pid, .. }
             | RunEvent::DeadReturned { pid, .. }

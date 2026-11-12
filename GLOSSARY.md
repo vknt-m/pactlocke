@@ -32,6 +32,14 @@ _Avoid_: Route (too narrow), map (one Area can span many maps), location
 A Player's one chance at a Pokémon from a given source, whether or not it is caught. There are three kinds of source: an Area (the first wild Pokémon the Player battles there, not merely entering it), a Gift, or a Static. Wild battles before the Player first has Poké Balls don't count.
 _Avoid_: Catch (a catch is only one possible outcome of an Encounter)
 
+**Evolution family**:
+A species together with every species it evolves from or into, as the loaded game's evolution table links them (Pichu, Pikachu and Raichu are one). Not a Game Family, which is a group of games.
+_Avoid_: Family on its own, line
+
+**Dupe**:
+Under the dupes clause, a wild Pokémon from an evolution family the Player has already had in the Run (Dead, boxed and released included). Meeting one doesn't use the Area's Encounter, and it can't be caught.
+_Avoid_: Duplicate encounter, repeat
+
 **Gift**:
 A Pokémon the game hands a Player rather than one met in battle, such as the starter, a fossil or an egg. Where the game offers a choice, each Player's pick is still the same Gift. The starter is always allowed; other Gifts only if the Ruleset allows them.
 _Avoid_: Freebie

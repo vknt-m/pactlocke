@@ -107,6 +107,18 @@ impl FeedEntry {
                     None => format!("Caught {species_name}"),
                 },
             ),
+            RunEvent::DupeSkipped {
+                area,
+                species_name,
+                dupe_of,
+                ..
+            } => (
+                FeedKind::Encounter,
+                format!(
+                    "{}: a wild {species_name}, not counted: a dupe of your {dupe_of}, so no catching it (running is fine)",
+                    area.name
+                ),
+            ),
             RunEvent::CatchesBlocked { area, species_name, .. } => (
                 FeedKind::Block,
                 format!(

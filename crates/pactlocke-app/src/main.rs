@@ -12,6 +12,7 @@ mod data_dir;
 mod rom_report;
 mod run_panel;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -127,6 +128,26 @@ struct Playing {
     identity: RomIdentity,
 }
 
+/// Why a rule can't be chosen for a solo Run on this ROM, if it can't.
+fn unavailable_reason(capability: &Capability) -> Option<String> {
+    match capability {
+        Capability::Enforceable => None,
+        Capability::GreyedOut { reason } => Some(format!("can't be enforced on this ROM: {reason}")),
+        Capability::NativeOption { .. } => Some("this game's own option, which solo Runs don't use yet".to_owned()),
+    }
+}
+
+/// A rule's checkbox, greyed out with the reason on hover when it can't be chosen.
+fn rule_checkbox(ui: &mut egui::Ui, on: &mut bool, text: &str, unavailable: Option<String>) {
+    if unavailable.is_some() {
+        *on = false;
+    }
+    let checkbox = ui.add_enabled(unavailable.is_none(), egui::Checkbox::new(on, text));
+    if let Some(reason) = unavailable {
+        checkbox.on_disabled_hover_text(format!("Unavailable: {reason}"));
+    }
+}
+
 /// A New Run waiting for its name.
 struct NewRunDraft {
     rom: Vec<u8>,
@@ -134,9 +155,9 @@ struct NewRunDraft {
     profile: Arc<GameProfile>,
     identity: RomIdentity,
     name: String,
-    /// Why faint = Dead can't be chosen on this ROM, if it can't.
-    faint_is_dead_unavailable: Option<String>,
-    faint_is_dead: bool,
+    ruleset: Ruleset,
+    /// Why each rule this ROM can't enforce can't be chosen.
+    unavailable: BTreeMap<Rule, String>,
 }
 
 struct PactlockeApp {
@@ -254,25 +275,19 @@ impl PactlockeApp {
             let RomIdentity::Profiled { profile, capabilities } = &identity else {
                 return Err("A Run needs a game Pactlocke has a Game Profile for, and this ROM has none.".to_owned());
             };
-            match capabilities.get(Rule::FirstEncounter) {
-                Capability::Enforceable => {}
-                Capability::GreyedOut { reason } => {
-                    return Err(format!("First Encounter can't be enforced on this ROM: {reason}"));
-                }
-                Capability::NativeOption { .. } => {
-                    return Err("First Encounter is this game's own option, which solo Runs don't use yet.".to_owned());
-                }
-            }
-            let faint_is_dead_unavailable = match capabilities.get(Rule::FaintIsDead) {
-                Capability::Enforceable => None,
-                Capability::GreyedOut { reason } => Some(reason.clone()),
-                Capability::NativeOption { .. } => {
-                    Some("this game's own option, which solo Runs don't use yet".to_owned())
-                }
+            let unavailable: BTreeMap<Rule, String> = [Rule::FirstEncounter, Rule::DupesClause, Rule::FaintIsDead]
+                .into_iter()
+                .filter_map(|rule| unavailable_reason(capabilities.get(rule)).map(|why| (rule, why)))
+                .collect();
+            let mut ruleset = Ruleset {
+                first_encounter: !unavailable.contains_key(&Rule::FirstEncounter),
+                faint_is_dead: !unavailable.contains_key(&Rule::FaintIsDead),
+                ..Ruleset::default()
             };
+            ruleset.dupes_clause = ruleset.dupes_clause_available() && !unavailable.contains_key(&Rule::DupesClause);
             Ok(NewRunDraft {
-                faint_is_dead: faint_is_dead_unavailable.is_none(),
-                faint_is_dead_unavailable,
+                ruleset,
+                unavailable,
                 profile: profile.clone(),
                 name: format!("Solo Run {}", self.runs.len() + 1),
                 rom,
@@ -300,10 +315,7 @@ impl PactlockeApp {
                 game_name: draft.profile.name.clone(),
                 game_sha1: draft.profile.sha1.clone(),
                 rom_path: Some(draft.path.display().to_string()),
-                ruleset: Ruleset {
-                    first_encounter: true,
-                    faint_is_dead: draft.faint_is_dead,
-                },
+                ruleset: draft.ruleset,
             };
             let engine = RunEngine::start(new, Box::new(file), Box::new(SystemRunClock)).map_err(|e| e.to_string())?;
             Ok(self.play_run(engine, core, draft.profile, draft.rom, draft.identity))
@@ -473,18 +485,35 @@ impl PactlockeApp {
         let mut cancel = false;
         let modal = egui::Modal::new(egui::Id::unique("new run")).show(ctx, |ui| {
             ui.heading("New Run");
-            ui.label(format!("{}: solo, with the First Encounter rule.", draft.profile.name));
+            ui.label(format!("{}: solo.", draft.profile.name));
             ui.add_space(6.0);
-            let faint = ui.add_enabled(
-                draft.faint_is_dead_unavailable.is_none(),
-                egui::Checkbox::new(
-                    &mut draft.faint_is_dead,
-                    "Faint = Dead: fainted Pokémon go to the Dead box",
-                ),
+            let ruleset = &mut draft.ruleset;
+            rule_checkbox(
+                ui,
+                &mut ruleset.first_encounter,
+                "First Encounter: only the first wild battle in each Area can be caught",
+                draft.unavailable.get(&Rule::FirstEncounter).cloned(),
             );
-            if let Some(reason) = &draft.faint_is_dead_unavailable {
-                faint.on_disabled_hover_text(format!("Can't be enforced on this ROM: {reason}"));
+            if !ruleset.dupes_clause_available() {
+                ruleset.dupes_clause = false;
             }
+            let dupes_unavailable = if ruleset.dupes_clause_available() {
+                draft.unavailable.get(&Rule::DupesClause).cloned()
+            } else {
+                Some("it needs First Encounter on".to_owned())
+            };
+            rule_checkbox(
+                ui,
+                &mut ruleset.dupes_clause,
+                "Dupes clause: a wild Pokémon from a family you've had doesn't count",
+                dupes_unavailable,
+            );
+            rule_checkbox(
+                ui,
+                &mut ruleset.faint_is_dead,
+                "Faint = Dead: fainted Pokémon go to the Dead box",
+                draft.unavailable.get(&Rule::FaintIsDead).cloned(),
+            );
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label("Name");

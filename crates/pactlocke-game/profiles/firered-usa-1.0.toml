@@ -30,6 +30,7 @@ script_context_status = 0x03000EA8     # 0 running, 1 waiting, 2 idle
 script_context = 0x03000EB0
 species_info = 0x08254784
 species_names = 0x08245EE0              # gSpeciesNames
+evolution_table = 0x08259754            # gEvolutionTable
 items = 0x083DB028
 
 [layout]
@@ -58,6 +59,10 @@ perish_timer = 0x0F
 script_context_pointer = 0x08
 species_info_size = 28
 species_name_length = 11
+species_count = 412                     # NUM_SPECIES
+evolutions_per_species = 5              # EVOS_PER_MON
+evolution_size = 8                      # struct Evolution
+evolution_target = 4
 primary_type = 6
 item_size = 44
 item_count = 375

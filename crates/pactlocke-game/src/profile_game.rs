@@ -302,6 +302,26 @@ impl<M: Memory> Game for ProfileGame<M> {
         text::decode(&self.bytes(addr, length as usize))
     }
 
+    fn evolutions(&mut self) -> Vec<Vec<u16>> {
+        let layout = self.profile.layout.clone();
+        let per_species = layout.evolutions_per_species * layout.evolution_size;
+        let table = self.bytes(
+            self.profile.symbols.evolution_table,
+            usize::from(layout.species_count) * per_species as usize,
+        );
+        let half = |at: usize| u16::from_le_bytes([table[at], table[at + 1]]);
+        (0..usize::from(layout.species_count))
+            .map(|species| {
+                (0..layout.evolutions_per_species as usize)
+                    .map(|i| species * per_species as usize + i * layout.evolution_size as usize)
+                    .filter(|&entry| half(entry) != 0)
+                    .map(|entry| half(entry + layout.evolution_target as usize))
+                    .filter(|&into| into != 0 && into < layout.species_count)
+                    .collect()
+            })
+            .collect()
+    }
+
     fn at_safe_overworld_point(&mut self) -> bool {
         let callback = self.u32(self.profile.symbols.main_callback2) & !1;
         callback == self.profile.symbols.overworld_callback & !1 && !self.in_battle()

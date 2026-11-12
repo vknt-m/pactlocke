@@ -15,6 +15,7 @@ pub const BAG_SITE: u32 = 0x0800_0300;
 pub const COMMAND_TABLE: u32 = 0x0800_2000;
 pub const SPECIES_INFO: u32 = 0x0800_3000;
 pub const SPECIES_NAMES: u32 = 0x0800_4000;
+pub const EVOLUTION_TABLE: u32 = 0x0800_5000;
 
 /// A test ROM of 64 KiB with the given header game code and every test patch
 /// site holding its expected bytes. Its SHA-1 is whatever it is: tests use
@@ -73,6 +74,7 @@ script_context_status = 0x03000EA8
 script_context = 0x03000EB0
 species_info = 0x08003000
 species_names = 0x08004000
+evolution_table = 0x08005000
 items = 0x08001000
 
 [layout]
@@ -100,6 +102,10 @@ perish_timer = 0x0F
 script_context_pointer = 0x08
 species_info_size = 28
 species_name_length = 11
+species_count = 412
+evolutions_per_species = 5
+evolution_size = 8
+evolution_target = 4
 primary_type = 6
 item_size = 44
 item_count = 4

@@ -179,6 +179,9 @@ pub trait Game {
     fn primary_type(&mut self, species: u16) -> u8;
     /// A species' name as the game shows it, from the loaded ROM.
     fn species_name(&mut self, species: u16) -> String;
+    /// For each species from 0, the species it can evolve into, from the
+    /// loaded ROM (randomizers change evolutions).
+    fn evolutions(&mut self) -> Vec<Vec<u16>>;
     /// On the overworld and out of battle: where Pokémon can be moved safely.
     fn at_safe_overworld_point(&mut self) -> bool;
     /// Whether the Bag holds any kind of Poké Ball.

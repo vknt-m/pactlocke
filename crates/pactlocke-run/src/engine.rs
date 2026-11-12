@@ -4,6 +4,7 @@ use pactlocke_emu::Keys;
 use pactlocke_game::{Area, Battle, BattleKind, Change, Game, GameError, Pokemon, ScriptStatus, Side};
 
 use crate::event::{AreaRef, DeathCause};
+use crate::families::EvolutionFamilies;
 use crate::rules::{BattleStart, DeadMove, Rules, Verdict};
 use crate::storage::{InputBatch, RunInfo, RunStorage, Stamped, StorageError};
 use crate::view::{FeedEntry, FeedKind, Grave, RunView};
@@ -49,6 +50,8 @@ struct BattleWatch {
     area: Option<Area>,
     /// Every PID in the party and PC when it began.
     pids_before: BTreeSet<u32>,
+    /// Their species.
+    species_before: Vec<u16>,
     /// Whether the rules have looked at it yet; they wait until the opponent is known.
     decided: bool,
     catches_blocked: bool,
@@ -179,11 +182,13 @@ impl RunEngine {
         let battle = game.battle();
         match (self.battle.is_some(), battle.clone()) {
             (false, Some(battle)) => {
+                let (pids_before, species_before) = owned(game);
                 self.battle = Some(BattleWatch {
                     kind: battle.kind,
                     script_idle: game.script().status == ScriptStatus::Idle,
                     area: game.area(),
-                    pids_before: pids(game),
+                    pids_before,
+                    species_before,
                     decided: false,
                     catches_blocked: false,
                 });
@@ -267,10 +272,17 @@ impl RunEngine {
         else {
             return;
         };
+        if self.rules.wants_families() {
+            self.rules
+                .set_families(EvolutionFamilies::from_evolutions(&game.evolutions()));
+        }
+        let watch = self.battle.as_ref().expect("a battle is being watched");
         let verdict = self.rules.battle_started(&BattleStart {
             kind: watch.kind,
             script_idle: watch.script_idle,
             area: watch.area.as_ref(),
+            foe: species,
+            owned: &watch.species_before,
         });
         let area = watch.area.as_ref().map(AreaRef::from);
         self.battle.as_mut().unwrap().decided = true;
@@ -292,23 +304,39 @@ impl RunEngine {
                     species_name,
                 });
             }
-            (Verdict::BlockCatches, Some(area)) => match game.block_catches(true) {
-                Ok(changes) => {
-                    self.apply(changes, game);
-                    self.battle.as_mut().unwrap().catches_blocked = true;
-                    let species_name = game.species_name(species);
-                    self.record(RunEvent::CatchesBlocked {
-                        area,
-                        species,
-                        species_name,
-                    });
-                }
-                Err(e) => self.record(RunEvent::BlockFailed {
-                    area,
-                    reason: e.to_string(),
-                }),
-            },
+            (Verdict::BlockCatches, Some(area)) => {
+                let event = RunEvent::CatchesBlocked {
+                    area: area.clone(),
+                    species,
+                    species_name: game.species_name(species),
+                };
+                self.block_catches_then(game, area, event);
+            }
+            (Verdict::Dupe { of }, Some(area)) => {
+                let event = RunEvent::DupeSkipped {
+                    area: area.clone(),
+                    species,
+                    species_name: game.species_name(species),
+                    dupe_of: game.species_name(of),
+                };
+                self.block_catches_then(game, area, event);
+            }
             _ => {}
+        }
+    }
+
+    /// Refuses ball throws for this battle and records `event`, or records why it couldn't.
+    fn block_catches_then(&mut self, game: &mut impl LiveGame, area: AreaRef, event: RunEvent) {
+        match game.block_catches(true) {
+            Ok(changes) => {
+                self.apply(changes, game);
+                self.battle.as_mut().expect("a battle is being watched").catches_blocked = true;
+                self.record(event);
+            }
+            Err(e) => self.record(RunEvent::BlockFailed {
+                area,
+                reason: e.to_string(),
+            }),
         }
     }
 
@@ -508,8 +536,9 @@ fn display_name(pokemon: &Pokemon, species_name: &str) -> String {
     }
 }
 
-fn pids(game: &mut impl Game) -> BTreeSet<u32> {
-    let party = game.party().into_iter().map(|p| p.pid);
-    let pc: Vec<u32> = game.pc().into_iter().map(|s| s.pokemon.pid).collect();
-    party.chain(pc).collect()
+/// Every PID in the party and PC, and their species.
+fn owned(game: &mut impl Game) -> (BTreeSet<u32>, Vec<u16>) {
+    let party = game.party().into_iter();
+    let pc = game.pc().into_iter().map(|s| s.pokemon);
+    party.chain(pc).map(|p| (p.pid, p.species)).unzip()
 }

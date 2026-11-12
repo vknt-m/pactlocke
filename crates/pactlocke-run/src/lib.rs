@@ -9,6 +9,7 @@
 mod clock;
 mod engine;
 mod event;
+mod families;
 mod file;
 mod live;
 mod rules;
@@ -35,6 +36,17 @@ pub struct Ruleset {
     /// A Pokémon that faints is Dead and goes to the Dead box.
     #[serde(default)]
     pub faint_is_dead: bool,
+    /// A wild Encounter from an evolution family already owned doesn't count.
+    /// Needs `first_encounter`.
+    #[serde(default)]
+    pub dupes_clause: bool,
+}
+
+impl Ruleset {
+    /// Whether the dupes clause can be chosen: it needs first Encounter.
+    pub fn dupes_clause_available(&self) -> bool {
+        self.first_encounter
+    }
 }
 
 /// What a new Run is started with.

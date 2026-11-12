@@ -44,6 +44,9 @@ const BATTLE_MONS: u32 = 0x0202_3BE4; // gBattleMons[0]
 const BATTLE_MON_HP: u32 = 0x28;
 const PC_STORAGE_POINTER: u32 = 0x0300_5010;
 const BOX_SLOT_SIZE: u32 = 80;
+const ENEMY_PARTY: u32 = 0x0202_402C; // gEnemyParty
+const PIDGEY: u16 = 16;
+const RATTATA: u16 = 19;
 const POKE_BALL: u16 = 4;
 const POTION: u16 = 13;
 
@@ -373,6 +376,7 @@ fn a_starter_that_faints_to_the_rival_goes_to_the_dead_box_and_stays_there() {
         Ruleset {
             first_encounter: true,
             faint_is_dead: true,
+            ..Ruleset::default()
         },
     );
 
@@ -437,6 +441,82 @@ w 60",
         )]
     );
     assert_eq!(d.read(PARTY_COUNT, 1)[0], 0);
+    for entry in d.game.engine().view().feed.iter().rev() {
+        eprintln!("feed: {}", entry.text);
+    }
+}
+
+#[test]
+fn a_route_1_pokemon_from_a_family_already_owned_is_skipped_as_a_dupe() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        return;
+    };
+    let mut d = firered_run_with(
+        rom,
+        Ruleset {
+            first_encounter: true,
+            dupes_clause: true,
+            ..Ruleset::default()
+        },
+    );
+    let clean_catch_site = [0x10, 0xB5, 0x00, 0x24];
+
+    d.play(FR_STARTER);
+    d.fast_text();
+    d.give(ITEMS_POCKET, POTION, 1);
+    d.play("h D 64\nw 60");
+    d.until_action_menu(Keys::A, 3000);
+    d.until_battle_over(Keys::A, 4000);
+    d.play(FR_TO_ROUTE_1);
+
+    // Before Poké Balls nothing counts. Each wild Pokémon met is put in the
+    // PC as if caught earlier (test setup), until the Player has had both of
+    // Route 1's species.
+    let mut owned = Vec::new();
+    for _ in 0..20 {
+        if owned.contains(&PIDGEY) && owned.contains(&RATTATA) {
+            break;
+        }
+        d.walk_in_grass(6000);
+        d.until_action_menu(Keys::B, 3000);
+        let species = d.game.game_mut().opponent_party()[0].species;
+        let wild = d.read(ENEMY_PARTY, BOX_SLOT_SIZE as usize);
+        d.run_away();
+        // After the battle, so it isn't taken for a catch.
+        if !owned.contains(&species) {
+            let slot = d.u32(PC_STORAGE_POINTER) + 4 + owned.len() as u32 * BOX_SLOT_SIZE;
+            d.game.write(slot, &wild);
+            owned.push(species);
+        }
+    }
+    owned.sort_unstable();
+    assert_eq!(owned, [PIDGEY, RATTATA], "met both on Route 1");
+
+    // With Poké Balls, Route 1's next wild battle is a dupe either way.
+    d.give(BALLS_POCKET, POKE_BALL, 5);
+    d.play("w 180");
+    d.walk_in_grass(6000);
+    d.until_action_menu(Keys::B, 3000);
+    let encounters = d.feed(FeedKind::Encounter);
+    assert!(
+        encounters[0].starts_with("Route 1: a wild ") && encounters[0].contains(", not counted: a dupe of your "),
+        "{encounters:?}"
+    );
+    assert_eq!(d.read(CATCH_SITE, 4), [0x01, 0x20, 0x70, 0x47], "no catching a dupe");
+    assert!(d.game.engine().view().closed_areas.is_empty(), "Route 1 is still open");
+    assert!(
+        d.feed(FeedKind::Catch).is_empty(),
+        "the PC was filled by the test, not by catches"
+    );
+
+    d.run_away();
+    d.play("w 180");
+    assert_eq!(
+        d.read(CATCH_SITE, 4),
+        clean_catch_site,
+        "the block comes off with the battle"
+    );
     for entry in d.game.engine().view().feed.iter().rev() {
         eprintln!("feed: {}", entry.text);
     }

@@ -162,3 +162,33 @@ fn the_starter_reads_back_decrypted_from_the_real_party() {
     assert!(stats.hp > 0 && stats.hp <= stats.max_hp);
     assert_eq!(starter.ot_id, game.trainer_id(), "the Player is its original trainer");
 }
+
+#[test]
+fn evolutions_read_from_the_real_rom_match_the_games_families() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}");
+        return;
+    };
+    let store = ProfileStore::bundled().unwrap();
+    let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
+        panic!("FireRed should be profiled");
+    };
+    let mut core = MgbaCore::new();
+    core.load_rom(&rom).unwrap();
+    let mut game = ProfileGame::new(profile, rom, core);
+
+    let evolutions = game.evolutions();
+    assert_eq!(evolutions.len(), 412, "NUM_SPECIES, counting species 0");
+    assert_eq!(evolutions[1], [2], "Bulbasaur to Ivysaur");
+    assert_eq!(evolutions[2], [3]);
+    assert!(evolutions[3].is_empty(), "Venusaur is the last");
+    assert_eq!(evolutions[16], [17], "Pidgey to Pidgeotto");
+    assert_eq!(evolutions[19], [20], "Rattata to Raticate");
+    assert_eq!(evolutions[172], [25], "Pichu to Pikachu");
+    let mut eevee = evolutions[133].clone();
+    eevee.sort_unstable();
+    assert_eq!(eevee, [134, 135, 136, 196, 197], "Eevee's five");
+    assert_eq!(evolutions[290].len(), 2, "Nincada to Ninjask, and Shedinja");
+    let evolving = evolutions.iter().filter(|into| !into.is_empty()).count();
+    assert!(evolving < 200, "fewer than half evolve in the real game: {evolving}");
+}

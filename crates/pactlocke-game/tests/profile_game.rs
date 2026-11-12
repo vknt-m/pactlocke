@@ -388,6 +388,35 @@ fn a_species_name_is_read_from_the_loaded_rom() {
     assert_eq!(game.species_name(19), "RATTATA");
 }
 
+/// One evolution in the table: method, parameter, target species.
+fn put_evolution(rom: &mut [u8], species: u16, index: u32, method: u16, param: u16, into: u16) {
+    let mut entry = Vec::new();
+    for half in [method, param, into, 0] {
+        entry.extend_from_slice(&half.to_le_bytes());
+    }
+    put(rom, EVOLUTION_TABLE + u32::from(species) * 40 + index * 8, &entry);
+}
+
+#[test]
+fn evolutions_are_read_from_the_loaded_rom() {
+    let mut rom = patchable_rom(b"BPRE");
+    put_evolution(&mut rom, 1, 0, 4, 16, 2); // Bulbasaur at level 16
+    put_evolution(&mut rom, 2, 0, 4, 32, 3);
+    put_evolution(&mut rom, 133, 0, 7, 96, 135); // Eevee by stones and friendship
+    put_evolution(&mut rom, 133, 1, 7, 97, 134);
+    put_evolution(&mut rom, 133, 4, 3, 0, 197);
+    put_evolution(&mut rom, 19, 0, 4, 20, 9999); // no such species: ignored
+    let mut game = game_over(overworld_image(rom));
+
+    let evolutions = game.evolutions();
+    assert_eq!(evolutions.len(), 412, "one entry per species");
+    assert_eq!(evolutions[1], [2]);
+    assert_eq!(evolutions[2], [3]);
+    assert_eq!(evolutions[3], Vec::<u16>::new());
+    assert_eq!(evolutions[133], [135, 134, 197]);
+    assert_eq!(evolutions[19], Vec::<u16>::new());
+}
+
 #[test]
 fn the_opponents_party_is_read_before_the_battle_fills_in_its_battlers() {
     let mut game = at_overworld();

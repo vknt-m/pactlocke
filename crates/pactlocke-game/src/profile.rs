@@ -106,6 +106,8 @@ pub struct Symbols {
     pub species_info: u32,
     /// The species names table, one fixed-length name per species.
     pub species_names: u32,
+    /// The evolution table, a fixed number of entries per species.
+    pub evolution_table: u32,
     pub items: u32,
 }
 
@@ -139,6 +141,12 @@ pub struct Layout {
     pub script_context_pointer: u32,
     pub species_info_size: u32,
     pub species_name_length: u32,
+    /// Species in the species tables, counting species 0.
+    pub species_count: u16,
+    pub evolutions_per_species: u32,
+    /// One evolution entry: its method (0 for none) first, then the target species at `evolution_target`.
+    pub evolution_size: u32,
+    pub evolution_target: u32,
     pub primary_type: u32,
     pub item_size: u32,
     pub item_count: u32,

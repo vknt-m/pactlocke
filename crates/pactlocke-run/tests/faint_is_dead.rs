@@ -13,6 +13,7 @@ fn faint_is_dead() -> Ruleset {
     Ruleset {
         first_encounter: true,
         faint_is_dead: true,
+        ..Ruleset::default()
     }
 }
 
@@ -129,6 +130,7 @@ fn with_faint_dead_off_a_fainted_pokemon_stays_in_the_party() {
     let mut player = Player::starts_a_run(Ruleset {
         first_encounter: true,
         faint_is_dead: false,
+        ..Ruleset::default()
     });
     player.game.party = vec![party_pokemon(BULBASAUR, STARTER, "BULBA")];
     player.meets_wild(RATTATA);

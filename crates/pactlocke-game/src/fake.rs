@@ -46,6 +46,8 @@ pub struct FakeGame {
     pub primary_types: BTreeMap<u16, u8>,
     /// Species names; a species not listed is called `SPECIES <number>`.
     pub species_names: BTreeMap<u16, String>,
+    /// What each species can evolve into; a species not listed doesn't evolve.
+    pub evolutions: BTreeMap<u16, Vec<u16>>,
     pub safe_point: bool,
     pub holds_poke_balls: bool,
 
@@ -79,6 +81,7 @@ impl Default for FakeGame {
             trainer_id: 0,
             primary_types: BTreeMap::new(),
             species_names: BTreeMap::new(),
+            evolutions: BTreeMap::new(),
             safe_point: true,
             holds_poke_balls: true,
             catches_blocked: false,
@@ -203,6 +206,21 @@ impl Game for FakeGame {
             .get(&species)
             .cloned()
             .unwrap_or_else(|| format!("SPECIES {species}"))
+    }
+
+    fn evolutions(&mut self) -> Vec<Vec<u16>> {
+        // Enough species to cover every one named, as evolving or evolved into.
+        let named = self
+            .evolutions
+            .iter()
+            .flat_map(|(from, into)| std::iter::once(from).chain(into));
+        let count = named.max().map_or(0, |&last| usize::from(last) + 1);
+        (0..count)
+            .map(|species| {
+                let species = u16::try_from(species).expect("species fit in u16");
+                self.evolutions.get(&species).cloned().unwrap_or_default()
+            })
+            .collect()
     }
 
     fn at_safe_overworld_point(&mut self) -> bool {
