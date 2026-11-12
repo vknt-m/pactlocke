@@ -37,6 +37,10 @@ impl<M: Memory> ProfileGame<M> {
         }
     }
 
+    pub fn memory(&self) -> &M {
+        &self.memory
+    }
+
     pub fn memory_mut(&mut self) -> &mut M {
         &mut self.memory
     }
@@ -241,6 +245,19 @@ impl<M: Memory> Game for ProfileGame<M> {
         })
     }
 
+    fn opponent_party(&mut self) -> Vec<Pokemon> {
+        let slot_size = self.profile.layout.party_slot_size;
+        let base = self.profile.symbols.enemy_party;
+        let mut party = Vec::new();
+        for slot in 0..u32::from(PARTY_SIZE) {
+            let addr = base + slot * slot_size;
+            if self.has_species(addr) {
+                party.push(self.pokemon(addr, true));
+            }
+        }
+        party
+    }
+
     fn script(&mut self) -> ScriptContext {
         let status = match self.u8(self.profile.symbols.script_context_status) {
             0 => ScriptStatus::Running,
@@ -277,6 +294,12 @@ impl<M: Memory> Game for ProfileGame<M> {
         let addr =
             self.profile.symbols.species_info + u32::from(species) * layout.species_info_size + layout.primary_type;
         self.u8(addr)
+    }
+
+    fn species_name(&mut self, species: u16) -> String {
+        let length = self.profile.layout.species_name_length;
+        let addr = self.profile.symbols.species_names + u32::from(species) * length;
+        text::decode(&self.bytes(addr, length as usize))
     }
 
     fn at_safe_overworld_point(&mut self) -> bool {

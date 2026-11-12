@@ -13,6 +13,7 @@ status = "supported"
 [symbols]
 party = 0x02024284
 party_count = 0x02024029
+enemy_party = 0x0202402C              # gEnemyParty
 pc_storage_pointer = 0x03005010
 save_block_1_pointer = 0x03005008
 save_block_2_pointer = 0x0300500C
@@ -28,6 +29,7 @@ disable_structs = 0x02023E0C
 script_context_status = 0x03000EA8     # 0 running, 1 waiting, 2 idle
 script_context = 0x03000EB0
 species_info = 0x08254784
+species_names = 0x08245EE0              # gSpeciesNames
 items = 0x083DB028
 
 [layout]
@@ -55,6 +57,7 @@ disable_struct_size = 0x1C
 perish_timer = 0x0F
 script_context_pointer = 0x08
 species_info_size = 28
+species_name_length = 11
 primary_type = 6
 item_size = 44
 item_count = 375

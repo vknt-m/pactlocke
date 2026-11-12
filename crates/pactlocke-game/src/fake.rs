@@ -34,6 +34,7 @@ pub struct FakeGame {
     pub party: Vec<Pokemon>,
     pub pc: Vec<StoredPokemon>,
     pub battle: Option<Battle>,
+    pub opponent_party: Vec<Pokemon>,
     pub script: ScriptContext,
     pub badges: Badges,
     /// Option settings by name, such as `battle_style = "shift"`.
@@ -43,6 +44,8 @@ pub struct FakeGame {
     pub trainer_id: u32,
     /// Primary types by species; a species not listed has type 0.
     pub primary_types: BTreeMap<u16, u8>,
+    /// Species names; a species not listed is called `SPECIES <number>`.
+    pub species_names: BTreeMap<u16, String>,
     pub safe_point: bool,
 
     // What applied changes have switched on.
@@ -63,6 +66,7 @@ impl Default for FakeGame {
             party: Vec::new(),
             pc: Vec::new(),
             battle: None,
+            opponent_party: Vec::new(),
             script: ScriptContext {
                 status: ScriptStatus::Idle,
                 position: None,
@@ -72,6 +76,7 @@ impl Default for FakeGame {
             option_values: BTreeMap::from([("battle_style".to_owned(), vec!["shift".to_owned(), "set".to_owned()])]),
             trainer_id: 0,
             primary_types: BTreeMap::new(),
+            species_names: BTreeMap::new(),
             safe_point: true,
             catches_blocked: false,
             level_cap: None,
@@ -166,6 +171,10 @@ impl Game for FakeGame {
         self.battle.clone()
     }
 
+    fn opponent_party(&mut self) -> Vec<Pokemon> {
+        self.opponent_party.clone()
+    }
+
     fn script(&mut self) -> ScriptContext {
         self.script
     }
@@ -184,6 +193,13 @@ impl Game for FakeGame {
 
     fn primary_type(&mut self, species: u16) -> u8 {
         self.primary_types.get(&species).copied().unwrap_or(0)
+    }
+
+    fn species_name(&mut self, species: u16) -> String {
+        self.species_names
+            .get(&species)
+            .cloned()
+            .unwrap_or_else(|| format!("SPECIES {species}"))
     }
 
     fn at_safe_overworld_point(&mut self) -> bool {

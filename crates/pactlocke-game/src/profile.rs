@@ -87,6 +87,8 @@ pub struct Bit {
 pub struct Symbols {
     pub party: u32,
     pub party_count: u32,
+    /// The opponent's party, filled in before a battle starts.
+    pub enemy_party: u32,
     pub pc_storage_pointer: u32,
     pub save_block_1_pointer: u32,
     pub save_block_2_pointer: u32,
@@ -102,6 +104,8 @@ pub struct Symbols {
     pub script_context_status: u32,
     pub script_context: u32,
     pub species_info: u32,
+    /// The species names table, one fixed-length name per species.
+    pub species_names: u32,
     pub items: u32,
 }
 
@@ -134,6 +138,7 @@ pub struct Layout {
     /// The current script instruction's offset in the script context.
     pub script_context_pointer: u32,
     pub species_info_size: u32,
+    pub species_name_length: u32,
     pub primary_type: u32,
     pub item_size: u32,
     pub item_count: u32,

@@ -187,3 +187,19 @@ fn every_frame_has_a_full_opaque_gba_picture_and_audio() {
     assert!(core.audio_sample_rate() > 0);
     assert!(!audio.is_empty() && audio.len() % 2 == 0, "stereo samples every frame");
 }
+
+#[test]
+fn a_new_game_boots_with_save_memory_taken_from_an_earlier_one() {
+    // Like moving a cartridge's save to a fresh power-on: what a resumed Run does.
+    let mut first = powered_on();
+    flash_write_byte(&mut first, 0x0010, 0x42);
+    first.run_frame(Keys::NONE);
+    let save = first.save_memory();
+    assert!(!save.is_empty());
+
+    let mut second = powered_on();
+    second.load_save_memory(&save).expect("the save memory loads");
+    second.run_frame(Keys::NONE);
+    assert_eq!(flash_read_byte(&mut second, 0x0010), 0x42);
+    assert_eq!(second.save_memory(), save);
+}

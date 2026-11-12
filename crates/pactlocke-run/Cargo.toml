@@ -1,0 +1,18 @@
+[package]
+name = "pactlocke-run"
+description = "The Run engine, the rules engine and the Run file: a Run's rules applied to one Player's game, frame by frame."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pactlocke-emu = { path = "../pactlocke-emu" }
+pactlocke-game = { path = "../pactlocke-game" }
+rusqlite = { version = "0.42.0", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+pactlocke-mgba = { path = "../pactlocke-mgba" }
+tempfile = "3.27.0"

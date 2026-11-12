@@ -16,4 +16,5 @@ eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "de
 pactlocke-emu = { path = "../pactlocke-emu" }
 pactlocke-game = { path = "../pactlocke-game" }
 pactlocke-mgba = { path = "../pactlocke-mgba" }
+pactlocke-run = { path = "../pactlocke-run" }
 rfd = "0.18.0"

@@ -248,6 +248,7 @@ fn check(profile: &GameProfile) -> Result<(), String> {
     for (table, addr) in [
         ("items", profile.symbols.items),
         ("species_info", profile.symbols.species_info),
+        ("species_names", profile.symbols.species_names),
     ] {
         if !ROM.contains(&addr) {
             return Err(format!("symbol {table} {addr:#010X} is not in ROM"));

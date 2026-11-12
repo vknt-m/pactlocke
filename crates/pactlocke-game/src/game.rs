@@ -166,6 +166,9 @@ pub trait Game {
     fn party(&mut self) -> Vec<Pokemon>;
     fn pc(&mut self) -> Vec<StoredPokemon>;
     fn battle(&mut self) -> Option<Battle>;
+    /// The opponent's party. The game fills it in before a battle starts,
+    /// while the battlers still hold the last battle's Pokémon for a while.
+    fn opponent_party(&mut self) -> Vec<Pokemon>;
     fn script(&mut self) -> ScriptContext;
     fn badges(&mut self) -> Badges;
     /// The named option's current setting, if the game has that option and
@@ -174,6 +177,8 @@ pub trait Game {
     fn trainer_id(&mut self) -> u32;
     /// A species' primary type, from the loaded ROM (randomizers change types).
     fn primary_type(&mut self, species: u16) -> u8;
+    /// A species' name as the game shows it, from the loaded ROM.
+    fn species_name(&mut self, species: u16) -> String;
     /// On the overworld and out of battle: where Pokémon can be moved safely.
     fn at_safe_overworld_point(&mut self) -> bool;
 

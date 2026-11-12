@@ -374,3 +374,27 @@ fn a_species_primary_type_is_read_from_the_loaded_rom() {
     let mut game = game_over(overworld_image(rom));
     assert_eq!(game.primary_type(19), 0x0D);
 }
+
+#[test]
+fn a_species_name_is_read_from_the_loaded_rom() {
+    // "RATTATA" in the game's character set, then the terminator.
+    let mut rom = patchable_rom(b"BPRE");
+    put(
+        &mut rom,
+        SPECIES_NAMES + 19 * 11,
+        &[0xCC, 0xBB, 0xCE, 0xCE, 0xBB, 0xCE, 0xBB, 0xFF],
+    );
+    let mut game = game_over(overworld_image(rom));
+    assert_eq!(game.species_name(19), "RATTATA");
+}
+
+#[test]
+fn the_opponents_party_is_read_before_the_battle_fills_in_its_battlers() {
+    let mut game = at_overworld();
+    assert!(game.opponent_party().is_empty());
+    set_enemy_party(game.memory_mut(), &[rattata()]);
+    let opponents = game.opponent_party();
+    assert_eq!(opponents.len(), 1);
+    assert_eq!(opponents[0].species, 19);
+    assert_eq!(opponents[0].nickname, "Rat 2");
+}

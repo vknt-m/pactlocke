@@ -47,22 +47,6 @@ impl MgbaCore {
     fn ptr(&self) -> *mut ffi::PactCore {
         self.raw.as_ptr()
     }
-
-    /// A copy of the game's save memory; empty while the save type is unknown.
-    fn save_memory(&mut self) -> Vec<u8> {
-        // SAFETY: the shim hands over a malloc'd copy of `len` bytes (or null),
-        // which is copied and then released with the shim's allocator.
-        unsafe {
-            let mut sram: *mut u8 = std::ptr::null_mut();
-            let len = ffi::pact_core_save_memory(self.ptr(), &mut sram);
-            if sram.is_null() {
-                return Vec::new();
-            }
-            let copy = std::slice::from_raw_parts(sram, len).to_vec();
-            ffi::pact_free(sram.cast());
-            copy
-        }
-    }
 }
 
 impl Default for MgbaCore {
@@ -161,6 +145,30 @@ impl CoreAdapter for MgbaCore {
             }
         }
         Ok(())
+    }
+
+    fn save_memory(&mut self) -> Vec<u8> {
+        // SAFETY: the shim hands over a malloc'd copy of `len` bytes (or null),
+        // which is copied and then released with the shim's allocator.
+        unsafe {
+            let mut sram: *mut u8 = std::ptr::null_mut();
+            let len = ffi::pact_core_save_memory(self.ptr(), &mut sram);
+            if sram.is_null() {
+                return Vec::new();
+            }
+            let copy = std::slice::from_raw_parts(sram, len).to_vec();
+            ffi::pact_free(sram.cast());
+            copy
+        }
+    }
+
+    fn load_save_memory(&mut self, save: &[u8]) -> Result<(), CoreError> {
+        // SAFETY: the shim copies the bytes before returning.
+        if unsafe { ffi::pact_core_restore_save_memory(self.ptr(), save.as_ptr(), save.len()) } {
+            Ok(())
+        } else {
+            Err(CoreError::BadSave)
+        }
     }
 
     fn set_clock(&mut self, epoch_ms: i64) {

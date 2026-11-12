@@ -14,6 +14,7 @@ pub const CAP_SITE: u32 = 0x0800_0200;
 pub const BAG_SITE: u32 = 0x0800_0300;
 pub const COMMAND_TABLE: u32 = 0x0800_2000;
 pub const SPECIES_INFO: u32 = 0x0800_3000;
+pub const SPECIES_NAMES: u32 = 0x0800_4000;
 
 /// A test ROM of 64 KiB with the given header game code and every test patch
 /// site holding its expected bytes. Its SHA-1 is whatever it is: tests use
@@ -55,6 +56,7 @@ pub const BODY: &str = r#"
 [symbols]
 party = 0x02024284
 party_count = 0x02024029
+enemy_party = 0x0202402C
 pc_storage_pointer = 0x03005010
 save_block_1_pointer = 0x03005008
 save_block_2_pointer = 0x0300500C
@@ -70,6 +72,7 @@ disable_structs = 0x02023E0C
 script_context_status = 0x03000EA8
 script_context = 0x03000EB0
 species_info = 0x08003000
+species_names = 0x08004000
 items = 0x08001000
 
 [layout]
@@ -96,6 +99,7 @@ disable_struct_size = 0x1C
 perish_timer = 0x0F
 script_context_pointer = 0x08
 species_info_size = 28
+species_name_length = 11
 primary_type = 6
 item_size = 44
 item_count = 4
@@ -305,6 +309,15 @@ pub fn overworld_image(rom: Vec<u8>) -> MemoryImage {
     image.put32(0x0300_30F4, 0x0805_65B5); // CB2_Overworld, Thumb bit set
     image.put8(0x0300_0EA8, 2); // script context idle
     image
+}
+
+pub const ENEMY_PARTY: u32 = 0x0202_402C;
+
+/// The opponent's party, as the game fills it in before a battle.
+pub fn set_enemy_party(image: &mut MemoryImage, mons: &[TestMon]) {
+    for (i, mon) in mons.iter().enumerate() {
+        image.put(ENEMY_PARTY + i as u32 * 100, &mon.party_bytes());
+    }
 }
 
 pub fn set_party(image: &mut MemoryImage, mons: &[TestMon]) {

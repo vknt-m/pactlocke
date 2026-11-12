@@ -55,6 +55,12 @@ impl CoreAdapter for FakeCore {
     fn restore(&mut self, _checkpoint: &Checkpoint) -> Result<(), CoreError> {
         Ok(())
     }
+    fn save_memory(&mut self) -> Vec<u8> {
+        Vec::new()
+    }
+    fn load_save_memory(&mut self, _save: &[u8]) -> Result<(), CoreError> {
+        Ok(())
+    }
     fn set_clock(&mut self, _epoch_ms: i64) {}
     fn frame(&self) -> Frame {
         let n = self.frames_run.load(Ordering::SeqCst);

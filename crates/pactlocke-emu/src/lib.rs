@@ -98,6 +98,8 @@ pub enum CoreError {
     NotARom,
     /// A savestate or save memory was refused by the core.
     BadCheckpoint,
+    /// Save memory on its own was refused by the core.
+    BadSave,
 }
 
 impl fmt::Display for CoreError {
@@ -105,6 +107,7 @@ impl fmt::Display for CoreError {
         match self {
             CoreError::NotARom => write!(f, "this file isn't a GBA ROM"),
             CoreError::BadCheckpoint => write!(f, "the checkpoint couldn't be restored"),
+            CoreError::BadSave => write!(f, "the game refused the save"),
         }
     }
 }
@@ -133,6 +136,12 @@ pub trait CoreAdapter: Send {
     fn checkpoint(&mut self) -> Checkpoint;
     /// Restore a checkpoint: save memory first, then the savestate.
     fn restore(&mut self, checkpoint: &Checkpoint) -> Result<(), CoreError>;
+    /// A copy of the game's save memory (the cartridge save); empty while
+    /// the game hasn't shown which kind of save it uses.
+    fn save_memory(&mut self) -> Vec<u8>;
+    /// Replace the game's save memory, as if the cartridge held this save.
+    /// Done right after `load_rom`, the game boots with it.
+    fn load_save_memory(&mut self, save: &[u8]) -> Result<(), CoreError>;
     /// Start the fake-epoch clock at this Unix time in milliseconds. It then
     /// advances with emulated time only.
     fn set_clock(&mut self, epoch_ms: i64);
