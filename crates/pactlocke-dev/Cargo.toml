@@ -12,3 +12,4 @@ path = "src/main.rs"
 
 [dependencies]
 pactlocke-game = { path = "../pactlocke-game" }
+serde_json = "1"

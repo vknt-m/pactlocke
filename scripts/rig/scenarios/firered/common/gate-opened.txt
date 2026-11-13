@@ -1,0 +1,7 @@
+# Both Players Ready at the rival's Sync Gate: it opens with a Run
+# Checkpoint every Player's game is captured in.
+include starter.txt
+include gate-held.txt
+expect log event checkpoint reason=sync_gate within 300
+# The other Player joins it with their own part.
+expect log event checkpoint x 2 within 120

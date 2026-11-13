@@ -13,8 +13,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use iroh::endpoint::{Connection, RecvStream, SendStream, presets};
+use iroh::endpoint::{Connection, SendStream, presets};
 use iroh::{Endpoint, EndpointAddr, PublicKey, RelayMode, RelayUrl, SecretKey};
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::{Semaphore, mpsc};
 
 use crate::invite::{Invite, PeerKey};
@@ -169,12 +170,31 @@ async fn write_frame(send: &mut SendStream, bytes: &[u8]) -> Result<(), String> 
     send.write_all(bytes).await.map_err(|e| e.to_string())
 }
 
+/// Reads messages from `recv` on their own task, onto the channel returned.
+/// A read is never cut short: one cut short inside a `select!` loses the
+/// bytes it read, and every length after them is read from inside a message.
+fn frames_of<R>(mut recv: R) -> (mpsc::Receiver<Vec<u8>>, tokio::task::JoinHandle<()>)
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    let (frames_in, frames) = mpsc::channel(OUTBOX);
+    let reader = tokio::spawn(async move {
+        while let Some(bytes) = read_frame(&mut recv).await {
+            if frames_in.send(bytes).await.is_err() {
+                break;
+            }
+        }
+    });
+    (frames, reader)
+}
+
 /// The next message, or `None` when the stream ends or breaks its bounds.
-async fn read_frame(recv: &mut RecvStream) -> Option<Vec<u8>> {
+async fn read_frame<R: AsyncRead + Unpin>(recv: &mut R) -> Option<Vec<u8>> {
     let mut len = [0u8; 2];
     recv.read_exact(&mut len).await.ok()?;
     let len = usize::from(u16::from_le_bytes(len));
     if len > MAX_MESSAGE {
+        log::warn!("A message of {len} bytes arrived, over the {MAX_MESSAGE}-byte limit");
         return None;
     }
     let mut bytes = vec![0u8; len];
@@ -489,7 +509,8 @@ async fn serve_player(
         while let Some(outgoing) = queued.recv().await {
             match outgoing {
                 Outgoing::Send(bytes) => {
-                    if write_frame(&mut send, &bytes).await.is_err() {
+                    if let Err(e) = write_frame(&mut send, &bytes).await {
+                        log::warn!("Host: writing to {} failed: {e}", short(&peer));
                         break;
                     }
                 }
@@ -586,8 +607,13 @@ impl JoinNode {
         std::mem::take(&mut lock(&self.inbox))
     }
 
-    /// A setup or log message to the Host.
+    /// A message to the Host. Input sent while there is no connection is
+    /// dropped: the Host asks again for what it misses, and a game's stream
+    /// queued while offline would arrive all at once, a flood.
     pub fn send(&self, message: Message) {
+        if matches!(message, Message::Input(_)) && lock(&self.connection).is_none() {
+            return;
+        }
         self.worker.send(JoinCommand::Send(message));
     }
 
@@ -649,16 +675,18 @@ async fn join(
         Ok(Err(e)) => return fail(format!("The Host couldn't be reached: {e}.")),
         Err(_) => return fail("The Host couldn't be reached: no answer in 30 seconds.".into()),
     };
-    let Ok((mut send, mut recv)) = connection.open_bi().await else {
+    let Ok((mut send, recv)) = connection.open_bi().await else {
         return fail("The connection to the Host closed at once.".into());
     };
     if send.write_all(&lobby.proof()).await.is_err() || write_frame(&mut send, &lobby.hello()).await.is_err() {
         return fail("The connection to the Host closed at once.".into());
     }
     *lock(&held) = Some(connection.clone());
+    // Frames are read on their own task, so the select below can't cut one short.
+    let (mut frames, reader) = frames_of(recv);
     loop {
         tokio::select! {
-            frame = read_frame(&mut recv) => {
+            frame = frames.recv() => {
                 let Some(bytes) = frame else {
                     log::warn!("Joiner: the Host's stream ended ({})", connection.close_reason().map_or_else(|| "no reason given".to_owned(), |r| r.to_string()));
                     lobby.lost("it closed");
@@ -685,6 +713,7 @@ async fn join(
             },
         }
     }
+    reader.abort();
     *lock(&held) = None;
     connection.close(0u8.into(), b"bye");
     endpoint.close().await;
@@ -693,4 +722,42 @@ async fn join(
 /// A Player's key, shortened for the log.
 fn short(peer: &PeerKey) -> String {
     peer.to_string().chars().take(8).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::io::AsyncWriteExt;
+
+    /// The joiner's loop selects between the Host's messages and its own
+    /// sends: a message arriving slowly, in pieces, must still come through
+    /// whole however often the other side of the select wins.
+    #[test]
+    fn a_message_arriving_in_pieces_comes_through_whole_while_the_caller_selects() {
+        super::runtime().block_on(async {
+            let (mut write, read) = tokio::io::duplex(256);
+            let (mut frames, _reader) = super::frames_of(read);
+            let message: Vec<u8> = (0..5_000u32).map(|i| i as u8).collect();
+            let sent = message.clone();
+            tokio::spawn(async move {
+                for _ in 0..3 {
+                    write.write_all(&(sent.len() as u16).to_le_bytes()).await.unwrap();
+                    for piece in sent.chunks(700) {
+                        write.write_all(piece).await.unwrap();
+                        tokio::time::sleep(Duration::from_millis(2)).await;
+                    }
+                }
+            });
+            let mut got = Vec::new();
+            while got.len() < 3 {
+                tokio::select! {
+                    frame = frames.recv() => got.push(frame.expect("the stream goes on")),
+                    // As the Player's app sending something meanwhile.
+                    () = tokio::time::sleep(Duration::from_micros(300)) => {}
+                }
+            }
+            assert!(got.iter().all(|frame| *frame == message));
+        });
+    }
 }

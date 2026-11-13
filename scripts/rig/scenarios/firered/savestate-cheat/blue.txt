@@ -1,0 +1,11 @@
+include ../common/rival-gate.txt
+include ../common/join.txt
+speed 4
+include ../common/gate-opened.txt
+sync opened 2
+m B 300
+cheat savestate-load
+m B 900
+expect log event cheat_flag cheat=restarted_without_retry about Blue within 120
+sync done 2
+w 300

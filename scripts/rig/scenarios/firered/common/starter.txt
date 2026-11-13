@@ -1,0 +1,32 @@
+# FireRed (USA) 1.0, from power-on to the starter chosen in Oak's lab, as
+# the acceptance tests play it (FR_STARTER in
+# crates/pactlocke-run/tests/firered_acceptance.rs), then fast text.
+m A 5100
+m B 300
+h R 64
+h U 64
+h L 24
+w 120
+h D 16
+h L 16
+h D 96
+h L 80
+h D 24
+w 120
+h R 64
+h U 96
+h R 32
+h U 48
+m A 1500
+m B 1500
+h R 20
+w 20
+p A 90
+p A 90
+p A 90
+p A 120
+p A 120
+p A 120
+m B 1500
+# Fast text: a test setup write, stamped so every Shadow Game sees it.
+poke *0x0300500C+0x14 02

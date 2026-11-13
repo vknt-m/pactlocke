@@ -228,3 +228,95 @@ fn setup_and_log_cross_iroh_and_after_the_lock_nobody_new_joins() {
     host.lock_roster();
     wait_for("no invite after the lock", || host.view(), |v| v.invite_link.is_none());
 }
+
+/// Large messages arrive whole and in order while the joiner sends its own.
+/// (The cut-short read this guards against needs a slow network to show:
+/// `node::tests` reproduces it, and the test rig runs it over a shaped one.)
+#[test]
+fn large_messages_arrive_whole_while_the_joiner_sends() {
+    let _ = log::set_logger(&Stderr).map(|()| log::set_max_level(log::LevelFilter::Debug));
+    let host = host();
+    let view = wait_for("the invite", || host.view(), |v| v.invite_link.is_some());
+    let invite = Invite::parse(view.invite_link.as_deref().unwrap()).unwrap();
+    let direct = wait_for_addrs(&host);
+    let blue = JoinLobby::new(invite, "Blue", APP_VERSION, Some(FIRERED.into())).unwrap();
+    let blue = JoinNode::start_with(key(2), blue, Relays::Off, direct);
+    wait_for("Blue in the Host's lobby", || host.view(), |v| v.players.len() == 2);
+
+    // Input streams flow once the Run is locked.
+    host.lock_roster();
+    std::thread::sleep(Duration::from_millis(200));
+    const SENT: usize = 200;
+    for i in 0..SENT {
+        let big: Vec<u8> = (0..15_000).map(|b| (b + i) as u8).collect();
+        host.send(None, pactlocke_net::Message::Input(big));
+        // The joiner sends meanwhile, within the Host's rate for a Player.
+        blue.send(pactlocke_net::Message::Input(vec![i as u8; 40]));
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let start = Instant::now();
+    let mut got = Vec::new();
+    while got.len() < SENT {
+        assert!(
+            blue.view().error.is_none(),
+            "Blue lost the Host: {:?}",
+            blue.view().error
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(60),
+            "{} of {SENT} arrived",
+            got.len()
+        );
+        got.extend(blue.take_inbox());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    for (i, message) in got.iter().enumerate() {
+        let pactlocke_net::Message::Input(bytes) = message else {
+            panic!("message {i} isn't input: {message:?}");
+        };
+        assert_eq!(bytes.len(), 15_000, "message {i} whole");
+        assert_eq!(bytes[1], (1 + i) as u8, "message {i} in order");
+    }
+}
+
+struct Stderr;
+impl log::Log for Stderr {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.target().starts_with("pactlocke")
+    }
+    fn log(&self, r: &log::Record) {
+        if self.enabled(r.metadata()) {
+            eprintln!("LOG {} {}", r.level(), r.args());
+        }
+    }
+    fn flush(&self) {}
+}
+
+/// A Player's game streams on while they are offline. Input sent before the
+/// connection is up is dropped (the Host asks again for what it misses), not
+/// queued and flushed all at once, which floods the Host into closing them.
+#[test]
+fn input_sent_while_connecting_is_dropped_not_flushed_as_a_flood() {
+    let host = host();
+    let view = wait_for("the invite", || host.view(), |v| v.invite_link.is_some());
+    let invite = Invite::parse(view.invite_link.as_deref().unwrap()).unwrap();
+    let direct = wait_for_addrs(&host);
+    let blue = JoinLobby::new(invite, "Blue", APP_VERSION, Some(FIRERED.into())).unwrap();
+    let blue = JoinNode::start_with(key(2), blue, Relays::Off, direct);
+    for i in 0..500 {
+        blue.send(pactlocke_net::Message::Input(vec![i as u8; 40]));
+    }
+    wait_for(
+        "Blue connected",
+        || blue.view(),
+        |v| !v.players.is_empty() || v.error.is_some(),
+    );
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(blue.view().error.is_none(), "Blue was closed: {:?}", blue.view().error);
+    let arrived = host
+        .take_inbox()
+        .iter()
+        .filter(|(_, m)| matches!(m, pactlocke_net::Message::Input(_)))
+        .count();
+    assert_eq!(arrived, 0, "none of the input sent while connecting");
+}

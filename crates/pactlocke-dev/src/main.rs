@@ -8,6 +8,10 @@
 //!       Runs that profile's acceptance scripts against your own ROM: the
 //!       real game, through the real game interface. Local only.
 //!
+//!   cargo dev rig-check <dir> <player>...
+//!       Checks the headless apps' reports from a test rig run against each
+//!       other: every script passed, every Shadow Game matched, one Run log.
+//!
 //! Profiles from `PACTLOCKE_DEV_PROFILES` (a folder) are loaded too.
 
 use std::path::PathBuf;
@@ -24,6 +28,7 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("scan") => scan(&args[1..]),
         Some("accept") => accept(&args[1..]),
+        Some("rig-check") => rig_check(&args[1..]),
         _ => Err(USAGE.to_owned()),
     };
     match result {
@@ -37,7 +42,38 @@ fn main() -> ExitCode {
 
 const USAGE: &str = "usage:
   cargo dev scan <rom> [--base <profile id>] [--out <file>]
-  cargo dev accept <profile id> <rom>";
+  cargo dev accept <profile id> <rom>
+  cargo dev rig-check <dir> <player>...";
+
+/// Reads `<dir>/<player>/report.json` for each Player and checks them together.
+fn rig_check(args: &[String]) -> Result<(), String> {
+    let (dir, players) = args.split_first().ok_or(USAGE)?;
+    if players.is_empty() {
+        return Err(USAGE.to_owned());
+    }
+    let reports: Vec<(String, Option<serde_json::Value>)> = players
+        .iter()
+        .map(|player| {
+            let path = PathBuf::from(dir).join(player).join("report.json");
+            let report = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok());
+            (player.clone(), report)
+        })
+        .collect();
+    let (summary, problems) = pactlocke_dev::rig::check(&reports);
+    for line in summary {
+        println!("  {line}");
+    }
+    if problems.is_empty() {
+        println!("PASS");
+        return Ok(());
+    }
+    for problem in &problems {
+        println!("  FAIL {problem}");
+    }
+    Err(format!("{} problem(s)", problems.len()))
+}
 
 fn store() -> Result<ProfileStore, String> {
     ProfileStore::from_env().map_err(|e| format!("the Game Profiles don't load: {e}"))

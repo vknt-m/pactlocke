@@ -1,0 +1,3 @@
+# The lab rival's battle as a test-only Sync Gate (one trainerbattle per
+# starter), as the acceptance tests make it. Every Player gives it.
+extra-gate Rival 0x081693AC:5C09460103 0x08169424:5C09480103 0x0816949F:5C09470103

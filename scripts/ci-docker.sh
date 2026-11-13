@@ -79,27 +79,17 @@ else
 fi
 
 echo "=== Crates"
-vendored="$(docker run --rm --network none -v "$VENDOR_VOLUME:/vendor" "$IMAGE" cat /vendor/.cargo-lock 2>/dev/null || true)"
-if [ "$vendored" = "$(cat Cargo.lock)" ]; then
-	echo "the volume matches Cargo.lock"
-else
-	echo "vendoring here, then copying into the volume"
-	rm -rf target/ci-docker/vendor
-	mkdir -p target/ci-docker
-	cargo vendor --locked --versioned-dirs --quiet target/ci-docker/vendor >/dev/null
-	cp Cargo.lock target/ci-docker/vendor/.cargo-lock
-	tar -C target/ci-docker/vendor -cf - . |
-		docker run -i --rm --network none -v "$VENDOR_VOLUME:/vendor" "$IMAGE" \
-			bash -c 'find /vendor -mindepth 1 -delete && tar -C /vendor -xf -'
-	echo "copied"
-fi
+# shellcheck source=scripts/ci-docker/vendor.sh
+source scripts/ci-docker/vendor.sh
+ensure_vendor "$IMAGE" "$VENDOR_VOLUME"
 
 echo "=== Linux CI in the container"
 # The whole run is kept, so a failure (or a flaky test) can be read afterwards.
 log=target/ci-docker/last-run.log
 mkdir -p target/ci-docker
 set +e
-tar --exclude=./target --exclude=.git -cf - . |
+# Never game files: a local roms/ folder (git-ignored) stays out too.
+tar --exclude=./target --exclude=.git --exclude=./roms --exclude=./.claude -cf - . |
 	docker run -i --rm --name "pactlocke-ci-$$" --network none \
 		-v "$(host_path "$root/target/test-roms"):/roms:ro" \
 		-v "$VENDOR_VOLUME:/vendor:ro" \

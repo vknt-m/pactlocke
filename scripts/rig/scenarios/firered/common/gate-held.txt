@@ -1,0 +1,14 @@
+# Walking down to leave the lab reaches the held gate: its message shows,
+# the Player is let go and is Ready there.
+h D 64
+w 60
+p A 30
+p A 30
+p A 30
+p A 30
+p A 30
+p A 30
+p A 30
+p A 30
+m B 300
+expect log event gate_ready within 60

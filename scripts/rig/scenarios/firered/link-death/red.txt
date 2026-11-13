@@ -1,0 +1,24 @@
+# A Link death: the starters are one Link (a Gift each). Red's faints to the
+# rival with Faint = Dead, so Blue's dies with it, judged from Red's Shadow.
+include ../common/host.txt
+players 2
+rule links on
+rule faint_is_dead on
+rule gifts on
+ready
+lock-when 2
+speed 4
+include ../common/starter.txt
+sync lab 2
+include ../common/to-the-rival.txt
+# Red's Pokémon on 1 HP (gBattleMons[0].hp): the rival's first hit faints it.
+poke 0x02023C0C 0100
+until mem16 0x02023C0C == 0 mash A 3000
+until mem8 0x03003529 &02 == 0 mash A 6000
+expect log event died by Red within 60
+expect log event died by Blue within 120
+m B 600
+expect matched within 90
+expect no-errors
+sync done 2
+w 300

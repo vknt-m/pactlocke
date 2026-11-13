@@ -1,0 +1,16 @@
+# A savestate-load cheat flag: after the Sync Gate's Run Checkpoint, Blue's
+# game goes back to it with no Retry in the log. Red's app sees Blue's game
+# start again from an earlier point and flags it for everyone.
+include ../common/rival-gate.txt
+include ../common/host.txt
+players 2
+gate Rival on
+ready
+lock-when 2
+speed 4
+include ../common/gate-opened.txt
+sync opened 2
+m B 1200
+expect log event cheat_flag cheat=restarted_without_retry by Red about Blue within 120
+sync done 2
+w 300

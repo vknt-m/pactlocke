@@ -321,3 +321,33 @@ fn after_the_lock_nobody_new_joins_but_the_roster_reconnects() {
     net.disconnect(BLUE);
     assert_eq!(net.connect(BLUE, again), Admission::Admit, "Blue is in the roster");
 }
+
+/// Once the Run is locked a roster member's place is theirs for the Run: a
+/// connection closed for a flood ends, but they can connect again, and the
+/// count of dropped messages starts again on the new connection.
+#[test]
+fn after_the_lock_a_player_closed_for_misbehaving_keeps_their_place_in_the_roster() {
+    let mut net = MemoryNet::new(host_lobby());
+    let blue = joiner(&mut net, "Blue", Some(FIRERED));
+    let again = blue.clone();
+    net.connect(BLUE, blue);
+    net.host.lock();
+    for _ in 0..100 {
+        net.send_raw(BLUE, vec![0xFF; 10]);
+    }
+    assert_eq!(net.closed(BLUE), Some(&Refusal::Misbehaving));
+
+    assert_eq!(
+        net.connect(BLUE, again),
+        Admission::Admit,
+        "Blue is still in the roster"
+    );
+    for _ in 0..10 {
+        net.send_raw(BLUE, vec![0xFF; 10]);
+    }
+    assert_eq!(
+        net.host.players().len(),
+        2,
+        "a few drops on the new connection don't close it"
+    );
+}

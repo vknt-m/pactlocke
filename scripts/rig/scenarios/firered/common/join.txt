@@ -1,0 +1,6 @@
+# A joiner's lobby: the rig says which invite is theirs (INVITE, from 1).
+name ${PLAYER}
+relays ${RELAY}
+shared ${SHARED}
+join ${SHARED}/invite-${INVITE} ${ROM}
+ready

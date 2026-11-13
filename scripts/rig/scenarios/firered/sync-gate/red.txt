@@ -1,0 +1,18 @@
+# A Sync Gate: the rival's battle holds each Player until both are Ready
+# there, then opens with a Run Checkpoint every Player is captured in.
+include ../common/rival-gate.txt
+include ../common/host.txt
+players 2
+gate Rival on
+ready
+lock-when 2
+speed 4
+include ../common/gate-opened.txt
+# Out of the lab and onward: the lab rival's walk-in trigger can't run
+# again after a hold, so the battle itself isn't played here.
+h D 64
+m B 900
+expect matched within 90
+expect no-errors
+sync done 2
+w 300

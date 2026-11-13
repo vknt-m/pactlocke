@@ -1,0 +1,7 @@
+# From the starter in the lab: walk down to leave, which starts the rival's
+# battle, and mash A until the action menu (gBattlerControllerFuncs[0] at
+# HandleInputChooseAction).
+h D 64
+w 60
+until mem32 0x03004FE0 &FFFFFFFE in 0x0802E438,0x080E763C mash A 3000
+w 20

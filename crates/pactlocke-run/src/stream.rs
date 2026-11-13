@@ -664,7 +664,14 @@ pub struct StreamHub {
     me: PlayerKey,
     host: PlayerKey,
     store: StreamStore,
+    /// The gap last asked for in each stream, and how many chunks have
+    /// arrived after it since.
+    asked: BTreeMap<PlayerKey, (StreamWant, u64)>,
 }
+
+/// Chunks that may arrive after a gap before it is asked for again: about
+/// four seconds of a stream at 4x. The answer to one ask is the whole gap.
+const REASK_CHUNKS: u64 = 64;
 
 impl StreamHub {
     /// The streams as the app of `me` sees them, in a Run that `host` hosts.
@@ -673,6 +680,7 @@ impl StreamHub {
             me,
             host,
             store: StreamStore::new(),
+            asked: BTreeMap::new(),
         }
     }
 
@@ -728,11 +736,20 @@ impl StreamHub {
                             rewritten: None,
                         }
                     }
-                    // Ask whoever sends this stream here: its Player, or the Host.
-                    Added::Gap(want) => Received {
-                        send: vec![Outgoing::To(from, StreamMessage::Want(want))],
-                        ..Received::default()
-                    },
+                    // Ask whoever sends this stream here: its Player, or the Host,
+                    // once for each gap, and again only if it is still there a while later.
+                    Added::Gap(want) => {
+                        let asked = self.asked.entry(want.player).or_insert((want, REASK_CHUNKS));
+                        if asked.0 == want && asked.1 < REASK_CHUNKS {
+                            asked.1 += 1;
+                            return Received::default();
+                        }
+                        *asked = (want, 1);
+                        Received {
+                            send: vec![Outgoing::To(from, StreamMessage::Want(want))],
+                            ..Received::default()
+                        }
+                    }
                     Added::Old => Received::default(),
                     Added::Rewritten(rewrite) => Received {
                         rewritten: Some(rewrite),
@@ -771,5 +788,52 @@ impl StreamHub {
     /// The Host this hub sends through.
     pub fn host(&self) -> PlayerKey {
         self.host
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk(player: PlayerKey, first_frame: u64) -> InputChunk {
+        InputChunk {
+            player,
+            boot: 1,
+            first_frame,
+            keys: vec![Keys::NONE; CHUNK_FRAMES],
+            stamped: Vec::new(),
+            hashes: Vec::new(),
+            marks: Vec::new(),
+            booted_from: None,
+        }
+    }
+
+    /// How many Wants `chunks` more of Blue's stream make the Host send.
+    fn wants(hub: &mut StreamHub, blue: PlayerKey, chunks: std::ops::Range<u64>) -> usize {
+        chunks
+            .flat_map(|i| {
+                hub.receive(blue, StreamMessage::Chunk(chunk(blue, i * CHUNK_FRAMES as u64)))
+                    .send
+            })
+            .filter(|out| matches!(out, Outgoing::To(_, StreamMessage::Want(_))))
+            .count()
+    }
+
+    /// A Player back after a while offline sends their live chunks at once,
+    /// each one after the gap. Asking for the gap with every one of them made
+    /// the Player resend the whole gap again and again, a flood the Host's
+    /// rate limit closed them for.
+    #[test]
+    fn a_gap_is_asked_for_once_not_with_every_chunk_after_it_and_again_only_after_a_while() {
+        let (host, blue) = ([1; 32], [2; 32]);
+        let mut hub = StreamHub::new(host, host);
+        assert_eq!(wants(&mut hub, blue, 0..1), 0, "the start of the stream");
+        // Chunks 1 to 9 are lost; 10 on arrive.
+        assert_eq!(wants(&mut hub, blue, 10..10 + REASK_CHUNKS), 1, "asked once");
+        assert_eq!(
+            wants(&mut hub, blue, 10 + REASK_CHUNKS..11 + REASK_CHUNKS),
+            1,
+            "asked again after a while"
+        );
     }
 }

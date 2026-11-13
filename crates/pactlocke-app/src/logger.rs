@@ -31,14 +31,22 @@ pub fn path() -> PathBuf {
 /// Starts the log for this run of the app. A log that can't be opened is
 /// skipped: it never stops the app.
 pub fn init() {
-    let path = path();
+    init_at(path(), false);
+}
+
+/// The same, for a headless app: the log is kept at `path`, and every line
+/// goes to stderr too.
+pub fn init_at(path: PathBuf, stderr: bool) {
     let _ = std::fs::rename(&path, path.with_file_name("pactlocke.old.log"));
     let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) else {
         return;
     };
     let verbose = std::env::var("PACTLOCKE_LOG").is_ok_and(|v| v.eq_ignore_ascii_case("debug"));
     VERBOSE.store(verbose, Ordering::Relaxed);
-    let logger = FileLogger { file: Mutex::new(file) };
+    let logger = FileLogger {
+        file: Mutex::new(file),
+        stderr,
+    };
     if log::set_boxed_logger(Box::new(logger)).is_ok() {
         log::set_max_level(LevelFilter::Debug);
     }
@@ -53,6 +61,8 @@ pub fn init() {
 
 struct FileLogger {
     file: Mutex<File>,
+    /// Every line to stderr too.
+    stderr: bool,
 }
 
 impl Log for FileLogger {
@@ -79,6 +89,9 @@ impl Log for FileLogger {
         );
         if let Ok(mut file) = self.file.lock() {
             let _ = file.write_all(line.as_bytes());
+        }
+        if self.stderr {
+            eprint!("{line}");
         }
     }
 

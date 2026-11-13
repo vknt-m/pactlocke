@@ -383,6 +383,49 @@ impl HostCoop {
         self.setup.receive(&me, ready_message(ready, version));
     }
 
+    /// The Host's own Ready, to the Ruleset as it is now.
+    pub fn ready(&mut self, ready: bool) {
+        let version = self.setup.view().version;
+        self.set_ready(ready, version);
+    }
+
+    /// Chooses a preset, which resets the rules to it.
+    pub fn choose(&mut self, preset: Preset) {
+        self.preset = preset;
+        let _ = self.setup.choose(preset);
+    }
+
+    /// Changes the Ruleset before the lock. `level_caps` on uses the ROM's own caps.
+    pub fn edit(&mut self, change: impl FnOnce(&mut Ruleset, &[LevelCap])) -> Result<(), String> {
+        let mut ruleset = self.setup.ruleset().clone();
+        change(&mut ruleset, &self.level_caps);
+        self.setup.edit(|r| *r = ruleset).map_err(|e| e.to_string())
+    }
+
+    /// Why the Run can't lock yet: nothing when everyone is Ready.
+    pub fn not_ready(&self) -> Vec<String> {
+        self.setup.not_ready()
+    }
+
+    /// The Ruleset's version now: it changes whenever the Host changes it.
+    pub fn setup_version(&self) -> u64 {
+        self.setup.view().version
+    }
+
+    /// How many Players are in setup, the Host included.
+    pub fn players(&self) -> usize {
+        self.setup.view().players.len()
+    }
+
+    /// Locks now, or says why it can't.
+    pub fn lock_now(&mut self, node: &HostNode, now_ms: i64) -> Result<(), String> {
+        self.lock(node, now_ms);
+        match self.log.locked() {
+            Some(_) => Ok(()),
+            None => Err(self.error.clone().unwrap_or_else(|| "The Run didn't lock.".into())),
+        }
+    }
+
     /// Locks the Ruleset and roster: the lock goes in the log, and the lobby
     /// takes nobody new.
     fn lock(&mut self, node: &HostNode, now_ms: i64) {
@@ -610,7 +653,16 @@ impl JoinCoop {
         }
     }
 
+    /// The Ruleset's version as the Host last sent it, once it has.
+    pub fn setup_version(&self) -> Option<u64> {
+        self.view.as_ref().map(|view| view.version)
+    }
+
     /// This Player's Ready, to the Ruleset as the Host last sent it.
+    pub fn ready(&mut self, node: &JoinNode, ready: bool) {
+        self.set_ready(node, ready);
+    }
+
     fn set_ready(&mut self, node: &JoinNode, ready: bool) {
         if let Some(view) = &self.view {
             self.ready_to = ready.then(|| view.ruleset.clone());

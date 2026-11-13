@@ -6,6 +6,7 @@
 //! profile's acceptance scripts prove it, before it can ship.
 #![warn(missing_docs)]
 
+pub mod rig;
 mod scan;
 
 pub use scan::{Findings, GateCandidate, ScriptSpecies, SiteFinding, SourceCandidate, TableFinding, scan};

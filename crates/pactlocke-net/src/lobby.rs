@@ -109,6 +109,10 @@ impl HostLobby {
     pub fn admit(&mut self, peer: PeerKey, proof: Option<&[u8; 16]>) -> Admission {
         if let Some(member) = self.members.iter_mut().find(|m| m.key == peer) {
             member.connected = true;
+            // A new connection: what the old one sent counts no more. Its token
+            // buckets carry over, so a Player who reconnects is still rate-limited;
+            // after the lock only the roster can reconnect at all.
+            member.dropped = 0;
             return Admission::Admit;
         }
         if self.locked {
@@ -265,10 +269,17 @@ impl HostLobby {
         &self.run
     }
 
-    /// Closes a Player out of the lobby. Their place is freed; the invite
-    /// they used stays used.
+    /// Closes a Player's connection. Before the lock their place is freed (the
+    /// invite they used stays used); after it, the place is theirs for the
+    /// Run and they may connect again.
     fn close(&mut self, peer: PeerKey, refusal: Refusal) -> HostAction {
-        self.members.retain(|m| m.key != peer);
+        if self.locked {
+            if let Some(member) = self.members.iter_mut().find(|m| m.key == peer) {
+                member.connected = false;
+            }
+        } else {
+            self.members.retain(|m| m.key != peer);
+        }
         HostAction::Close {
             peer,
             bytes: wire::encode(&Message::Refused(refusal.clone())),

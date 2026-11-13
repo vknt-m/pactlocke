@@ -1,0 +1,12 @@
+include ../common/join.txt
+speed 4
+include ../common/starter.txt
+sync lab 2
+# Blue stays in the lab: their starter dies with its Link-mate.
+expect log event died by Red within 300
+expect log event died by Blue within 120
+m B 600
+expect matched within 90
+expect no-errors
+sync done 2
+w 300

@@ -1,0 +1,7 @@
+# The Host's lobby: name, relay and ROM come from the rig. The scenario
+# sets its rules after this, then says `ready` and `lock-when N`.
+name ${PLAYER}
+relays ${RELAY}
+shared ${SHARED}
+invites ${SHARED}
+host ${ROM}

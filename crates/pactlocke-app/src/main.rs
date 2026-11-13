@@ -15,6 +15,7 @@ mod audio;
 mod coop;
 mod data_dir;
 mod gamepad;
+mod headless;
 mod links_panel;
 mod lobby_ui;
 mod logger;
@@ -55,9 +56,26 @@ const SHOT_FRAMES: u32 = 120;
 const GBA_W: f32 = 240.0;
 const GBA_H: f32 = 160.0;
 
-fn main() -> eframe::Result {
+fn main() -> std::process::ExitCode {
     // Before anything else, and before any other thread starts.
     pactlocke_mgba::force_utc_time_zone();
+    if std::env::args_os().nth(1).is_some_and(|a| a == "--headless") {
+        let args: Vec<String> = std::env::args_os()
+            .skip(2)
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        return headless::main(&args);
+    }
+    match windowed() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Pactlocke couldn't start: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn windowed() -> eframe::Result {
     logger::init();
 
     let mut smoke = false;

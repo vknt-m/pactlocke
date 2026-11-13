@@ -1,0 +1,16 @@
+# A disconnect with catch-up: Blue's network is cut for 90 seconds, longer
+# than the connection lasts in silence. Blue plays on offline; once back,
+# Blue reconnects, their stream catches up, and Red's Shadow of Blue matches.
+include ../common/host.txt
+players 2
+ready
+lock-when 2
+speed 4
+include ../common/starter.txt
+sync lab 2
+m B 26000
+expect connected within 120
+expect matched within 180
+expect no-errors
+sync done 2
+w 300

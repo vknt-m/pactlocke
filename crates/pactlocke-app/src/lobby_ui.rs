@@ -36,8 +36,12 @@ pub struct Lobbies {
     /// How a joiner reconnects to the Host after losing the connection
     /// mid-Run: the invite and the ROM's SHA-1.
     rejoin: Option<(Invite, Option<String>)>,
+    /// Addresses to try for the Host beside its relay (the test rig's).
+    direct: Vec<std::net::SocketAddr>,
     /// When this joiner's connection to the Host was lost, if it is.
     lost_at: Option<i64>,
+    /// How many times this joiner has started connecting to the Host again after losing it.
+    reconnects: u32,
     /// The lobby as last written to the app's log, to note each change once.
     noted: String,
 }
@@ -61,7 +65,9 @@ impl Lobbies {
             join: None,
             prompt: None,
             rejoin: None,
+            direct: Vec::new(),
             lost_at: None,
+            reconnects: 0,
             noted: String::new(),
         }
     }
@@ -208,7 +214,8 @@ impl Lobbies {
         }
         log::info!("Joiner: reconnecting to the Host");
         if let Ok(lobby) = JoinLobby::new(invite, &self.name, APP_VERSION, sha1) {
-            let fresh = JoinNode::start(key, lobby, self.relay_choice());
+            let fresh = JoinNode::start_with(key, lobby, self.relay_choice(), self.direct.clone());
+            self.reconnects += 1;
             if let Some((old, _)) = self.join.as_mut() {
                 let old = std::mem::replace(old, fresh);
                 // The old network shuts down on its own thread.
@@ -252,22 +259,119 @@ impl Lobbies {
     /// Run to start when the countdown after the lock is over.
     pub fn show(&mut self, ctx: &egui::Context) -> Option<CoopStart> {
         self.join_prompt(ctx);
-        let now_ms = SystemRunClock.now_ms();
+        let start = self.pump(SystemRunClock.now_ms());
+        if self.in_lobby() {
+            // The view comes from the network threads: look again soon.
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        start
+    }
+
+    /// The lobby's own work, with or without a window: reconnects a lost
+    /// joiner, reads and sends setup and the Run log, and returns the Run
+    /// to start when the countdown after the lock is over.
+    pub fn pump(&mut self, now_ms: i64) -> Option<CoopStart> {
         self.reconnect_if_lost(now_ms);
         let start = match (&mut self.host, &mut self.join) {
             (Some((node, coop)), _) => coop.pump(node, now_ms),
             (None, Some((node, coop))) => coop.pump(node, now_ms),
             (None, None) => None,
         };
-        if self.in_lobby() {
-            // The view comes from the network threads: look again soon.
-            ctx.request_repaint_after(std::time::Duration::from_millis(250));
-        }
         self.note_changes();
         if start.is_some() {
             log::info!("The Run starts");
         }
         start
+    }
+
+    /// Joins the Run `link` invites to, on the ROM at `rom` (its path and
+    /// SHA-1) if one is chosen, also trying `direct` addresses for the Host.
+    pub fn join(
+        &mut self,
+        link: &str,
+        rom: Option<(PathBuf, String)>,
+        direct: Vec<std::net::SocketAddr>,
+    ) -> Result<(), String> {
+        let sha1 = rom.as_ref().map(|(_, sha1)| sha1.clone());
+        let invite = Invite::parse(link).map_err(|e| format!("{e}."))?;
+        let lobby = JoinLobby::new(invite, &self.name, APP_VERSION, sha1.clone())?;
+        let key = self.key.clone()?;
+        let coop = JoinCoop::new(key, lobby.invite().host, rom);
+        let rejoin = (lobby.invite().clone(), sha1);
+        let node = JoinNode::start_with(key, lobby, self.relay_choice(), direct.clone());
+        self.leave();
+        self.join = Some((node, coop));
+        self.rejoin = Some(rejoin);
+        self.direct = direct;
+        log::info!("Joining a lobby");
+        Ok(())
+    }
+
+    /// The Host's invite link now, and where the Host can be reached directly.
+    pub fn invite(&self) -> Option<(String, Vec<std::net::SocketAddr>)> {
+        let (node, _) = self.host.as_ref()?;
+        Some((node.view().invite_link?, node.direct_addrs()))
+    }
+
+    /// The Host makes a fresh invite link for another friend.
+    pub fn new_invite(&self) {
+        if let Some((node, _)) = &self.host {
+            node.new_invite();
+        }
+    }
+
+    /// The lobby as this app's network sees it now.
+    pub fn view(&self) -> Option<LobbyView> {
+        match (&self.host, &self.join) {
+            (Some((node, _)), _) => Some(node.view()),
+            (None, Some((node, _))) => Some(node.view()),
+            (None, None) => None,
+        }
+    }
+
+    /// What has gone wrong with the lobby or the Run log, if anything.
+    pub fn error(&self) -> Option<String> {
+        let coop = match (&self.host, &self.join) {
+            (Some((_, coop)), _) => coop.error(),
+            (None, Some((_, coop))) => coop.error(),
+            (None, None) => None,
+        };
+        coop.map(str::to_owned).or_else(|| self.view()?.error)
+    }
+
+    /// How many times this joiner has started connecting to the Host again
+    /// after losing it: 0 for a Host, or a joiner who never lost the Host.
+    pub fn reconnects(&self) -> u32 {
+        self.reconnects
+    }
+
+    /// The Ruleset's version as this app knows it, once it does.
+    pub fn setup_version(&self) -> Option<u64> {
+        match (&self.host, &self.join) {
+            (Some((_, coop)), _) => Some(coop.setup_version()),
+            (None, Some((_, coop))) => coop.setup_version(),
+            (None, None) => None,
+        }
+    }
+
+    /// The Host's Run setup, to change before the lock.
+    pub fn host_setup(&mut self) -> Option<&mut HostCoop> {
+        self.host.as_mut().map(|(_, coop)| coop)
+    }
+
+    /// This Player's Ready, to the Ruleset as it is now.
+    pub fn ready(&mut self, ready: bool) {
+        match (&mut self.host, &mut self.join) {
+            (Some((_, coop)), _) => coop.ready(ready),
+            (None, Some((node, coop))) => coop.ready(node, ready),
+            (None, None) => {}
+        }
+    }
+
+    /// The Host locks the Ruleset and roster, if everyone is Ready.
+    pub fn lock(&mut self, now_ms: i64) -> Result<(), String> {
+        let (node, coop) = self.host.as_mut().ok_or("only the Host locks")?;
+        coop.lock_now(node, now_ms)
     }
 
     fn join_prompt(&mut self, ctx: &egui::Context) {
@@ -311,28 +415,13 @@ impl Lobbies {
             });
         });
         if join {
-            let (relays, key, name) = (self.relay_choice(), self.key.clone(), self.name.clone());
-            let prompt = self.prompt.as_mut().expect("open");
-            let rom = prompt.rom.as_ref().map(|rom| rom.sha1.clone());
+            let prompt = self.prompt.take().expect("open");
             let picked = prompt.rom.as_ref().map(|rom| (rom.path.clone(), rom.sha1.clone()));
-            let started = Invite::parse(&prompt.link)
-                .map_err(|e| format!("{e}."))
-                .and_then(|invite| JoinLobby::new(invite, &name, APP_VERSION, rom.clone()))
-                .and_then(|lobby| {
-                    let key = key?;
-                    let coop = JoinCoop::new(key, lobby.invite().host, picked);
-                    let rejoin = (lobby.invite().clone(), rom.clone());
-                    Ok((JoinNode::start(key, lobby, relays), coop, rejoin))
+            if let Err(e) = self.join(&prompt.link, picked, Vec::new()) {
+                self.prompt = Some(JoinPrompt {
+                    error: Some(e),
+                    ..prompt
                 });
-            match started {
-                Ok((node, coop, rejoin)) => {
-                    self.leave();
-                    self.join = Some((node, coop));
-                    self.rejoin = Some(rejoin);
-                    self.prompt = None;
-                    log::info!("Joining a lobby");
-                }
-                Err(e) => prompt.error = Some(e),
             }
         } else if cancel || modal.should_close() {
             self.prompt = None;

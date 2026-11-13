@@ -1,0 +1,21 @@
+# A Retry: after the Sync Gate's Run Checkpoint, both Players walk out of
+# the lab, then vote Yes: both go back to the checkpoint, and each Shadow
+# Game follows its Player's new boot and matches.
+include ../common/rival-gate.txt
+include ../common/join.txt
+speed 4
+include ../common/gate-opened.txt
+# Out of the lab and onward: the lab rival's walk-in trigger can't run
+# again after a hold, so the battle itself isn't played here.
+h D 64
+m B 900
+sync battle 2
+vote retry
+expect log retry within 60
+# Both games went back: a new boot, followed by each Shadow Game.
+expect boot 2 within 60
+m B 600
+expect matched within 120
+expect no-errors
+sync done 2
+w 300
