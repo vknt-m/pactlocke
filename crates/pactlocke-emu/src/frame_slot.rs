@@ -6,7 +6,9 @@ use crate::Frame;
 /// published), so a reader can tell whether it has already shown it.
 #[derive(Debug)]
 pub struct PublishedFrame {
+    /// Frames run when it was published.
     pub seq: u64,
+    /// The picture.
     pub frame: Frame,
 }
 
@@ -18,15 +20,18 @@ pub struct FrameSlot {
 }
 
 impl FrameSlot {
+    /// Empty until the first frame is published.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Replaces the newest frame with this one, the `seq`th.
     pub fn publish(&self, seq: u64, frame: Frame) {
         let published = Arc::new(PublishedFrame { seq, frame });
         *self.newest.lock().unwrap_or_else(|e| e.into_inner()) = Some(published);
     }
 
+    /// The newest frame published, if any.
     pub fn latest(&self) -> Option<Arc<PublishedFrame>> {
         self.newest.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }

@@ -42,6 +42,7 @@ pub trait AudioSink: Send + 'static {
     fn push(&mut self, samples: &[i16], sample_rate: u32);
 }
 
+/// How an [`Emulator`] runs: its clock, speed, sound and a callback per frame.
 pub struct EmulatorOptions {
     clock: Box<dyn Clock>,
     speed: Speed,
@@ -50,6 +51,7 @@ pub struct EmulatorOptions {
 }
 
 impl EmulatorOptions {
+    /// Paced by `clock`, at 1x, with no sound or callback.
     pub fn new(clock: impl Clock) -> Self {
         Self {
             clock: Box::new(clock),
@@ -106,6 +108,7 @@ pub struct Emulator<C> {
 }
 
 impl<C: CoreAdapter + 'static> Emulator<C> {
+    /// Starts a thread running `core` frame by frame, as `options` say.
     pub fn spawn(core: C, options: EmulatorOptions) -> Self {
         let frames = Arc::new(FrameSlot::new());
         let shared = Arc::new(Shared {
@@ -145,10 +148,12 @@ impl<C: CoreAdapter + 'static> Emulator<C> {
     }
 
     /// Pause or resume at the next frame boundary; a paused game runs no frames.
+    /// Holds the game at its current frame, or lets it go on.
     pub fn set_paused(&self, paused: bool) {
         self.shared.paused.store(paused, Ordering::Release);
     }
 
+    /// The speed it runs at now.
     pub fn speed(&self) -> Speed {
         Speed::from_multiplier(self.shared.speed.load(Ordering::Acquire))
     }

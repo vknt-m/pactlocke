@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Before every commit: the formatting CI checks (about a second).
+# Turn the hooks on once per clone: git config core.hooksPath .githooks
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+if ! cargo fmt --all --check >/dev/null 2>&1; then
+	echo "pre-commit: formatting differs from rustfmt's. Run cargo fmt --all, stage, and commit again." >&2
+	exit 1
+fi

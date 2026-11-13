@@ -1,5 +1,6 @@
 //! The core adapter interface every emulator core implements, and the emulator
 //! thread that runs one game at a chosen speed and publishes its frames.
+#![warn(missing_docs)]
 
 mod emulator;
 mod frame_slot;
@@ -14,18 +15,30 @@ use std::fmt;
 pub struct Keys(pub u16);
 
 impl Keys {
+    /// No button held.
     pub const NONE: Keys = Keys(0);
+    /// The A button.
     pub const A: Keys = Keys(1 << 0);
+    /// The B button.
     pub const B: Keys = Keys(1 << 1);
+    /// The Select button.
     pub const SELECT: Keys = Keys(1 << 2);
+    /// The Start button.
     pub const START: Keys = Keys(1 << 3);
+    /// Right on the D-pad.
     pub const RIGHT: Keys = Keys(1 << 4);
+    /// Left on the D-pad.
     pub const LEFT: Keys = Keys(1 << 5);
+    /// Up on the D-pad.
     pub const UP: Keys = Keys(1 << 6);
+    /// Down on the D-pad.
     pub const DOWN: Keys = Keys(1 << 7);
+    /// The R shoulder button.
     pub const R: Keys = Keys(1 << 8);
+    /// The L shoulder button.
     pub const L: Keys = Keys(1 << 9);
 
+    /// Whether every key in `other` is held.
     pub fn contains(self, other: Keys) -> bool {
         self.0 & other.0 == other.0
     }
@@ -52,15 +65,21 @@ impl std::ops::BitOrAssign for Keys {
 /// How fast the game runs compared with a real GBA. Pactlocke allows 1x to 4x.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Speed {
+    /// A real GBA's speed.
     X1 = 1,
+    /// Twice as fast.
     X2 = 2,
+    /// Three times as fast.
     X3 = 3,
+    /// Four times as fast, the most Pactlocke allows.
     X4 = 4,
 }
 
 impl Speed {
+    /// Every speed, slowest first.
     pub const ALL: [Speed; 4] = [Speed::X1, Speed::X2, Speed::X3, Speed::X4];
 
+    /// How many times a real GBA's speed: 1 to 4.
     pub fn multiplier(self) -> u32 {
         self as u32
     }
@@ -84,8 +103,11 @@ impl fmt::Display for Speed {
 /// One video frame as tightly packed RGBA8 (alpha always 255).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame {
+    /// In pixels.
     pub width: u32,
+    /// In pixels.
     pub height: u32,
+    /// Four bytes a pixel, row by row from the top left.
     pub rgba: Vec<u8>,
 }
 
@@ -93,10 +115,13 @@ pub struct Frame {
 /// save memory first, then the savestate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Checkpoint {
+    /// The cartridge's save memory (flash or SRAM), as the game sees it.
     pub save_memory: Vec<u8>,
+    /// The core's savestate.
     pub state: Vec<u8>,
 }
 
+/// Why a core refused a ROM, a checkpoint or save memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreError {
     /// The file isn't a ROM this core can run.

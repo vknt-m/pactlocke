@@ -95,15 +95,19 @@ else
 fi
 
 echo "=== Linux CI in the container"
+# The whole run is kept, so a failure (or a flaky test) can be read afterwards.
+log=target/ci-docker/last-run.log
+mkdir -p target/ci-docker
 set +e
 tar --exclude=./target --exclude=.git -cf - . |
 	docker run -i --rm --name "pactlocke-ci-$$" --network none \
 		-v "$(host_path "$root/target/test-roms"):/roms:ro" \
 		-v "$VENDOR_VOLUME:/vendor:ro" \
 		-v "$TARGET_VOLUME:/work/target" \
-		"$IMAGE" bash -c "$(cat scripts/ci-docker/run.sh)"
-status=$?
+		"$IMAGE" bash -c "$(cat scripts/ci-docker/run.sh)" 2>&1 | tee "$log"
+status=${PIPESTATUS[1]}
 set -e
+[ "$status" -eq 0 ] || echo "=== The whole run is in $log"
 
 if [ ${#failed[@]} -gt 0 ]; then
 	echo "=== Also FAILED here: ${failed[*]}"

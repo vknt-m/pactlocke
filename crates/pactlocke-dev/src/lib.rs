@@ -4,6 +4,7 @@
 //! Gift and Static candidates from the game's script instructions, and Sync
 //! Gate candidates by trainer class. A person reviews every entry, and the
 //! profile's acceptance scripts prove it, before it can ship.
+#![warn(missing_docs)]
 
 mod scan;
 

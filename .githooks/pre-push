@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Before every push: formatting and clippy with warnings as errors, as CI
+# runs them (seconds once built). The full suite is bash scripts/check.sh.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+bash scripts/check.sh --quick || {
+	echo "pre-push: CI would fail on the above. Fix it, or push with --no-verify if you mean to." >&2
+	exit 1
+}

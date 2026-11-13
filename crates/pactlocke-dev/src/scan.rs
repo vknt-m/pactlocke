@@ -25,14 +25,23 @@ const CANDIDATES_SHOWN: usize = 8;
 /// Everything the scanner found in one ROM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Findings {
+    /// The four-letter game code in the ROM's header.
     pub game_code: String,
+    /// The title in the ROM's header.
     pub title: String,
+    /// The SHA-1 of the whole ROM, in hex.
     pub sha1: String,
+    /// The bundled profile it was compared with.
     pub base_id: String,
+    /// The base profile's tables, looked for by their contents.
     pub tables: Vec<TableFinding>,
+    /// The base profile's patch sites, checked here.
     pub patch_sites: Vec<SiteFinding>,
+    /// Where the level checks a cap patches are, found by byte pattern.
     pub level_cap_sites: Vec<u32>,
+    /// Script instructions that give a Pokémon or start a Static battle.
     pub sources: Vec<SourceCandidate>,
+    /// Trainers who could be Sync Gates.
     pub gates: Vec<GateCandidate>,
 }
 
@@ -71,7 +80,9 @@ impl TableFinding {
 /// One of the base profile's patch sites, checked in this ROM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SiteFinding {
+    /// The rule the site enforces.
     pub rule: Rule,
+    /// Its address in the base profile.
     pub at: u32,
     /// The ROM holds the expected bytes at the same address.
     pub unchanged: bool,
@@ -82,9 +93,13 @@ pub struct SiteFinding {
 /// A script instruction that gives a Pokémon or starts a Static battle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceCandidate {
+    /// A Gift, a trade or a Static.
     pub kind: SourceKind,
+    /// The instruction's address in the ROM.
     pub at: u32,
+    /// The Pokémon it names.
     pub species: ScriptSpecies,
+    /// Its level, when the instruction says.
     pub level: Option<u8>,
     /// The base profile's source at this address, if it lists one.
     pub catalogued: Option<String>,
@@ -94,7 +109,14 @@ pub struct SourceCandidate {
 /// variable the script sets first (a starter or a prize picked from a menu).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptSpecies {
-    Species { id: u16, name: Option<String> },
+    /// One species: its number, and its name from the ROM if it was read.
+    Species {
+        /// The species number.
+        id: u16,
+        /// Its name in the ROM's species table.
+        name: Option<String>,
+    },
+    /// The script variable holding the species.
     Variable(u16),
 }
 
@@ -112,9 +134,13 @@ impl std::fmt::Display for ScriptSpecies {
 /// Elite Four, the Champion) belong to, with their `trainerbattle` instructions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateCandidate {
+    /// The trainer's number in the ROM's trainer table.
     pub trainer: u16,
+    /// Their name, as the ROM spells it.
     pub name: String,
+    /// Their trainer class.
     pub class: u8,
+    /// Where their `trainerbattle` instructions are.
     pub battles: Vec<u32>,
 }
 

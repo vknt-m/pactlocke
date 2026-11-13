@@ -2,6 +2,7 @@
 //!
 //! The core always uses the HLE BIOS, keeps the save in memory, and runs a
 //! fake-epoch real-time clock that reads as UTC on every machine.
+#![warn(missing_docs)]
 
 mod ffi;
 
@@ -35,6 +36,7 @@ pub struct MgbaCore {
 unsafe impl Send for MgbaCore {}
 
 impl MgbaCore {
+    /// A libmgba GBA core with no ROM loaded, its clock read as UTC.
     pub fn new() -> Self {
         force_utc_time_zone();
         // SAFETY: plain constructor; null only if allocation fails.
