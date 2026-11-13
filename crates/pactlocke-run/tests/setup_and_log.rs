@@ -225,8 +225,8 @@ fn every_players_run_state_goes_in_one_log_that_everyone_checks_and_tallies_alik
     coop.everyone_ready();
     coop.lock().unwrap();
 
-    for i in 0..3 {
-        let run = coop.players[i].run();
+    for (i, player) in coop.players.iter_mut().enumerate() {
+        let run = player.run();
         run.walks_into(route_1());
         run.meets_wild(PIDGEY);
         run.catches(PIDGEY, 0x1000 + i as u32);
@@ -339,8 +339,8 @@ fn three_player_log() -> Coop {
     let mut coop = Coop::with(&["Red", "Blue", "Green"]);
     coop.everyone_ready();
     coop.lock().unwrap();
-    for i in 0..3 {
-        let run = coop.players[i].run();
+    for player in &mut coop.players {
+        let run = player.run();
         run.walks_into(route_1());
         run.meets_wild(RATTATA);
     }

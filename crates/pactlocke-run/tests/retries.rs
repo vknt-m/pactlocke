@@ -147,10 +147,10 @@ fn when_everyone_votes_yes_every_game_goes_back_together_and_the_shadows_follow(
         table.apps[0].running.engine().view().closed_areas.is_empty(),
         "and Route 1 is open again in Red's game"
     );
-    for app in 0..2 {
-        let feed = table.apps[app].view_feed();
-        assert!(feed.iter().any(|e| e.starts_with("Retry: back to")), "{app}: {feed:?}");
-        assert!(table.apps[app].refused.is_empty(), "{:?}", table.apps[app].refused);
+    for (i, app) in table.apps.iter().enumerate().take(2) {
+        let feed = app.view_feed();
+        assert!(feed.iter().any(|e| e.starts_with("Retry: back to")), "{i}: {feed:?}");
+        assert!(app.refused.is_empty(), "{:?}", app.refused);
     }
 
     // After the Retry, each Shadow is back with its Player, and matches by hash.
@@ -245,9 +245,9 @@ fn three_players_need_all_three_to_say_yes() {
         }
     }
     table.waits(1000);
-    for watcher in 0..3 {
+    for (watcher, app) in table.apps.iter_mut().enumerate() {
         for watched in (0..3).filter(|&w| w != watcher) {
-            let shadow = table.apps[watcher].shadow_of(key(watched));
+            let shadow = app.shadow_of(key(watched));
             assert_eq!(shadow.state(), ShadowState::Matched, "{watcher} watching {watched}");
             assert_eq!(shadow.boot(), 2);
         }

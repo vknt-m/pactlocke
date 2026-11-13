@@ -118,9 +118,9 @@ fn with_three_players_the_host_passes_each_stream_on_and_fills_a_loss() {
         }
     }
     table.waits(1000);
-    for watcher in 0..3 {
+    for (watcher, app) in table.apps.iter_mut().enumerate() {
         for watched in (0..3).filter(|&w| w != watcher) {
-            let shadow = table.apps[watcher].shadow_of(key(watched));
+            let shadow = app.shadow_of(key(watched));
             assert_eq!(shadow.state(), ShadowState::Matched, "{watcher} watching {watched}");
             assert!(
                 shadow.confirmed() >= 570 && shadow.hashes_matched() >= 4,
