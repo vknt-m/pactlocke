@@ -25,6 +25,8 @@ pub struct ShadowStatus {
     /// Frames run, and the frame after the newest received.
     pub frame: u64,
     pub received: u64,
+    /// The boot of the Player's game it follows.
+    pub boot: u32,
     /// What it has shown of the Player's Pokémon.
     pub seen: Seen,
 }
@@ -61,6 +63,7 @@ impl ShadowRunner {
             catching_up: false,
             frame: 0,
             received: 0,
+            boot: shadow.boot(),
             seen: Seen::default(),
         }));
         let thread = {
@@ -184,6 +187,7 @@ fn run<G: PlayedGame>(
             catching_up: shadow.catching_up(now),
             frame: shadow.frame(),
             received: shadow.received(),
+            boot: shadow.boot(),
             seen: shadow.seen().clone(),
         };
     }

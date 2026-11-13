@@ -467,6 +467,29 @@ pub enum Added {
     Gap(StreamWant),
     /// Already here, or from an older boot.
     Old,
+    /// It differs from frames already here: refused, as rewritten history.
+    Rewritten(Rewrite),
+}
+
+/// A Player's stream that rewrote a frame already here: the first that differs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rewrite {
+    /// Whose stream.
+    pub player: PlayerKey,
+    /// The boot of their game, and the first frame that differs.
+    pub at: crate::GamePoint,
+}
+
+/// What came of a stream message: what to send on, the chunks now in order
+/// for a Shadow Game, and a rewrite of frames already here, if it was one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Received {
+    /// Messages to send on.
+    pub send: Vec<Outgoing>,
+    /// Chunks now in order, for a Shadow Game.
+    pub new: Vec<InputChunk>,
+    /// The chunk rewrote frames already here, and was refused.
+    pub rewritten: Option<Rewrite>,
 }
 
 /// Every Player's input stream as this app has it, in order from frame 0
@@ -489,6 +512,24 @@ impl PlayerStream {
     fn end(&self) -> u64 {
         self.chunks.last().map_or(0, InputChunk::end)
     }
+
+    /// The keys held at this frame, if it is still here.
+    fn keys_at(&self, frame: u64) -> Option<Keys> {
+        let i = self.chunks.partition_point(|c| c.end() <= frame);
+        let chunk = self.chunks.get(i).filter(|c| c.first_frame <= frame)?;
+        chunk
+            .keys
+            .get(usize::try_from(frame - chunk.first_frame).ok()?)
+            .copied()
+    }
+
+    /// The first frame this chunk holds other keys for than this stream has.
+    fn first_difference(&self, chunk: &InputChunk) -> Option<u64> {
+        (chunk.first_frame..chunk.end().min(self.end())).find(|&frame| {
+            self.keys_at(frame)
+                .is_some_and(|keys| keys != chunk.keys[(frame - chunk.first_frame) as usize])
+        })
+    }
 }
 
 impl StreamStore {
@@ -510,6 +551,15 @@ impl StreamStore {
             };
         }
         let end = stream.end();
+        if let Some(frame) = stream.first_difference(&chunk) {
+            return Added::Rewritten(Rewrite {
+                player: chunk.player,
+                at: crate::GamePoint {
+                    boot: chunk.boot,
+                    frame,
+                },
+            });
+        }
         if chunk.keys.is_empty() || chunk.end() <= end {
             return Added::Old;
         }
@@ -648,10 +698,10 @@ impl StreamHub {
             .collect()
     }
 
-    /// A stream message from `from`. Returns what to send, and the chunks
-    /// now in order for a Shadow Game. The Host takes a Player's stream only
-    /// from that Player; a joiner takes streams only from the Host.
-    pub fn receive(&mut self, from: PlayerKey, message: StreamMessage) -> (Vec<Outgoing>, Vec<InputChunk>) {
+    /// A stream message from `from`. The Host takes a Player's stream only
+    /// from that Player; a joiner takes streams only from the Host. A chunk
+    /// that rewrites frames already here is refused, not passed on.
+    pub fn receive(&mut self, from: PlayerKey, message: StreamMessage) -> Received {
         match message {
             StreamMessage::Chunk(chunk) => {
                 let trusted = if self.hosting() {
@@ -660,7 +710,7 @@ impl StreamHub {
                     from == self.host
                 };
                 if !trusted || chunk.player == self.me {
-                    return (Vec::new(), Vec::new());
+                    return Received::default();
                 }
                 let source = chunk.player;
                 match self.store.add(chunk) {
@@ -672,24 +722,38 @@ impl StreamHub {
                         } else {
                             Vec::new()
                         };
-                        (out, new)
+                        Received {
+                            send: out,
+                            new,
+                            rewritten: None,
+                        }
                     }
                     // Ask whoever sends this stream here: its Player, or the Host.
-                    Added::Gap(want) => (vec![Outgoing::To(from, StreamMessage::Want(want))], Vec::new()),
-                    Added::Old => (Vec::new(), Vec::new()),
+                    Added::Gap(want) => Received {
+                        send: vec![Outgoing::To(from, StreamMessage::Want(want))],
+                        ..Received::default()
+                    },
+                    Added::Old => Received::default(),
+                    Added::Rewritten(rewrite) => Received {
+                        rewritten: Some(rewrite),
+                        ..Received::default()
+                    },
                 }
             }
             StreamMessage::Want(want) => {
                 if want.player != self.me && !self.hosting() {
-                    return (Vec::new(), Vec::new());
+                    return Received::default();
                 }
-                let out = self
+                let send = self
                     .store
                     .wanted(&want)
                     .into_iter()
                     .map(|chunk| Outgoing::To(from, StreamMessage::Chunk(chunk)))
                     .collect();
-                (out, Vec::new())
+                Received {
+                    send,
+                    ..Received::default()
+                }
             }
         }
     }

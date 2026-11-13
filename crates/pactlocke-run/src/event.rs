@@ -69,6 +69,30 @@ pub enum RunEvent {
     /// The game was reset to an older save, or a new game was started (its
     /// play time ran backwards).
     GameReset,
+    /// A cheat flag, in the Run log: what `player`'s game did that it can't
+    /// have done honestly, at that boot and frame boundary, seen at `at_ms`
+    /// by the Player who logs it. `None`: about the Player who logs it, whose
+    /// own app saw it (a tampered Run file). Nothing clears it.
+    CheatFlag {
+        /// Whose game, or `None` for the Player who logs it.
+        player: Option<[u8; 32]>,
+        cheat: crate::Cheat,
+        /// The boot of their game, and the frame boundary in it.
+        boot: u32,
+        frame: u64,
+        /// When it was seen (Unix milliseconds).
+        at_ms: i64,
+    },
+    /// A cheat flag in the Run log, for the feed.
+    Flagged {
+        /// Whose game: their name, or "you".
+        player: String,
+        cheat: crate::Cheat,
+        /// The frame boundary in their game.
+        frame: u64,
+        /// Who saw it: their name, "you", or "their own app".
+        by: String,
+    },
     /// Another Player's Shadow Game here stopped matching their game at
     /// this frame boundary, so it can't be watched for now.
     OutOfSync { player: String, frame: u64 },
@@ -287,6 +311,7 @@ impl RunEvent {
                 | RunEvent::Skipped { .. }
                 | RunEvent::GateReady { .. }
                 | RunEvent::SpeedChanged { .. }
+                | RunEvent::CheatFlag { .. }
         ) || self.is_run_checkpoint()
             || self.is_violation()
     }
@@ -294,6 +319,11 @@ impl RunEvent {
     /// A Run Checkpoint: one a Retry can go back to (not a boot checkpoint).
     pub fn is_run_checkpoint(&self) -> bool {
         matches!(self, RunEvent::Checkpoint { reason, .. } if *reason != CheckpointReason::Boot)
+    }
+
+    /// What a Retry never undoes: a cheat flag stands whatever happens after it.
+    pub fn outlives_retries(&self) -> bool {
+        matches!(self, RunEvent::CheatFlag { .. })
     }
 
     /// A rule broken in a way the app couldn't stop, shown in red to everyone.

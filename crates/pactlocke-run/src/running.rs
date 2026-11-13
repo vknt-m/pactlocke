@@ -43,6 +43,13 @@ pub enum RunCommand {
     OthersSpeed { player: String, speed: u8 },
     /// The other Players dropped this Player from the Run.
     DroppedOut,
+    /// A cheat flag in the Run log, for the feed.
+    Flagged {
+        player: String,
+        cheat: crate::Cheat,
+        frame: u64,
+        by: String,
+    },
 }
 
 /// Where a Retry goes back to.
@@ -142,10 +149,7 @@ impl<G: PlayedGame> RunningGame<G> {
                 .to_owned(),
             RetryTo::Checkpoint(hash) => hash.clone(),
         };
-        let (seq, checkpoint) = self
-            .engine
-            .find_run_checkpoint(&hash)
-            .ok_or("that Run Checkpoint is no longer kept")?;
+        let (seq, checkpoint) = self.engine.find_run_checkpoint(&hash)?;
         let stored = self
             .engine
             .stored()
@@ -197,6 +201,12 @@ impl<G: PlayedGame> RunningGame<G> {
                 RunCommand::Speed(speed) => self.engine.speed(speed),
                 RunCommand::OthersSpeed { player, speed } => self.engine.others_speed(player, speed),
                 RunCommand::DroppedOut => self.engine.dropped_out(),
+                RunCommand::Flagged {
+                    player,
+                    cheat,
+                    frame,
+                    by,
+                } => self.engine.flagged(player, cheat, frame, by),
                 RunCommand::Retry { to } => {
                     if let Err(why) = self.retry(&to) {
                         self.engine.retry_failed(why);

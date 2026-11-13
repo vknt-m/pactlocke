@@ -93,6 +93,10 @@ struct Watcher {
     in_flight: std::collections::VecDeque<(i64, InputChunk)>,
     now_ms: i64,
     lag_ms: i64,
+    /// What the watching app flags of this stream, as it would put them in the Run log.
+    watch: pactlocke_run::CheatWatch,
+    log: pactlocke_run::RunLog,
+    flags: Vec<pactlocke_run::RunEvent>,
 }
 
 impl Watcher {
@@ -107,14 +111,49 @@ impl Watcher {
             && *lands <= self.now_ms
         {
             let (_, chunk) = self.in_flight.pop_front().unwrap();
-            if let pactlocke_run::Added::New(new) = self.store.add(chunk) {
+            self.arrives(chunk);
+        }
+        let frames = self.shadow.frames_for(FRAME_MS);
+        let before = self.shadow.state();
+        self.shadow.advance(self.now_ms, frames);
+        if let ShadowState::Diverged { frame } = self.shadow.state()
+            && before != self.shadow.state()
+        {
+            let at = pactlocke_run::GamePoint {
+                boot: self.shadow.boot(),
+                frame,
+            };
+            let flag = self.watch.diverged(&self.log, [1; 32], at, self.now_ms);
+            self.flags.extend(flag);
+        }
+    }
+
+    /// A chunk of the stream lands: replayed if new, flagged if it rewrites frames already here.
+    fn arrives(&mut self, chunk: InputChunk) {
+        match self.store.add(chunk) {
+            pactlocke_run::Added::New(new) => {
                 for chunk in new {
+                    let flags = self.watch.arrived(&chunk, &self.log, self.now_ms);
+                    self.flags.extend(flags);
                     self.shadow.receive(&chunk, self.now_ms);
                 }
             }
+            pactlocke_run::Added::Rewritten(rewrite) => {
+                let flag = self.watch.rewritten(&self.log, &rewrite, self.now_ms);
+                self.flags.extend(flag);
+            }
+            _ => {}
         }
-        let frames = self.shadow.frames_for(FRAME_MS);
-        self.shadow.advance(self.now_ms, frames);
+    }
+
+    fn cheats(&self) -> Vec<pactlocke_run::Cheat> {
+        self.flags
+            .iter()
+            .filter_map(|f| match f {
+                pactlocke_run::RunEvent::CheatFlag { cheat, .. } => Some(*cheat),
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -146,6 +185,9 @@ impl Driver {
             in_flight: Default::default(),
             now_ms: 0,
             lag_ms: 0,
+            watch: pactlocke_run::CheatWatch::new(0),
+            log: pactlocke_run::RunLog::new([0; 32]),
+            flags: Vec::new(),
         });
     }
 
@@ -1274,6 +1316,20 @@ fn a_memory_edit_on_firered_makes_its_shadow_game_diverge() {
     let mut d = firered_run(rom);
     d.watched();
     d.play("m A 1200");
+    // Frames the watcher has, sent again pressed differently, as after a
+    // savestate load: refused and flagged, and the Shadow plays on matched.
+    let have = d.watcher().store.received(&[1; 32]).unwrap().1;
+    let mut forged = d.watcher().store.wanted(&pactlocke_run::StreamWant {
+        player: [1; 32],
+        boot: 1,
+        from_frame: have - 60,
+    });
+    forged[0].keys.fill(Keys::B);
+    d.watcher().arrives(forged.remove(0));
+    assert_eq!(d.watcher().cheats(), [pactlocke_run::Cheat::HistoryRewritten]);
+    d.play("m A 300");
+    assert_eq!(d.watcher().shadow.state(), ShadowState::Matched);
+
     // A cheat tool's edit: straight into the core, not stamped.
     d.game.write(PARTY_COUNT, &[6]);
     d.play("m A 600");
@@ -1281,6 +1337,50 @@ fn a_memory_edit_on_firered_makes_its_shadow_game_diverge() {
         matches!(d.watcher().shadow.state(), ShadowState::Diverged { .. }),
         "{:?}",
         d.watcher().shadow.state()
+    );
+    assert_eq!(
+        d.watcher().cheats(),
+        [pactlocke_run::Cheat::HistoryRewritten, pactlocke_run::Cheat::OutOfSync],
+        "flagged as game out of sync, and nothing for playing at 1x"
+    );
+}
+
+#[test]
+fn a_firered_run_checkpoint_changed_in_the_run_file_is_flagged_and_not_gone_back_to() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
+        return;
+    };
+    let ruleset = Ruleset {
+        first_encounter: true,
+        retries: 1,
+        ..Ruleset::default()
+    };
+    let mut d = firered_run_with(rom, ruleset);
+    d.play(FR_STARTER);
+    d.play("w 60");
+    d.game.checkpoint();
+    d.play("w 120");
+    let (storage, rom) = (d.storage.clone(), d.rom.clone());
+    d.game.suspend();
+
+    // Someone changes the Run Checkpoint in the Run file while the app is closed.
+    storage.tamper_with_checkpoints(|c| {
+        if c.reason != pactlocke_run::CheckpointReason::Boot {
+            c.core.save_memory[0] ^= 0xFF;
+        }
+    });
+    let mut d = resumed(storage, rom);
+    let before = ram_hash(&mut d);
+    let refused = d.game.retry(&pactlocke_run::RetryTo::Latest).unwrap_err();
+    assert!(refused.contains("doesn't match its hash in the log"), "{refused}");
+    assert_eq!(ram_hash(&mut d), before, "the game wasn't touched");
+    assert_eq!(d.game.engine().retries_left(), 1);
+    let flags = d.feed(FeedKind::Cheat);
+    assert_eq!(flags.len(), 1, "{flags:?}");
+    assert!(
+        flags[0].ends_with("a Run Checkpoint in the Run file doesn't match its hash in the log"),
+        "{flags:?}"
     );
 }
 

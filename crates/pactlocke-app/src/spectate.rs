@@ -10,8 +10,9 @@ use pactlocke_emu::{CoreAdapter, FrameSlot};
 use pactlocke_game::{GameProfile, ProfileGame};
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
-    InputChunk, Judge, Link, LinkKeeper, Locked, LogFollower, PlayerKey, RunClock, RunCommand, RunEvent, RunLog, Seen,
-    ShadowGame, ShadowRunner, ShadowState, ShadowStatus, StreamHub, StreamMessage, SystemRunClock,
+    CheatWatch, GamePoint, InputChunk, Judge, Link, LinkKeeper, Locked, LogFollower, PlayerKey, RunClock, RunCommand,
+    RunEvent, RunLog, Seen, ShadowGame, ShadowRunner, ShadowState, ShadowStatus, StreamHub, StreamMessage,
+    SystemRunClock,
 };
 
 use crate::audio::AudioOut;
@@ -65,6 +66,10 @@ pub struct Spectate {
     presence: pactlocke_run::Presence,
     /// Players this Player chose to keep waiting for, rather than vote out.
     keep_waiting: Vec<PlayerKey>,
+    /// What this app has seen of the others' streams, to flag cheats.
+    watch: CheatWatch,
+    /// Shadow Games that stopped matching, as their threads said: whose, and at what frame.
+    diverged: Arc<Mutex<Vec<(PlayerKey, u64)>>>,
     /// Partner Avatars: where this Player's game reads them from.
     avatars: Option<Arc<Mutex<Vec<pactlocke_run::PartnerAvatar>>>>,
 }
@@ -83,6 +88,7 @@ impl Spectate {
     ) -> Result<Self, String> {
         let host = locked.roster.first().map_or(me, |p| p.key);
         let mut shadows = Vec::new();
+        let diverged: Arc<Mutex<Vec<(PlayerKey, u64)>>> = Arc::default();
         for player in locked.roster.iter().filter(|p| p.key != me) {
             let mut core = MgbaCore::new();
             core.load_rom(rom).map_err(|e| e.to_string())?;
@@ -90,7 +96,12 @@ impl Spectate {
             let shadow = ShadowGame::power_on(game, locked.start_ms);
             let commands = commands.clone();
             let name = player.name.clone();
+            let (key, diverged_too) = (player.key, diverged.clone());
             let tell = Box::new(move |frame| {
+                diverged_too
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push((key, frame));
                 // The Run is closed when nobody is listening.
                 let _ = commands.send(RunCommand::OutOfSync { player: name, frame });
             });
@@ -112,6 +123,8 @@ impl Spectate {
             avatars: None,
             presence: pactlocke_run::Presence::new(SystemRunClock.now_ms()),
             keep_waiting: Vec::new(),
+            watch: CheatWatch::new(locked.start_ms),
+            diverged,
         })
     }
 
@@ -147,6 +160,7 @@ impl Spectate {
             }
         }
         let now = SystemRunClock.now_ms();
+        let mut flags = Vec::new();
         for (from, bytes) in lobbies.take_stream() {
             let Some(message) = StreamMessage::from_bytes(&bytes) else {
                 continue;
@@ -155,15 +169,38 @@ impl Spectate {
             if let StreamMessage::Chunk(chunk) = &message {
                 self.presence.heard(chunk.player, now);
             }
-            let (out, new) = self.hub.receive(from, message);
-            for out in out {
+            let received = self.hub.receive(from, message);
+            for out in received.send {
                 lobbies.send_stream(out);
             }
-            for chunk in new {
+            if let Some(log) = lobbies.log() {
+                if let Some(rewrite) = &received.rewritten {
+                    flags.extend(self.watch.rewritten(log, rewrite, now));
+                }
+                for chunk in &received.new {
+                    flags.extend(self.watch.arrived(chunk, log, now));
+                }
+            }
+            for chunk in received.new {
                 if let Some(shadow) = self.shadows.iter().find(|s| s.key == chunk.player) {
                     shadow.runner.receive(chunk);
                 }
             }
+        }
+        let diverged = std::mem::take(&mut *self.diverged.lock().unwrap_or_else(|e| e.into_inner()));
+        if let Some(log) = lobbies.log() {
+            for (player, frame) in diverged {
+                let Some(shadow) = self.shadows.iter().find(|s| s.key == player) else {
+                    continue;
+                };
+                let boot = shadow.status().boot;
+                flags.extend(self.watch.diverged(log, player, GamePoint { boot, frame }, now));
+            }
+            flags.extend(self.watch.due(log, now));
+        }
+        // Each flag goes in the Run log for every Player to see.
+        if !flags.is_empty() {
+            lobbies.share(flags);
         }
     }
 

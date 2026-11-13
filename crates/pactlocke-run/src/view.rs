@@ -162,6 +162,8 @@ pub enum FeedKind {
     Gift,
     /// A rule broken in a way the app couldn't stop; shown in red.
     Violation,
+    /// A cheat flag: shown to every Player, apart from Violations.
+    Cheat,
 }
 
 impl FeedEntry {
@@ -218,6 +220,29 @@ impl FeedEntry {
             ),
             RunEvent::Suspended => (FeedKind::Run, "Run suspended".to_owned()),
             RunEvent::GameReset => (FeedKind::Run, "The game was reset to an older save".to_owned()),
+            // Another Player's flag reaches the feed through the Run log, as `Flagged`.
+            RunEvent::CheatFlag { player: Some(_), .. } => return None,
+            RunEvent::CheatFlag {
+                player: None,
+                cheat,
+                frame,
+                ..
+            } => (
+                FeedKind::Cheat,
+                format!("Cheat flag on you, at frame {frame}: {}", cheat.describe()),
+            ),
+            RunEvent::Flagged {
+                player,
+                cheat,
+                frame,
+                by,
+            } => (
+                FeedKind::Cheat,
+                format!(
+                    "Cheat flag on {player}, at frame {frame}: {} (seen by {by})",
+                    cheat.describe()
+                ),
+            ),
             RunEvent::OutOfSync { player, .. } => (
                 FeedKind::Problem,
                 format!("Can't watch {player} right now: their game and its copy here are out of sync"),

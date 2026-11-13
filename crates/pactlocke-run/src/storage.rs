@@ -156,6 +156,13 @@ impl MemoryStorage {
         self.run.lock().unwrap().clone().expect("the Run was created first")
     }
 
+    /// Changes every stored checkpoint, as someone editing the Run file would.
+    pub fn tamper_with_checkpoints(&self, mut change: impl FnMut(&mut StoredCheckpoint)) {
+        for (_, checkpoint) in self.checkpoints.lock().unwrap().iter_mut() {
+            change(checkpoint);
+        }
+    }
+
     /// From now on, writes fail for this reason (the Run as stored so far is kept).
     pub fn fail_writes(&self, why: &str) {
         *self.failure.lock().unwrap() = Some(why.to_owned());

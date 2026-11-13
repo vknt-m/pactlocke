@@ -202,15 +202,29 @@ impl RunEngine {
 
     /// The Run Checkpoint with this hash, as stored (the newest few are kept
     /// in RAM too).
-    pub(crate) fn find_run_checkpoint(&mut self, hash: &str) -> Option<(u64, StoredCheckpoint)> {
-        let seq = *self.run_checkpoints.get(hash)?;
+    /// A Run Checkpoint is checked against its hash in the log: one that
+    /// doesn't match was changed in the Run file, and is flagged.
+    pub(crate) fn find_run_checkpoint(&mut self, hash: &str) -> Result<(u64, StoredCheckpoint), String> {
+        const GONE: &str = "that Run Checkpoint is no longer kept";
+        let seq = *self.run_checkpoints.get(hash).ok_or(GONE)?;
         let checkpoint = self
             .recent_checkpoints
             .iter()
             .find(|c| c.hash() == hash)
             .cloned()
-            .or_else(|| self.storage.checkpoint(seq))?;
-        Some((seq, checkpoint))
+            .or_else(|| self.storage.checkpoint(seq))
+            .ok_or(GONE)?;
+        if checkpoint.hash() != hash {
+            self.record(RunEvent::CheatFlag {
+                player: None,
+                cheat: crate::Cheat::CheckpointTampered,
+                boot: checkpoint.boot,
+                frame: checkpoint.frame,
+                at_ms: self.clock.now_ms(),
+            });
+            return Err("that Run Checkpoint in the Run file doesn't match its hash in the log".to_owned());
+        }
+        Ok((seq, checkpoint))
     }
 
     /// A Retry back to the Run Checkpoint stored with event `to_seq`: it is
@@ -622,6 +636,16 @@ impl RunEngine {
             self.speed = speed;
             self.record(RunEvent::SpeedChanged { speed });
         }
+    }
+
+    /// A cheat flag from the Run log: the feed says so.
+    pub fn flagged(&mut self, player: String, cheat: crate::Cheat, frame: u64, by: String) {
+        self.record(RunEvent::Flagged {
+            player,
+            cheat,
+            frame,
+            by,
+        });
     }
 
     /// The other Players dropped this Player from the Run: the feed says so.

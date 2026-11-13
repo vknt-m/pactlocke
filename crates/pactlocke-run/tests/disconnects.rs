@@ -261,7 +261,7 @@ fn a_crashed_app_takes_its_own_presses_back_from_the_host() {
         boot: 1,
         from_frame: flushed,
     });
-    let (out, _) = table.apps[0].hub.receive(key(1), want);
+    let out = table.apps[0].hub.receive(key(1), want).send;
     let chunks: Vec<_> = out
         .into_iter()
         .filter_map(|o| match o {

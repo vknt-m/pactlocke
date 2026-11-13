@@ -56,6 +56,8 @@ pub struct App {
     pub storage: MemoryStorage,
     /// Partner Avatars: where this app puts them for its game to draw.
     pub partners: Option<Arc<Mutex<Vec<pactlocke_run::PartnerAvatar>>>>,
+    /// What this app has seen of the others' streams, to flag cheats.
+    pub watch: pactlocke_run::CheatWatch,
     /// Entries this app refused from the Host, and why.
     pub refused: Vec<String>,
 }
@@ -181,6 +183,7 @@ impl Table {
                     follower: LogFollower::new(key(i)),
                     links: pactlocke_run::LinkKeeper::new(key(i)),
                     partners: None,
+                    watch: pactlocke_run::CheatWatch::new(START_MS),
                     presence: pactlocke_run::Presence::new(START_MS),
                     storage,
                     refused: Vec::new(),
@@ -369,6 +372,33 @@ impl Table {
         }
     }
 
+    /// Player `i` plays `n` frames, `per_tick` of them in each slice of
+    /// time: at `per_tick` times a GBA's speed, or so.
+    pub fn plays_fast(&mut self, i: usize, n: usize, per_tick: usize) {
+        for _ in 0..n / per_tick {
+            for _ in 0..per_tick {
+                let app = &mut self.apps[i];
+                let keys = Keys(((app.played * 37) % 0x400) as u16 & 0x3FF).without(Keys::SELECT);
+                app.played += 1;
+                app.running.run_frame(keys);
+            }
+            self.tick();
+        }
+    }
+
+    /// Player `i`'s app sends this chunk as its own, as a changed build might.
+    pub fn forges(&mut self, i: usize, chunk: InputChunk) {
+        let from = self.apps[i].key;
+        let message = StreamMessage::Chunk(chunk);
+        let out = if i == self.host {
+            Outgoing::AllBut(from, message)
+        } else {
+            Outgoing::To(self.apps[self.host].key, message)
+        };
+        self.post(from, vec![out]);
+        self.tick();
+    }
+
     /// Everyone stands still for `ms`: no game runs, but the network and the Shadows do.
     pub fn waits(&mut self, ms: i64) {
         for _ in 0..ms / FRAME_MS {
@@ -398,16 +428,22 @@ impl Table {
             let Some(decoded) = StreamMessage::from_bytes(&message.bytes) else {
                 continue;
             };
-            let (out, new) = self.apps[to].hub.receive(message.from, decoded);
-            for chunk in new {
-                let app = &mut self.apps[to];
+            let received = self.apps[to].hub.receive(message.from, decoded);
+            let app = &mut self.apps[to];
+            let mut flags = Vec::new();
+            if let Some(rewrite) = &received.rewritten {
+                flags.extend(app.watch.rewritten(&app.log, rewrite, now));
+            }
+            for chunk in received.new {
                 app.presence.heard(chunk.player, now);
+                flags.extend(app.watch.arrived(&chunk, &app.log, now));
                 if let Some(shadow) = app.shadows.get_mut(&chunk.player) {
                     shadow.receive(&chunk, now);
                 }
             }
+            app.shared.lock().unwrap().extend(flags);
             let from = self.apps[to].key;
-            self.post(from, out);
+            self.post(from, received.send);
         }
         for app in &mut self.apps {
             if let Some(partners) = &app.partners {
@@ -436,7 +472,15 @@ impl Table {
                     diverged.push((*key, frame));
                 }
             }
+            let due = app.watch.due(&app.log, now);
+            app.shared.lock().unwrap().extend(due);
             for (key, frame) in diverged {
+                let at = pactlocke_run::GamePoint {
+                    boot: app.shadows[&key].boot(),
+                    frame,
+                };
+                let flag = app.watch.diverged(&app.log, key, at, now);
+                app.shared.lock().unwrap().extend(flag);
                 let player = names[&key].clone();
                 app.running
                     .commands()

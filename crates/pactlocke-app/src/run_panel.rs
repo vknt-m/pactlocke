@@ -107,10 +107,11 @@ pub fn show(
                             FeedKind::Block => visuals.warn_fg_color,
                             FeedKind::Death => egui::Color32::from_rgb(0x9A, 0x7B, 0xC9),
                             FeedKind::Problem | FeedKind::Violation => visuals.error_fg_color,
+                            FeedKind::Cheat => egui::Color32::from_rgb(0xE0, 0x7A, 0x1F),
                         };
                         ui.horizontal_wrapped(|ui| {
                             ui.weak(ago(now - entry.at_ms));
-                            if entry.kind == FeedKind::Violation {
+                            if matches!(entry.kind, FeedKind::Violation | FeedKind::Cheat) {
                                 ui.colored_label(colour, egui::RichText::new(&entry.text).strong());
                             } else {
                                 ui.colored_label(colour, &entry.text);

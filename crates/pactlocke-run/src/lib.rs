@@ -8,6 +8,7 @@
 
 mod avatars;
 mod boot;
+mod cheats;
 mod clock;
 mod engine;
 mod event;
@@ -28,6 +29,7 @@ mod view;
 
 pub use avatars::{Painter, PartnerAvatar};
 pub use boot::{BootPlan, Booted, boot_core};
+pub use cheats::{Cheat, CheatWatch, FAST_BURST_FRAMES, Flag};
 pub use clock::{RunClock, SystemRunClock};
 pub use engine::RunEngine;
 pub use event::{AreaRef, CheckpointReason, DeathCause, Recorded, ResumedFrom, RunEvent, SourceRef};
@@ -50,8 +52,8 @@ pub use shared_log::{
 };
 pub use storage::{InputBatch, MemoryStorage, RunInfo, RunStorage, Stamped, StorageError, StoredCheckpoint, StoredRun};
 pub use stream::{
-    Added, CHUNK_FRAMES, FrameHash, HASH_EVERY, InputChunk, Mark, Outgoing, PlayerKey, StreamHub, StreamMessage,
-    StreamOut, StreamStore, StreamWant,
+    Added, CHUNK_FRAMES, FrameHash, HASH_EVERY, InputChunk, Mark, Outgoing, PlayerKey, Received, Rewrite, StreamHub,
+    StreamMessage, StreamOut, StreamStore, StreamWant,
 };
 pub use view::{Doing, FeedEntry, FeedKind, Grave, LevelCapView, NicknameWanted, RunView};
 

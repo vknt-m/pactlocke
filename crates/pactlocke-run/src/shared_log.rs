@@ -581,12 +581,15 @@ impl RunLog {
                 LogBody::Event(RunEvent::Retried { .. }) => {
                     going_back.remove(&author);
                 }
+                LogBody::Event(event) if event.outlives_retries() => standing.push((index, author, event)),
                 LogBody::Event(_) if going_back.contains(&author) => {}
                 LogBody::Event(event) => standing.push((index, author, event)),
                 LogBody::Retry { call } => {
                     let calls = calls.get_or_insert_with(|| self.calls());
                     if let Some(called) = numbered(calls, call) {
-                        standing.retain(|(at, who, _)| called.parts.get(who).is_none_or(|part| *at <= part.entry));
+                        standing.retain(|(at, who, event)| {
+                            event.outlives_retries() || called.parts.get(who).is_none_or(|part| *at <= part.entry)
+                        });
                         going_back.extend(called.parts.keys());
                     }
                 }
@@ -594,6 +597,56 @@ impl RunLog {
             }
         }
         standing.into_iter().map(|(_, author, event)| (author, event)).collect()
+    }
+
+    /// Every Retry in the log, in order: its call, and where it sent each
+    /// Player's game back to.
+    pub fn retries(&self) -> Vec<(u64, BTreeMap<PlayerKey, GamePoint>)> {
+        let calls = self.calls();
+        self.bodies()
+            .filter_map(|(_, body)| match body {
+                LogBody::Retry { call } => {
+                    let called = numbered(&calls, call)?;
+                    Some((call, called.parts.iter().map(|(p, part)| (*p, part.at)).collect()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every cheat flag in the log, one per Player, cheat and boot, with
+    /// everyone who flagged it. Nothing clears one.
+    pub fn flags(&self) -> Vec<crate::Flag> {
+        let roster = self.roster.clone().unwrap_or_default();
+        let mut flags: Vec<crate::Flag> = Vec::new();
+        for (author, body) in self.bodies() {
+            let LogBody::Event(RunEvent::CheatFlag {
+                player,
+                cheat,
+                boot,
+                frame,
+                at_ms,
+            }) = body
+            else {
+                continue;
+            };
+            let player = player.unwrap_or(author);
+            if !roster.contains(&player) {
+                continue;
+            }
+            match flags.iter_mut().find(|f| f.is(&player, cheat, boot)) {
+                Some(flag) if !flag.by.contains(&author) => flag.by.push(author),
+                Some(_) => {}
+                None => flags.push(crate::Flag {
+                    player,
+                    cheat,
+                    at: GamePoint { boot, frame },
+                    at_ms,
+                    by: vec![author],
+                }),
+            }
+        }
+        flags
     }
 
     /// The speed each Player last said they play at (1x until they say).
@@ -819,12 +872,18 @@ fn verifies(key: &[u8; 32], message: &[u8], signature: &[u8]) -> bool {
 pub struct LogFollower {
     me: PlayerKey,
     seen: usize,
+    /// Cheat flags already put in the feed: by Player, cheat and boot.
+    flagged: Vec<(PlayerKey, crate::Cheat, u32)>,
 }
 
 impl LogFollower {
     /// For the Player with this key, from the start of the log.
     pub fn new(me: PlayerKey) -> Self {
-        Self { me, seen: 0 }
+        Self {
+            me,
+            seen: 0,
+            flagged: Vec::new(),
+        }
     }
 
     /// The commands for this Player's Run from the entries since the last call.
@@ -842,6 +901,39 @@ impl LogFollower {
                         .find(|c| c.by == author && c.parts.get(&author).is_some_and(|p| p.entry == index));
                     if let Some(called) = called.filter(|c| !c.void) {
                         commands.push(crate::RunCommand::JoinCheckpoint { call: called.n });
+                    }
+                }
+                // A flag reaches every feed once, the first time it is logged;
+                // one the Player's own app made about their own game is there already.
+                LogBody::Event(RunEvent::CheatFlag {
+                    player,
+                    cheat,
+                    boot,
+                    frame,
+                    ..
+                }) if !(player.is_none() && author == self.me) => {
+                    let about = player.unwrap_or(author);
+                    if !self.flagged.contains(&(about, cheat, boot)) {
+                        self.flagged.push((about, cheat, boot));
+                        let name = |key: PlayerKey| {
+                            if key == self.me {
+                                "you".to_owned()
+                            } else {
+                                log.locked()
+                                    .and_then(|l| l.roster.into_iter().find(|p| p.key == key))
+                                    .map_or_else(|| "a Player".to_owned(), |p| p.name)
+                            }
+                        };
+                        commands.push(crate::RunCommand::Flagged {
+                            player: name(about),
+                            cheat,
+                            frame,
+                            by: if player.is_none() {
+                                "their own app".to_owned()
+                            } else {
+                                name(author)
+                            },
+                        });
                     }
                 }
                 LogBody::Event(RunEvent::SpeedChanged { speed }) if author != self.me => {
