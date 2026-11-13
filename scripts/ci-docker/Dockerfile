@@ -7,7 +7,7 @@ FROM rust:${RUST_VERSION}-bookworm
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        cmake libasound2-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev \
+        cmake libasound2-dev libudev-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev \
         libxcursor-dev libxrandr-dev libxi-dev mesa-vulkan-drivers xvfb xauth \
     && rm -rf /var/lib/apt/lists/*
 

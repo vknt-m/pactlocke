@@ -1,6 +1,7 @@
 //! Inviting friends and joining a friend's Run: the join prompt and the
-//! lobby window, where the Host sets the Ruleset, everyone says Ready, and
-//! the lock starts every Player's Run together.
+//! Lobby tab of the side panel, where the Host sets the Ruleset, everyone
+//! says Ready, and the lock starts every Player's Run together. The tab
+//! stays for the whole Run, with the tallies and connections.
 
 use std::path::{Path, PathBuf};
 
@@ -25,10 +26,10 @@ struct JoinPrompt {
 /// The lobby this app is in, as Host or joiner, and the join prompt.
 pub struct Lobbies {
     key: Result<[u8; 32], String>,
-    /// The name other Players see.
+    /// The name other Players see, from Settings.
     pub name: String,
-    /// The relays to use: blank for n0's public relays, or URLs.
-    pub relays: String,
+    /// The relays to use, from Settings.
+    pub relays: Relays,
     host: Option<(HostNode, HostCoop)>,
     join: Option<(JoinNode, JoinCoop)>,
     prompt: Option<JoinPrompt>,
@@ -37,8 +38,6 @@ pub struct Lobbies {
     rejoin: Option<(Invite, Option<String>)>,
     /// When this joiner's connection to the Host was lost, if it is.
     lost_at: Option<i64>,
-    /// Whether the Lobby window is showing. Closing it only hides it.
-    shown: bool,
     /// The lobby as last written to the app's log, to note each change once.
     noted: String,
 }
@@ -57,13 +56,12 @@ impl Lobbies {
                 )
             }),
             name: "Player".into(),
-            relays: String::new(),
+            relays: Relays::N0,
             host: None,
             join: None,
             prompt: None,
             rejoin: None,
             lost_at: None,
-            shown: false,
             noted: String::new(),
         }
     }
@@ -71,16 +69,6 @@ impl Lobbies {
     /// Whether this app is in a lobby, as Host or joiner.
     pub fn in_lobby(&self) -> bool {
         self.host.is_some() || self.join.is_some()
-    }
-
-    /// Whether the Lobby window is showing.
-    pub fn lobby_shown(&self) -> bool {
-        self.shown
-    }
-
-    /// Shows the Lobby window again after it was closed.
-    pub fn show_lobby(&mut self) {
-        self.shown = true;
     }
 
     /// Writes the lobby to the app's log when what this app sees of it changes.
@@ -121,13 +109,12 @@ impl Lobbies {
     }
 
     fn relay_choice(&self) -> Relays {
-        Relays::parse(&self.relays)
+        self.relays.clone()
     }
 
     /// Leaves the lobby this app is in. The network shuts down on its own
     /// thread, so the window never waits for it.
     fn leave(&mut self) {
-        self.shown = false;
         self.rejoin = None;
         let (host, join) = (self.host.take(), self.join.take());
         if host.is_some() || join.is_some() {
@@ -144,7 +131,6 @@ impl Lobbies {
         let coop = HostCoop::new(key, &self.name, &run, rom);
         let lobby = HostLobby::new(run, &self.name, APP_VERSION);
         self.host = Some((HostNode::start(key, lobby, self.relay_choice()), coop));
-        self.shown = true;
         log::info!("Hosting a new lobby");
     }
 
@@ -262,8 +248,8 @@ impl Lobbies {
         self.prompt = Some(JoinPrompt::default());
     }
 
-    /// The join prompt and the lobby window, when open. Returns the Run to
-    /// start when the countdown after the lock is over.
+    /// The join prompt, when open, and the lobby's own work. Returns the
+    /// Run to start when the countdown after the lock is over.
     pub fn show(&mut self, ctx: &egui::Context) -> Option<CoopStart> {
         self.join_prompt(ctx);
         let now_ms = SystemRunClock.now_ms();
@@ -273,7 +259,10 @@ impl Lobbies {
             (None, Some((node, coop))) => coop.pump(node, now_ms),
             (None, None) => None,
         };
-        self.lobby_window(ctx, now_ms);
+        if self.in_lobby() {
+            // The view comes from the network threads: look again soon.
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
         self.note_changes();
         if start.is_some() {
             log::info!("The Run starts");
@@ -295,10 +284,6 @@ impl Lobbies {
                     .desired_width(420.0),
             );
             ui.horizontal(|ui| {
-                ui.label("Your name");
-                ui.text_edit_singleline(&mut self.name);
-            });
-            ui.horizontal(|ui| {
                 if ui.button("Choose your ROM…").clicked() {
                     match pick_rom() {
                         Some(Ok(rom)) => prompt.rom = Some(rom),
@@ -311,10 +296,10 @@ impl Lobbies {
                     None => ui.weak("none yet: you can pick it in the lobby too"),
                 };
             });
-            ui.collapsing("Relays", |ui| {
-                ui.label("Blank uses n0's public relays. Or list your own (a self-hosted iroh-relay), one per line.");
-                ui.text_edit_multiline(&mut self.relays);
-            });
+            ui.weak(format!(
+                "Joining as {}. Settings → General changes your name.",
+                self.name
+            ));
             if let Some(error) = &prompt.error {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
@@ -345,7 +330,6 @@ impl Lobbies {
                     self.join = Some((node, coop));
                     self.rejoin = Some(rejoin);
                     self.prompt = None;
-                    self.shown = true;
                     log::info!("Joining a lobby");
                 }
                 Err(e) => prompt.error = Some(e),
@@ -355,58 +339,71 @@ impl Lobbies {
         }
     }
 
-    fn lobby_window(&mut self, ctx: &egui::Context, now_ms: i64) {
+    /// After the lock: how this app reaches each other Player's.
+    fn connections(&self, ui: &mut egui::Ui) {
+        let Some(locked) = self.log().and_then(|log| log.locked()) else {
+            return;
+        };
+        let me = self.public_key();
+        ui.add_space(6.0);
+        ui.strong("Connections");
+        for (index, player) in locked.roster.iter().enumerate() {
+            if Some(player.key) == me {
+                continue;
+            }
+            ui.horizontal(|ui| {
+                crate::theme::dot(ui, index);
+                ui.label(&player.name);
+                ui.weak(crate::player_strip::reach_text(self.reach(player.key), false));
+            });
+        }
+    }
+
+    /// The Lobby tab: before the lock the invite, the Players, the Ruleset,
+    /// Ready and the lock; during the Run the tallies and connections.
+    pub fn lobby_tab(&mut self, ui: &mut egui::Ui, now_ms: i64) {
         let (view, hosting) = match (&self.host, &self.join) {
             (Some((host, _)), _) => (host.view(), true),
             (None, Some((join, _))) => (join.view(), false),
-            (None, None) => return,
+            (None, None) => {
+                ui.weak("Not in a Lobby: the Run's network has been left.");
+                return;
+            }
         };
-        if !self.shown {
-            return;
-        }
         let locked = self.log().is_some_and(|log| log.locked().is_some());
-        let mut open = true;
         let mut new_invite = false;
         let mut picked = None;
         let mut leave = false;
-        egui::Window::new("Lobby")
-            .open(&mut open)
-            .collapsible(false)
-            .show(ctx, |ui| {
-                if let Some(run) = &view.run {
-                    ui.strong(&run.name);
-                    ui.weak(&run.game_name);
-                }
-                if let Some(error) = &view.error {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
-                }
-                if hosting {
-                    invite_section(ui, &view, &mut new_invite);
-                } else if view.error.is_none() && view.players.is_empty() {
-                    ui.label("Connecting to the Host…");
-                }
-                ui.separator();
-                players_section(ui, &view);
-                if !hosting
-                    && view.rom_matches != Some(true)
-                    && view.run.is_some()
-                    && ui.button("Choose your ROM…").clicked()
-                {
-                    picked = pick_rom().and_then(Result::ok);
-                }
-                ui.separator();
-                match (&mut self.host, &mut self.join) {
-                    (Some((node, coop)), _) => coop.show(ui, node, now_ms),
-                    (None, Some((node, coop))) => coop.show(ui, node, now_ms),
-                    (None, None) => {}
-                }
-                ui.separator();
-                if locked {
-                    ui.weak("Closing this window only hides it: the Lobby button brings it back.");
-                } else {
-                    leave = ui.button("Leave the lobby").clicked();
-                }
-            });
+        if let Some(run) = &view.run {
+            ui.strong(&run.name);
+            ui.weak(&run.game_name);
+        }
+        if let Some(error) = &view.error {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+        if hosting {
+            invite_section(ui, &view, &mut new_invite);
+        } else if view.error.is_none() && view.players.is_empty() {
+            ui.label("Connecting to the Host…");
+        }
+        ui.separator();
+        players_section(ui, &view);
+        if !hosting && view.rom_matches != Some(true) && view.run.is_some() && ui.button("Choose your ROM…").clicked()
+        {
+            picked = pick_rom().and_then(Result::ok);
+        }
+        ui.separator();
+        match (&mut self.host, &mut self.join) {
+            (Some((node, coop)), _) => coop.show(ui, node, now_ms),
+            (None, Some((node, coop))) => coop.show(ui, node, now_ms),
+            (None, None) => {}
+        }
+        if locked {
+            self.connections(ui);
+        } else {
+            ui.separator();
+            leave = ui.button("Leave the lobby").clicked();
+        }
         if new_invite && let Some((host, _)) = &self.host {
             host.new_invite();
         }
@@ -417,11 +414,7 @@ impl Lobbies {
         if leave {
             log::info!("Left the lobby");
             self.leave();
-        } else if !open {
-            self.shown = false;
         }
-        // The view comes from the network threads: look again soon.
-        ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 }
 
@@ -430,7 +423,7 @@ fn invite_section(ui: &mut egui::Ui, view: &LobbyView, new_invite: &mut bool) {
         Some(link) => {
             ui.label("Send this link to one friend. Each link lets one Player in, once.");
             // Read-only, but selectable, so Ctrl+C works as well as Copy.
-            ui.add(egui::TextEdit::singleline(&mut link.as_str()).desired_width(420.0));
+            ui.add(egui::TextEdit::singleline(&mut link.as_str()).desired_width(f32::INFINITY));
             ui.horizontal(|ui| {
                 if ui.button("Copy").clicked() {
                     ui.ctx().copy_text(link.clone());
@@ -449,8 +442,9 @@ fn invite_section(ui: &mut egui::Ui, view: &LobbyView, new_invite: &mut bool) {
 
 fn players_section(ui: &mut egui::Ui, view: &LobbyView) {
     ui.label(format!("Players · {}", view.players.len()));
-    for player in &view.players {
+    for (index, player) in view.players.iter().enumerate() {
         ui.horizontal(|ui| {
+            crate::theme::dot(ui, index);
             ui.label(&player.name);
             if player.host {
                 ui.weak("Host");

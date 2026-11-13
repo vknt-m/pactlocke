@@ -17,7 +17,18 @@ If you cloned without submodules, run `git submodule update --init`. libmgba liv
 
 ## Playing
 
-Run `pactlocke`, or `pactlocke path/to/game.gba` to open a ROM straight away. The keys are mGBA's defaults:
+Run `pactlocke`, or `pactlocke path/to/game.gba` to open a ROM straight away. The first time, it asks your name: other Players see it.
+
+The window has a menu bar along the top, the game on the left and the side panel on the right:
+- **File:** New Run, Join Run, Open ROM, Recent ROMs, Close, Suspend and quit, Exit.
+- **Emulation:** Pause, Speed, Retry (alone), Take a screenshot.
+- **View:** Side panel, Pop out, Partner view, Battery saver, Window size, Fullscreen.
+- **Options:** Settings.
+- **Help:** Open the log folder, About.
+
+The home screen has three actions, New Run, Join a Run and Open a ROM, and your Runs under them. Each Run has **Resume** and **Delete…**, which asks first.
+
+The keys start as mGBA's defaults, and **Options → Settings → Controls** rebinds them:
 
 | GBA | Keyboard |
 |---|---|
@@ -25,6 +36,18 @@ Run `pactlocke`, or `pactlocke path/to/game.gba` to open a ROM straight away. Th
 | L / R | A / S |
 | Start / Select | Enter / Backspace |
 | D-pad | Arrow keys |
+| Fast-forward (hold) / Pause | Tab / P |
+
+A gamepad works too: A and B, the shoulders as L and R, Start, Back as Select, and the D-pad or the left stick. Settings is one dialog with its categories down the left:
+- **General:** your name, the default speed, pausing when the window loses focus (solo only).
+- **Controls:** the keys above, and the gamepad.
+- **Sound:** volume, muting while fast-forwarding, the sound of the game you Watch, the output device.
+- **Video:** scaling by whole numbers or to fit, the filter, colour correction.
+- **Network:** relays.
+- **Data and logs:** the data folder, the log folder, more detail in the log.
+- **Developer:** local Game Profiles.
+
+Settings are kept in `settings.json` beside the Runs folder. Settings pauses a solo game while it's open, never a Run with friends. Screenshots go in a `screenshots` folder there.
 
 The ROM is only read into memory. Pactlocke never copies or changes ROM, save or patch files.
 
@@ -32,9 +55,34 @@ The ROM is only read into memory. Pactlocke never copies or changes ROM, save or
 
 **New Run…** picks a supported ROM (FireRed (USA) 1.0 for now) and starts a named solo Run. With the First Encounter rule once you have Poké Balls, your first wild battle in each Area is its Encounter, and in an Area whose Encounter is used the game refuses a ball with its own "This isn't the time to use that!" and keeps the ball. Running is always allowed. With the **Dupes clause** (it needs First Encounter), a wild Pokémon from an evolution family you have alive, in your party or PC, isn't the Encounter: the ball is refused and the next wild battle in that Area counts. Dead, released and traded-away Pokémon don't make dupes. Families are read from the loaded ROM; when a randomizer makes evolutions random every level, only the exact species counts. Gifts (the starter, fossils, eggs, prizes, in-game trades) are logged from the Game Profile's catalogue; with **Gifts** unticked every Gift but the starter is released once its script ends, and a second Pokémon from a Gift already used is always released. A Pokémon a script gives that the catalogue doesn't list is logged as an unknown Gift and kept. A Static (a legendary, Snorlax) is a bonus Encounter of its own with **Statics** ticked, which needs First Encounter; unticked, it counts only as the Area's first Encounter. Either way one fled from or knocked out has used its Encounter. With **Faint = Dead** ticked (on by default), a Pokémon that faints is Dead for the rest of the Run: back on the overworld, before you can heal it, it is moved to the Dead box (box 14 on FireRed). A Dead Pokémon you put back in the party goes straight back to the Dead box, with a red Violation in the feed. The side panel's live feed says what happened, and its Graveyard tab lists the Dead and what killed them.
 
-**Invite friends…** in the New Run prompt starts a Run with up to two friends instead. The Lobby window gives an invite link for each friend, who joins with **Join Run…** and their own copy of the ROM. In the lobby the Host picks a preset (Classic Nuzlocke, Soul Link or Hardcore) and turns any rule on or off; every Player sees the Ruleset change live. A rule that needs another (Dupes and Statics need First Encounter, Links need Faint = Dead and a second Player) or that the ROM can't enforce is greyed out, with the reason on hover. Every Player ticks **Ready**, and any change to the Ruleset clears everyone's Ready. **Lock and start** waits until everyone is Ready and every Player has the same Pactlocke build and the same ROM; anything that doesn't match is named. After the lock nobody new can join, a 3-2-1 countdown runs, and every Player's game starts from a new game at the same moment, its clock set to the lock's start time. Each Player signs their own Run state (Encounters, catches, Deaths, Violations), the Host numbers and links each entry, and every Player checks every entry, so the Host can't change anyone else's. The Lobby window then shows each Player's tallies. A Run with friends can't be resumed together yet.
+**Invite friends…** in the New Run prompt starts a Run with up to two friends instead. The side panel opens on its **Lobby** tab, beside the home screen, with an invite link for each friend, who joins with **Join Run…** and their own copy of the ROM. The Lobby tab stays for the whole Run, with each Player's tallies and connection. In the lobby the Host picks a preset (Classic Nuzlocke, Soul Link or Hardcore) and turns any rule on or off; every Player sees the Ruleset change live. A rule that needs another (Dupes and Statics need First Encounter, Links need Faint = Dead and a second Player) or that the ROM can't enforce is greyed out, with the reason on hover. Every Player ticks **Ready**, and any change to the Ruleset clears everyone's Ready. **Lock and start** waits until everyone is Ready and every Player has the same Pactlocke build and the same ROM; anything that doesn't match is named. After the lock nobody new can join, a 3-2-1 countdown runs, and every Player's game starts from a new game at the same moment, its clock set to the lock's start time. Each Player signs their own Run state (Encounters, catches, Deaths, Violations), the Host numbers and links each entry, and every Player checks every entry, so the Host can't change anyone else's. The Lobby tab then shows each Player's tallies. A Run with friends can't be resumed together yet.
 
-**Shadow Games and Spectate.** In a Run with friends, each app sends its Player's button presses (a key mask per frame), every write and patch the Run made stamped with its frame, and a hash of the game's RAM and save every 120 frames. Never video, savestates or saves. Every other app replays them in a Shadow Game of that Player's game, on its own copy of the ROM, about 30 frames behind. A joiner's stream goes through the Host, who passes it on. When the stream stalls for a moment, the Shadow keeps playing on a guess and rewinds to its own checkpoint when the real presses arrive. A lost piece is asked for again. If a Shadow's hash ever differs from its Player's, it stops: the side panel says "Can't watch [Player] right now" and the feed says they are out of sync. The side panel's Player strip lists every Player: their name (yours says "you"), Area, speed, connection (direct or relayed, with the ping; a joiner reaches the others through the Host), what they are doing (Exploring, In battle, at or Ready at a Sync Gate), and a **Watch** button. Each Player's Area and doing come from their own game or its Shadow, and their speed from the Run log; a speed change shows in everyone's feed. **Partner view** shows the other Players' games as small tiles beside yours, and **Pop out** moves the side panel into a window of its own (closing it docks it again). Watching pauses your own game and shows theirs, picture and sound, until **Back to your game**. **Battery saver** (off by default) runs the Shadows only while you watch one; it then catches up at about 20x.
+**Shadow Games and Spectate.** In a Run with friends, each app sends its Player's button presses (a key mask per frame), every write and patch the Run made stamped with its frame, and a hash of the game's RAM and save every 120 frames. Never video, savestates or saves. Every other app replays them in a Shadow Game of that Player's game, on its own copy of the ROM, about 30 frames behind. A joiner's stream goes through the Host, who passes it on. When the stream stalls for a moment, the Shadow keeps playing on a guess and rewinds to its own checkpoint when the real presses arrive. A lost piece is asked for again. If a Shadow's hash ever differs from its Player's, it stops: the side panel says "Can't watch [Player] right now" and the feed says they are out of sync. **The side panel.** In a Run with friends, three things stay fixed at the top: the Player strip, the next Sync Gate's ready check, and any open vote. Each Player has a colour by join order: Gold for the Host, then Violet, then Green.
+
+The strip shows each Player:
+- their name (yours says "you");
+- their Area, speed and connection: direct or relayed with the ping, and a joiner reaches the others through the Host;
+- what they're doing: Exploring, In battle, or at or Ready at a Sync Gate;
+- a **Watch** button.
+
+Each Player's Area and doing come from their own game or its Shadow, and their speed from the Run log.
+
+Everything else is a tab, with the tab bar at the bottom:
+- **Feed:** a bar of every party's icons on top, with the Dead in red. Then every Player's lines, newest first, each with the Player's name in their colour and an icon for its kind. Violations are in red and cheat flags in orange.
+- **Party:** each Pokémon's icon from the ROM, its name, level and HP, with the Dead highlighted red. Hovering one highlights its Link-mates.
+- **Links**
+- **Graveyard**
+- **Ruleset:** every rule, the level cap, Retries, Sync Gates and the Encounters used.
+- **Lobby**
+
+Drag the panel's left edge to resize it; the width is remembered. Alone, the panel starts hidden, and **View → Side panel** opens it with Feed, Party, Graveyard and Ruleset.
+
+The View menu also holds:
+- **Partner view:** off by default. It shows the other Players' games live in a left panel, each with Watch.
+- **Pop out:** moves the side panel into a window of its own, and closing that window docks it again.
+- **Battery saver:** off by default. It runs the Shadows only while you watch one, and they then catch up at about 20x.
+
+Watching fills the game area with their game, picture and sound, and pauses yours until **Back to your game**.
 
 **Links.** With **Links** on (Soul Link; it needs Faint = Dead and a friend), each Player's Encounter from the same source is bound into a Link: the same Area, the same Gift (whatever each picked) or the same Static. Every other Player's catches and Deaths count only once their Shadow Game here has shown them, never on their app's word alone. A catch shows a pending outline in the parties until every Player has had their Encounter there. If any member dies, every member dies. One out in battle faints through the game's own Perish Song path by the end of the turn; one on the bench faints at once. The feed says whose death it was. If any Player's Encounter gets away (nothing caught), or they skip a Gift, the Link breaks: the others' members die, and the source closes for whoever hasn't had it yet. The side panel shows every Player's party; hovering a Pokémon highlights its Link-mates. The **Links** tab lists one row per source and one column per Player. **Skip…** on a Gift the others took warns that their copies will die before it skips.
 
@@ -44,7 +92,7 @@ The ROM is only read into memory. Pactlocke never copies or changes ROM, save or
 
 **Retries and Run Checkpoints.** **Retries** (0 to 10, off in every preset) is a shared pool, set in the New Run prompt or by the Host in the lobby. Whenever any Player saves in-game, every Player's game is captured with it: their own game, and every Shadow Game on every machine at the same point in its Player's stream. That is a Run Checkpoint, and it goes in the shared log. Alone, **Retry** in the side panel goes back to your latest one. With friends, any Player can **Start a Retry vote**. It stays open until everyone says **Yes**, and the first **No** ends it. When everyone agrees, the Host records "back to Run Checkpoint N" in the log, and every Player checks that everyone voted for it. Every game, Shadows included, then goes back to that checkpoint, and everything since is undone: catches, Encounters, Deaths and closed Areas. The tallies leave out each Player's entries since their part of it, and one Retry is spent from the pool. Hashes then confirm that every Shadow is back in step. The Run file keeps the newest Run Checkpoints and prunes older ones, but every checkpoint's hash stays in the log.
 
-**Disconnects and Dropout.** A Player whose connection drops plays on: their Run state is signed and queued, and goes into the Run log when they are back. Offline, they can't start a Sync Gate battle or vote, and the side panel says so. The others see them as offline in the Player strip once nothing has come from them for five seconds; their Shadow Game waits on its last frame, then catches up in the background when they return ("catching up…"). A Link death that reaches a Player late applies at once, even mid-battle. When the app loses the lobby it tries to join again every few seconds. Closing the Lobby window only hides it, and the toolbar's **Lobby** button brings it back. Before the lock, **Leave the lobby** leaves. A Host whose link to a Player is slow drops input stream messages for them, which are asked for again, rather than the Player. If the Host goes silent for about ten seconds, the next Player in join order takes over ordering the Run log, from the longest copy of the log anyone has; every Player checks that the takeover is theirs to make. (The Run log and its checks do this today; the app doesn't yet move the lobby's network to the new Host.) After 15 minutes offline the others are offered a **Dropout vote** (or **Keep waiting**). It works like a Retry vote: everyone but the Player leaving must say Yes, and the first No ends it. A Player dropped is out of the Run for good: their Pokémon leave every Link, a later Retry takes back only the Players still in, and the Run log refuses anything more from them. An app that crashed with its Run file behind can take the rest of its own presses back from the Host's copy of its stream and rebuild its game through them, once Runs with friends can be resumed.
+**Disconnects and Dropout.** A Player whose connection drops plays on: their Run state is signed and queued, and goes into the Run log when they are back. Offline, they can't start a Sync Gate battle or vote, and the side panel says so. The others see them as offline in the Player strip once nothing has come from them for five seconds; their Shadow Game waits on its last frame, then catches up in the background when they return ("catching up…"). A Link death that reaches a Player late applies at once, even mid-battle. When the app loses the lobby it tries to join again every few seconds. Before the lock, **Leave the lobby** on the Lobby tab leaves. A Host whose link to a Player is slow drops input stream messages for them, which are asked for again, rather than the Player. If the Host goes silent for about ten seconds, the next Player in join order takes over ordering the Run log, from the longest copy of the log anyone has; every Player checks that the takeover is theirs to make. (The Run log and its checks do this today; the app doesn't yet move the lobby's network to the new Host.) After 15 minutes offline the others are offered a **Dropout vote** (or **Keep waiting**). It works like a Retry vote: everyone but the Player leaving must say Yes, and the first No ends it. A Player dropped is out of the Run for good: their Pokémon leave every Link, a later Retry takes back only the Players still in, and the Run log refuses anything more from them. An app that crashed with its Run file behind can take the rest of its own presses back from the Host's copy of its stream and rebuild its game through them, once Runs with friends can be resumed.
 
 **Cheat flags.** Every app watches the other Players' streams. A cheat flag goes to every Player when any of these happen:
 - Frames are sent again pressed differently from the ones the others already have (a savestate load, or rewritten history).
@@ -85,6 +133,12 @@ CI's Linux job runs locally in Docker with `bash scripts/ci-docker.sh`. It runs 
 No ROM, save or patch is ever committed. CI checks for them.
 
 ## Developer tools
+
+To look at the UI without clicking through it, the app has developer flags. In each case, the app saves its window as a PNG once it has settled, then quits:
+- `pactlocke --shot shot.png`: the home screen.
+- `pactlocke --demo-run rom.gba --shot shot.png`: a solo Run on that ROM, started at once with the side panel open.
+- `pactlocke --demo-lobby rom.gba --shot shot.png`: a Lobby hosted on that ROM.
+- `pactlocke --open settings --shot shot.png`: the Settings dialog.
 
 Developer-only, never shipped to Players (the `pactlocke-dev` crate, behind a `cargo dev` alias):
 

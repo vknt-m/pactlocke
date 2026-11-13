@@ -1,23 +1,31 @@
 //! Pactlocke: start or resume a solo Run on a supported game and play it
-//! with its rules enforced, start one with friends from a lobby, or just
-//! open a GBA ROM and play it, with keyboard input, sound and a speed from
-//! 1x to 4x.
+//! with its rules enforced, start one with friends from a Lobby, or just
+//! open a GBA ROM and play it. One window: a menu bar along the top, the game
+//! on the left and the side panel on the right.
 //!
 //! Usage: `pactlocke [ROM]` opens the ROM straight away; `pactlocke --smoke`
-//! starts the UI, draws a few frames and quits (used by CI).
+//! starts the UI, draws a few frames and quits (used by CI). For a developer
+//! looking at the UI: `--shot FILE` saves the window as a PNG once it has
+//! settled and quits, `--demo-run ROM` starts a solo Run on that ROM straight
+//! away with the side panel open, and `--open settings` opens Settings.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
 mod coop;
 mod data_dir;
+mod gamepad;
 mod links_panel;
 mod lobby_ui;
 mod logger;
 mod player_strip;
 mod rom_report;
 mod run_panel;
+mod settings;
+mod settings_ui;
+mod side_panel;
 mod spectate;
+mod theme;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -32,35 +40,20 @@ use pactlocke_game::{
 };
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
-    Locked, NewRun, Ruleset, RunClock, RunCommand, RunEngine, RunEvent, RunLibrary, RunSummary, RunView, RunningGame,
-    SystemRunClock,
+    Locked, NewRun, Preset, Ruleset, RunClock, RunCommand, RunEngine, RunEvent, RunLibrary, RunSummary, RunView,
+    RunningGame, SystemRunClock,
 };
+use settings::Settings;
+use settings_ui::{Category, SettingsDialog};
 
 /// Frames the smoke launch draws before it closes itself.
 const SMOKE_FRAMES: u32 = 30;
+/// Frames `--shot` waits for the window to settle before saving it.
+const SHOT_FRAMES: u32 = 120;
 
-/// Keyboard layout, following mGBA's defaults: keyboard key, GBA button, its name.
-const KEY_MAP: [(egui::Key, Keys, &str); 10] = [
-    (egui::Key::X, Keys::A, "A"),
-    (egui::Key::Z, Keys::B, "B"),
-    (egui::Key::A, Keys::L, "L"),
-    (egui::Key::S, Keys::R, "R"),
-    (egui::Key::Enter, Keys::START, "Start"),
-    (egui::Key::Backspace, Keys::SELECT, "Select"),
-    (egui::Key::ArrowUp, Keys::UP, "Up"),
-    (egui::Key::ArrowDown, Keys::DOWN, "Down"),
-    (egui::Key::ArrowLeft, Keys::LEFT, "Left"),
-    (egui::Key::ArrowRight, Keys::RIGHT, "Right"),
-];
-
-/// "A: X   B: Z   …", for the home screen.
-fn key_help() -> String {
-    KEY_MAP
-        .iter()
-        .map(|(key, _, gba)| format!("{gba}: {}", key.name()))
-        .collect::<Vec<_>>()
-        .join("   ")
-}
+/// A GBA screen, in pixels.
+const GBA_W: f32 = 240.0;
+const GBA_H: f32 = 160.0;
 
 fn main() -> eframe::Result {
     // Before anything else, and before any other thread starts.
@@ -68,20 +61,24 @@ fn main() -> eframe::Result {
     logger::init();
 
     let mut smoke = false;
-    let mut rom = None;
-    for arg in std::env::args_os().skip(1) {
-        if arg == "--smoke" {
-            smoke = true;
-        } else {
-            rom = Some(PathBuf::from(arg));
+    let (mut rom, mut shot, mut demo, mut demo_lobby, mut open) = (None, None, None, None, None);
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("--smoke") => smoke = true,
+            Some("--shot") => shot = args.next().map(PathBuf::from),
+            Some("--demo-run") => demo = args.next().map(PathBuf::from),
+            Some("--demo-lobby") => demo_lobby = args.next().map(PathBuf::from),
+            Some("--open") => open = args.next().and_then(|a| a.into_string().ok()),
+            _ => rom = Some(PathBuf::from(arg)),
         }
     }
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Pactlocke")
-            .with_inner_size([880.0, 520.0])
-            .with_min_inner_size([240.0, 200.0]),
+            .with_inner_size([1100.0, 600.0])
+            .with_min_inner_size([480.0, 320.0]),
         ..Default::default()
     };
     eframe::run_native(
@@ -92,6 +89,16 @@ fn main() -> eframe::Result {
             if let Some(rom) = rom {
                 app.open_rom(&rom);
             }
+            if let Some(rom) = demo {
+                app.demo_run(&rom);
+            }
+            if let Some(rom) = demo_lobby {
+                app.demo_lobby(&rom);
+            }
+            if open.as_deref() == Some("settings") {
+                app.settings_dialog = Some(SettingsDialog::new(&app.settings, Category::General));
+            }
+            app.shot = shot.map(|path| (path, SHOT_FRAMES));
             Ok(Box::new(app))
         }),
     )
@@ -158,6 +165,11 @@ struct Playing {
     partner_view: bool,
     /// Each tile's texture, with the frame it shows.
     tiles: Vec<Option<(u64, egui::TextureHandle)>>,
+    /// In a Run: party icons from its ROM, and its own Ruleset.
+    icons: Option<theme::Icons>,
+    ruleset: Ruleset,
+    /// Whether the game is paused now, for whatever reason.
+    paused: bool,
 }
 
 /// The folder of a developer's local Game Profiles, if the developer setting names one.
@@ -165,10 +177,14 @@ fn dev_profiles_dir() -> Option<PathBuf> {
     std::env::var_os(DEV_PROFILES_VAR).map(PathBuf::from)
 }
 
-/// The bundled Game Profiles, and with the developer setting a developer's
-/// local ones too (for solo Runs only).
-fn load_profiles() -> Result<ProfileStore, String> {
-    ProfileStore::from_env().map_err(|e| match dev_profiles_dir() {
+/// The bundled Game Profiles, and with the developer setting (Settings ▸
+/// Developer, or the environment) a developer's local ones too, for solo Runs only.
+fn load_profiles(dev: Option<&Path>) -> Result<ProfileStore, String> {
+    let store = match dev {
+        Some(dir) => ProfileStore::bundled_with_local(dir),
+        None => ProfileStore::from_env(),
+    };
+    store.map_err(|e| match dev.map(Path::to_path_buf).or_else(dev_profiles_dir) {
         Some(dir) => format!("The developer profiles in {} don't load: {e}", dir.display()),
         None => format!("The bundled Game Profiles are broken: {e}"),
     })
@@ -265,6 +281,30 @@ struct PactlockeApp {
     lobbies: lobby_ui::Lobbies,
     /// The side panel is in its own window.
     panel_popped: bool,
+    /// The side panel is showing (View ▸ Side panel), and its open tab.
+    panel_shown: bool,
+    panel_tab: side_panel::Tab,
+    settings: Settings,
+    settings_dialog: Option<SettingsDialog>,
+    /// The first-launch prompt's name, as typed.
+    name_draft: String,
+    /// A Run waiting for Delete… to be confirmed.
+    deleting: Option<RunSummary>,
+    about: bool,
+    /// Paused from Emulation ▸ Pause.
+    paused: bool,
+    /// The fast-forward key is held.
+    fast_forward: bool,
+    pads: gamepad::Pads,
+    /// The volume every game plays at.
+    gain: audio::Gain,
+    /// Sound output devices, for Settings ▸ Sound.
+    devices: Vec<String>,
+    /// This app was in a Lobby last frame.
+    was_in_lobby: bool,
+    /// `--shot`: where to save the window, and frames until then; then set once saved.
+    shot: Option<(PathBuf, u32)>,
+    shot_saved: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl PactlockeApp {
@@ -272,20 +312,38 @@ impl PactlockeApp {
         let (dir, library_fallback) = data_dir::runs_dir();
         let library = RunLibrary::open(dir).map_err(|e| format!("Runs can't be kept: {e}"));
         let runs = library.as_ref().map(RunLibrary::list).unwrap_or_default();
-        Self {
+        let settings = Settings::load();
+        let mut app = Self {
             ctx,
             playing: None,
-            profiles: load_profiles(),
+            profiles: load_profiles(settings.dev_profiles.as_deref()),
             library,
             library_fallback,
             runs,
             new_run: None,
-            speed: Speed::X1,
+            speed: Speed::ALL[usize::from(settings.default_speed.clamp(1, 4) - 1)],
             error: None,
             smoke_frames_left: smoke.then_some(SMOKE_FRAMES),
             lobbies: lobby_ui::Lobbies::new(&data_dir::identity_file()),
             panel_popped: false,
-        }
+            panel_shown: false,
+            panel_tab: side_panel::Tab::Feed,
+            settings_dialog: None,
+            name_draft: String::new(),
+            deleting: None,
+            about: false,
+            paused: false,
+            fast_forward: false,
+            pads: gamepad::Pads::new(),
+            gain: audio::gain(settings.volume),
+            devices: audio::output_devices(),
+            was_in_lobby: false,
+            shot: None,
+            shot_saved: Arc::default(),
+            settings,
+        };
+        app.apply_settings();
+        app
     }
 
     /// The Run library, or why there is none.
@@ -309,6 +367,7 @@ impl PactlockeApp {
     /// Plays a ROM on its own, outside any Run.
     fn open_rom(&mut self, path: &Path) {
         self.stop_playing();
+        self.settings.opened(path);
         let result = self.read_rom(path).and_then(|(rom, identity)| {
             let core = self.boot(&rom).map_err(|e| format!("{}: {e}", path.display()))?;
             let (emulator, audio) = self.spawn(core);
@@ -332,7 +391,7 @@ impl PactlockeApp {
     }
 
     fn spawn<C: CoreAdapter + 'static>(&self, core: C) -> (Emulator<C>, Option<audio::AudioOut>) {
-        let audio = audio::AudioOut::open();
+        let audio = audio::AudioOut::open(self.settings.output_device.as_deref(), self.gain.clone());
         let ctx = self.ctx.clone();
         let mut options = EmulatorOptions::new(SystemClock::default())
             .speed(self.speed)
@@ -346,8 +405,14 @@ impl PactlockeApp {
     fn show_result(&mut self, result: Result<Playing, String>) {
         match result {
             Ok(playing) => {
+                // With friends the panel shows from the start; alone it waits for View ▸ Side panel.
+                self.panel_shown = playing.spectate.is_some();
+                self.panel_tab = side_panel::Tab::Feed;
+                self.paused = false;
                 self.playing = Some(playing);
                 self.error = None;
+                // Every game starts at the default speed from Settings.
+                self.set_speed(Speed::ALL[usize::from(self.settings.default_speed.clamp(1, 4) - 1)]);
             }
             Err(message) => self.error = Some(message),
         }
@@ -359,7 +424,61 @@ impl PactlockeApp {
         let Some(path) = Self::pick_rom_file("Choose the ROM for the new Run") else {
             return;
         };
-        let draft = self.read_rom(&path).and_then(|(rom, identity)| {
+        self.settings.opened(&path);
+        match self.draft_for(&path) {
+            Ok(draft) => {
+                self.error = None;
+                self.new_run = Some(draft);
+            }
+            Err(message) => self.error = Some(message),
+        }
+    }
+
+    /// `--demo-run`: a solo Run on this ROM, started at once, side panel open.
+    fn demo_run(&mut self, path: &Path) {
+        match self.draft_for(path) {
+            Ok(draft) => {
+                self.start_run(draft);
+                self.panel_shown = true;
+            }
+            Err(message) => self.error = Some(message),
+        }
+    }
+
+    /// `--demo-lobby`: hosts a Lobby on this ROM at once.
+    fn demo_lobby(&mut self, path: &Path) {
+        match self.draft_for(path) {
+            Ok(draft) => self.host_lobby(&draft),
+            Err(message) => self.error = Some(message),
+        }
+    }
+
+    /// Invite friends: a Lobby for this New Run, with an invite link. A game
+    /// being played closes: the Lobby takes its place.
+    fn host_lobby(&mut self, draft: &NewRunDraft) {
+        self.stop_playing();
+        let run = pactlocke_net::RunAdvert {
+            name: draft.name.trim().to_owned(),
+            game_name: draft.profile.name.clone(),
+            game_sha1: draft.profile.sha1.clone(),
+        };
+        let RomIdentity::Profiled { capabilities, .. } = &draft.identity else {
+            unreachable!("a New Run's ROM has a Game Profile")
+        };
+        let rom = coop::HostRom {
+            rom: draft.rom.clone(),
+            path: draft.path.clone(),
+            capabilities: capabilities.clone(),
+            level_caps: draft.level_caps.clone(),
+            sync_gates: draft.profile.sync_gate_names(),
+        };
+        self.lobbies.host(run, rom);
+    }
+
+    /// A New Run on this ROM, with the rules it can enforce on.
+    fn draft_for(&self, path: &Path) -> Result<NewRunDraft, String> {
+        let path = path.to_path_buf();
+        self.read_rom(&path).and_then(|(rom, identity)| {
             let RomIdentity::Profiled { profile, capabilities } = &identity else {
                 return Err("A Run needs a game Pactlocke has a Game Profile for, and this ROM has none.".to_owned());
             };
@@ -405,14 +524,7 @@ impl PactlockeApp {
                 path: path.clone(),
                 identity: identity.clone(),
             })
-        });
-        match draft {
-            Ok(draft) => {
-                self.error = None;
-                self.new_run = Some(draft);
-            }
-            Err(message) => self.error = Some(message),
-        }
+        })
     }
 
     fn start_run(&mut self, mut draft: NewRunDraft) {
@@ -542,7 +654,9 @@ impl PactlockeApp {
         coop: Option<&Locked>,
     ) -> Result<Playing, String> {
         let name = engine.info().name.clone();
+        let ruleset = engine.info().ruleset.clone();
         let rom: Arc<[u8]> = rom.into();
+        let icons = theme::Icons::new(profile.clone(), rom.clone());
         let mut running = RunningGame::boot(ProfileGame::new(profile.clone(), rom.clone(), core), engine, clock_ms)
             .map_err(|e| format!("The Run's game couldn't be booted: {e}"))?;
         let view = running.view();
@@ -576,6 +690,8 @@ impl PactlockeApp {
             identity,
         );
         playing.spectate = spectate;
+        playing.icons = Some(icons);
+        playing.ruleset = ruleset;
         Ok(playing)
     }
 
@@ -614,104 +730,6 @@ impl PactlockeApp {
         }
     }
 
-    fn toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            match &self.playing {
-                Some(playing) => {
-                    let label = match playing.play {
-                        Play::Run { .. } => "Close Run",
-                        Play::Free(_) => "Close game",
-                    };
-                    let in_run = matches!(playing.play, Play::Run { .. });
-                    if ui.button(label).clicked() {
-                        self.stop_playing();
-                    } else if in_run
-                        && ui
-                            .button("Suspend and quit")
-                            .on_hover_text("Close the Run and resume exactly here next time, unsaved progress and all")
-                            .clicked()
-                    {
-                        self.suspend_and_quit();
-                    }
-                }
-                None => {
-                    if ui.button("New Run…").clicked() {
-                        self.begin_new_run();
-                    }
-                    if ui.button("Join Run…").clicked() {
-                        self.lobbies.open_join_prompt();
-                    }
-                    if ui.button("Open ROM…").clicked() {
-                        self.pick_rom();
-                    }
-                }
-            }
-            if self.lobbies.in_lobby() && !self.lobbies.lobby_shown() && ui.button("Lobby").clicked() {
-                self.lobbies.show_lobby();
-            }
-            ui.separator();
-            ui.label("Speed");
-            let mut speed = self.speed;
-            for option in Speed::ALL {
-                ui.selectable_value(&mut speed, option, option.to_string());
-            }
-            if speed != self.speed {
-                self.set_speed(speed);
-            }
-            if let Some(playing) = &self.playing {
-                ui.separator();
-                ui.label(&playing.name);
-                ui.separator();
-                rom_report::status_label(ui, &playing.identity);
-            }
-        });
-    }
-
-    /// The Run list, when nothing is playing.
-    fn home_screen(&mut self, ui: &mut egui::Ui) {
-        let mut resume = None;
-        ui.vertical_centered(|ui| {
-            ui.add_space(16.0);
-            ui.heading("Runs");
-            ui.add_space(8.0);
-            if let Err(e) = &self.library {
-                ui.colored_label(ui.visuals().error_fg_color, e);
-            } else if self.runs.is_empty() {
-                ui.label("No Runs yet. Start one with New Run…, or open a ROM to just play.");
-            }
-            if self.library_fallback {
-                ui.weak("The app's folder can't be written to, so Runs are kept in your user data folder.");
-            }
-            if let Some(dir) = dev_profiles_dir() {
-                ui.weak(format!(
-                    "Developer setting: local Game Profiles from {}, for solo Runs only.",
-                    dir.display()
-                ));
-            }
-        });
-        ui.add_space(8.0);
-        let now = SystemRunClock.now_ms();
-        egui::ScrollArea::vertical()
-            .max_height((ui.available_height() - 60.0).max(80.0))
-            .show(ui, |ui| {
-                for summary in &self.runs {
-                    ui.horizontal(|ui| {
-                        if ui.button("Resume").clicked() {
-                            resume = Some(summary.clone());
-                        }
-                        ui.strong(&summary.name);
-                        ui.label(&summary.game_name);
-                        ui.weak(format!("played {}", run_panel::ago(now - summary.last_played_ms)));
-                    });
-                }
-            });
-        ui.add_space(12.0);
-        ui.vertical_centered(|ui| ui.weak(key_help()));
-        if let Some(summary) = resume {
-            self.resume_run(&summary);
-        }
-    }
-
     /// Names a New Run before it starts.
     fn new_run_prompt(&mut self, ctx: &egui::Context) {
         let Some(draft) = self.new_run.as_mut() else {
@@ -722,7 +740,7 @@ impl PactlockeApp {
         let mut invite = false;
         let modal = egui::Modal::new(egui::Id::unique("new run")).show(ctx, |ui| {
             ui.heading("New Run");
-            ui.label(format!("{}: solo.", draft.profile.name));
+            ui.label(&draft.profile.name);
             if draft.local_profile {
                 ui.colored_label(
                     ui.visuals().warn_fg_color,
@@ -730,6 +748,38 @@ impl PactlockeApp {
                 );
             }
             ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Ruleset");
+                egui::ComboBox::from_id_salt("preset")
+                    .selected_text(preset_name(&draft.ruleset))
+                    .show_ui(ui, |ui| {
+                        for preset in Preset::ALL {
+                            if ui.selectable_label(false, preset.name()).clicked() {
+                                let mut ruleset = preset.ruleset(&draft.level_caps);
+                                // Alone there are no Links; rules this ROM can't enforce stay off.
+                                ruleset.links = false;
+                                ruleset.retries = draft.ruleset.retries;
+                                draft.level_caps_on = ruleset.level_caps.is_some();
+                                for (rule, on) in [
+                                    (Rule::FirstEncounter, &mut ruleset.first_encounter),
+                                    (Rule::DupesClause, &mut ruleset.dupes_clause),
+                                    (Rule::Statics, &mut ruleset.statics),
+                                    (Rule::FaintIsDead, &mut ruleset.faint_is_dead),
+                                    (Rule::NoItems, &mut ruleset.no_items),
+                                    (Rule::SetMode, &mut ruleset.set_mode),
+                                    (Rule::MustNickname, &mut ruleset.must_nickname),
+                                    (Rule::TypeClause, &mut ruleset.type_clause),
+                                ] {
+                                    if draft.unavailable.contains_key(&rule) {
+                                        *on = false;
+                                    }
+                                }
+                                draft.ruleset = ruleset;
+                            }
+                        }
+                    });
+            });
+            ui.weak("With friends, every rule can still be changed in the Lobby before the lock.");
             let ruleset = &mut draft.ruleset;
             rule_checkbox(
                 ui,
@@ -816,7 +866,7 @@ impl PactlockeApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 let named = !draft.name.trim().is_empty();
-                if ui.add_enabled(named, egui::Button::new("Start")).clicked() {
+                if ui.add_enabled(named, egui::Button::new("Start solo")).clicked() {
                     start = true;
                 }
                 if ui.button("Cancel").clicked() {
@@ -839,24 +889,9 @@ impl PactlockeApp {
             });
         });
         if invite {
-            let run = pactlocke_net::RunAdvert {
-                name: draft.name.trim().to_owned(),
-                game_name: draft.profile.name.clone(),
-                game_sha1: draft.profile.sha1.clone(),
-            };
-            let RomIdentity::Profiled { capabilities, .. } = &draft.identity else {
-                unreachable!("a New Run's ROM has a Game Profile")
-            };
-            let rom = coop::HostRom {
-                rom: draft.rom.clone(),
-                path: draft.path.clone(),
-                capabilities: capabilities.clone(),
-                level_caps: draft.level_caps.clone(),
-                sync_gates: draft.profile.sync_gate_names(),
-            };
-            self.lobbies.host(run, rom);
-            // The Ruleset is set in the lobby from here, for everyone.
-            self.new_run = None;
+            let draft = self.new_run.take().expect("a draft is open");
+            // The Ruleset is set in the Lobby from here, for everyone.
+            self.host_lobby(&draft);
             return;
         }
         start &= !draft.name.trim().is_empty();
@@ -866,6 +901,482 @@ impl PactlockeApp {
         } else if cancel || modal.should_close() {
             self.new_run = None;
         }
+    }
+
+    /// The menu bar along the top, as other emulators have it, with the
+    /// Run, its game and its speed on the right.
+    fn menu_bar(&mut self, ui: &mut egui::Ui) {
+        let mut act: Option<Menu> = None;
+        egui::MenuBar::new().ui(ui, |ui| {
+            let playing = self.playing.as_ref();
+            let in_run = playing.is_some_and(|p| matches!(p.play, Play::Run { .. }));
+            let coop = playing.is_some_and(|p| p.spectate.is_some());
+            ui.menu_button("File", |ui| {
+                if item(ui, "New Run…", "Ctrl+N", true) {
+                    act = Some(Menu::NewRun);
+                }
+                if item(ui, "Join Run…", "Ctrl+J", true) {
+                    act = Some(Menu::JoinRun);
+                }
+                if item(ui, "Open ROM…", "Ctrl+O", true) {
+                    act = Some(Menu::OpenRom);
+                }
+                ui.menu_button("Recent ROMs", |ui| {
+                    if self.settings.recent_roms.is_empty() {
+                        ui.weak("None yet");
+                    }
+                    for path in &self.settings.recent_roms {
+                        if ui
+                            .button(file_stem(path))
+                            .on_hover_text(path.display().to_string())
+                            .clicked()
+                        {
+                            act = Some(Menu::OpenRecent(path.clone()));
+                            ui.close();
+                        }
+                    }
+                });
+                ui.separator();
+                let close = if in_run { "Close Run" } else { "Close game" };
+                if item(ui, close, "", playing.is_some()) {
+                    act = Some(Menu::Close);
+                }
+                if item(ui, "Suspend and quit", "", in_run) {
+                    act = Some(Menu::Suspend);
+                }
+                ui.separator();
+                if item(ui, "Exit", "Alt+F4", true) {
+                    act = Some(Menu::Exit);
+                }
+            });
+            ui.menu_button("Emulation", |ui| {
+                let paused = self.paused;
+                if item(
+                    ui,
+                    if paused { "Resume" } else { "Pause" },
+                    &self.settings.pause_key,
+                    playing.is_some(),
+                ) {
+                    act = Some(Menu::Pause);
+                }
+                ui.menu_button("Speed", |ui| {
+                    for speed in Speed::ALL {
+                        if ui.radio(self.speed == speed, speed.to_string()).clicked() {
+                            act = Some(Menu::Speed(speed));
+                            ui.close();
+                        }
+                    }
+                    ui.weak(format!("Hold {} for {}", self.settings.fast_forward_key, Speed::X4));
+                });
+                if let Some(left) = playing
+                    .filter(|_| !coop)
+                    .and_then(|p| p.view().and_then(|v| v.retries_left))
+                    && item(ui, &format!("Retry · {left} left"), "", left > 0)
+                {
+                    act = Some(Menu::Retry);
+                }
+                ui.separator();
+                if item(ui, "Take a screenshot", "F12", playing.is_some()) {
+                    act = Some(Menu::Screenshot);
+                }
+            });
+            ui.menu_button("View", |ui| {
+                if check(ui, "Side panel", "Ctrl+B", self.panel_shown) {
+                    act = Some(Menu::TogglePanel);
+                }
+                if check(ui, "Pop out the side panel", "", self.panel_popped) {
+                    act = Some(Menu::TogglePopOut);
+                }
+                if coop {
+                    if check(ui, "Partner view", "", playing.is_some_and(|p| p.partner_view)) {
+                        act = Some(Menu::TogglePartners);
+                    }
+                    let saver = playing
+                        .and_then(|p| p.spectate.as_ref())
+                        .is_some_and(|s| s.battery_saver);
+                    if check(ui, "Battery saver", "", saver) {
+                        act = Some(Menu::ToggleSaver);
+                    }
+                }
+                ui.separator();
+                ui.menu_button("Window size", |ui| {
+                    for n in 2..=4 {
+                        if ui.button(format!("{n}x")).clicked() {
+                            act = Some(Menu::WindowSize(n));
+                            ui.close();
+                        }
+                    }
+                });
+                let full = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+                if check(ui, "Fullscreen", "F11", full) {
+                    act = Some(Menu::Fullscreen);
+                }
+            });
+            ui.menu_button("Options", |ui| {
+                if item(ui, "Settings…", "Ctrl+,", true) {
+                    act = Some(Menu::Settings(Category::General));
+                }
+                ui.separator();
+                for category in Category::ALL {
+                    if item(ui, &format!("{}…", category.name()), "", true) {
+                        act = Some(Menu::Settings(category));
+                    }
+                }
+            });
+            ui.menu_button("Help", |ui| {
+                if item(ui, "Open the log folder", "", true) {
+                    act = Some(Menu::LogFolder);
+                }
+                if item(ui, "About Pactlocke", "", true) {
+                    act = Some(Menu::About);
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(playing) = &self.playing {
+                    ui.weak(format!("{}x", self.effective_speed().multiplier()));
+                    ui.separator();
+                    rom_report::status_label(ui, &playing.identity);
+                    ui.separator();
+                    ui.label(&playing.name);
+                }
+            });
+        });
+        if let Some(act) = act {
+            self.menu(act, ui.ctx());
+        }
+    }
+
+    fn menu(&mut self, act: Menu, ctx: &egui::Context) {
+        match act {
+            Menu::NewRun => self.begin_new_run(),
+            Menu::JoinRun => self.lobbies.open_join_prompt(),
+            Menu::OpenRom => self.pick_rom(),
+            Menu::OpenRecent(path) => self.open_rom(&path),
+            Menu::Close => self.stop_playing(),
+            Menu::Suspend => self.suspend_and_quit(),
+            Menu::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Menu::Pause => self.paused = !self.paused,
+            Menu::Speed(speed) => self.set_speed(speed),
+            Menu::Retry => {
+                if let Some(Playing {
+                    play: Play::Run { commands, .. },
+                    ..
+                }) = &self.playing
+                {
+                    let _ = commands.send(RunCommand::Retry {
+                        to: pactlocke_run::RetryTo::Latest,
+                    });
+                }
+            }
+            Menu::Screenshot => self.screenshot(),
+            Menu::TogglePanel => self.panel_shown = !self.panel_shown,
+            Menu::TogglePopOut => self.panel_popped = !self.panel_popped,
+            Menu::TogglePartners => {
+                if let Some(playing) = self.playing.as_mut()
+                    && let Some(spectate) = playing.spectate.as_mut()
+                {
+                    playing.partner_view = !playing.partner_view;
+                    spectate.set_partner_view(playing.partner_view);
+                }
+            }
+            Menu::ToggleSaver => {
+                if let Some(spectate) = self.playing.as_mut().and_then(|p| p.spectate.as_mut()) {
+                    let on = !spectate.battery_saver;
+                    spectate.set_battery_saver(on);
+                }
+            }
+            Menu::WindowSize(n) => {
+                let panel = if self.panel_shown && !self.panel_popped {
+                    self.settings.panel_width + 8.0
+                } else {
+                    0.0
+                };
+                let size = egui::vec2(GBA_W * n as f32 + panel + 16.0, GBA_H * n as f32 + 48.0);
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+            }
+            Menu::Fullscreen => {
+                let full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
+            }
+            Menu::Settings(category) => self.settings_dialog = Some(SettingsDialog::new(&self.settings, category)),
+            Menu::LogFolder => open_folder(&data_folder()),
+            Menu::About => self.about = true,
+        }
+    }
+
+    /// The keyboard shortcuts the menus show, unless a text field has the keys.
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        // Settings may be waiting for a key to rebind: no shortcut takes it.
+        if ctx.egui_wants_keyboard_input() || self.settings_dialog.is_some() {
+            return;
+        }
+        use egui::{Key, KeyboardShortcut as K, Modifiers as M};
+        let acts = [
+            (K::new(M::COMMAND, Key::N), Menu::NewRun),
+            (K::new(M::COMMAND, Key::J), Menu::JoinRun),
+            (K::new(M::COMMAND, Key::O), Menu::OpenRom),
+            (K::new(M::COMMAND, Key::Comma), Menu::Settings(Category::General)),
+            (K::new(M::COMMAND, Key::B), Menu::TogglePanel),
+            (K::new(M::NONE, Key::F11), Menu::Fullscreen),
+            (K::new(M::NONE, Key::F12), Menu::Screenshot),
+        ];
+        let mut fired = Vec::new();
+        ctx.input_mut(|i| {
+            for (shortcut, act) in acts {
+                if i.consume_shortcut(&shortcut) {
+                    fired.push(act);
+                }
+            }
+        });
+        let pause = egui::Key::from_name(&self.settings.pause_key);
+        if self.playing.is_some() && pause.is_some_and(|k| ctx.input(|i| i.key_pressed(k))) {
+            fired.push(Menu::Pause);
+        }
+        for act in fired {
+            self.menu(act, ctx);
+        }
+    }
+
+    /// The speed the game runs at now: 4x while fast-forward is held.
+    fn effective_speed(&self) -> Speed {
+        if self.fast_forward { Speed::X4 } else { self.speed }
+    }
+
+    /// The newest frame of the game shown, saved as a PNG beside the Runs.
+    fn screenshot(&mut self) {
+        let Some(playing) = &self.playing else {
+            return;
+        };
+        let frames = match playing.spectate.as_ref().and_then(|s| s.watched()) {
+            Some(shadow) => shadow.frames(),
+            None => playing.play.frames(),
+        };
+        let Some(newest) = frames.latest() else {
+            return;
+        };
+        let dir = data_folder().join("screenshots");
+        let path = dir.join(format!(
+            "{}-{}.png",
+            file_stem(Path::new(&playing.name)),
+            SystemRunClock.now_ms()
+        ));
+        let written = std::fs::create_dir_all(&dir)
+            .map_err(|e| e.to_string())
+            .and_then(|()| write_png(&path, &newest.frame).map_err(|e| e.to_string()));
+        match written {
+            Ok(()) => log::info!("Screenshot saved to {}", path.display()),
+            Err(e) => self.error = Some(format!("The screenshot couldn't be saved: {e}")),
+        }
+    }
+
+    /// The start page: the three actions, then the Runs.
+    fn home_screen(&mut self, ui: &mut egui::Ui) {
+        let mut resume = None;
+        egui::Frame::new().inner_margin(egui::Margin::same(24)).show(ui, |ui| {
+            ui.heading("Pactlocke");
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let action = |ui: &mut egui::Ui, title: &str, line: &str| {
+                    let text = egui::RichText::new(format!("{title}\n")).strong().size(15.0);
+                    let mut job = egui::text::LayoutJob::default();
+                    text.append_to(&mut job, ui.style(), egui::FontSelection::Default, egui::Align::LEFT);
+                    egui::RichText::new(line).weak().append_to(
+                        &mut job,
+                        ui.style(),
+                        egui::FontSelection::Default,
+                        egui::Align::LEFT,
+                    );
+                    ui.add_sized([200.0, 56.0], egui::Button::new(job)).clicked()
+                };
+                if action(ui, "New Run", "A solo Run, or invite up to two friends") {
+                    self.begin_new_run();
+                }
+                if action(ui, "Join a Run", "Paste a friend's invite link") {
+                    self.lobbies.open_join_prompt();
+                }
+                if action(ui, "Open a ROM", "Just play, no Run") {
+                    self.pick_rom();
+                }
+            });
+            ui.add_space(20.0);
+            if let Err(e) = &self.library {
+                ui.colored_label(ui.visuals().error_fg_color, e);
+            } else if self.runs.is_empty() {
+                ui.weak("No Runs yet. Start one with New Run, or open a ROM to just play.");
+            }
+            if self.library_fallback {
+                ui.weak("The app's folder can't be written to, so Runs are kept in your user data folder.");
+            }
+            if let Some(dir) = self.dev_profiles() {
+                ui.weak(format!(
+                    "Developer setting: local Game Profiles from {}, for solo Runs only.",
+                    dir.display()
+                ));
+            }
+            let now = SystemRunClock.now_ms();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::Grid::new("runs")
+                    .num_columns(6)
+                    .striped(true)
+                    .spacing([18.0, 8.0])
+                    .show(ui, |ui| {
+                        if !self.runs.is_empty() {
+                            for heading in ["Run", "Game", "Preset", "Deaths", "Last played", ""] {
+                                ui.weak(heading);
+                            }
+                            ui.end_row();
+                        }
+                        for summary in &self.runs {
+                            ui.strong(&summary.name);
+                            ui.label(&summary.game_name);
+                            ui.label(preset_name(&summary.ruleset));
+                            ui.label(summary.deaths.to_string());
+                            ui.label(run_panel::ago(now - summary.last_played_ms));
+                            ui.horizontal(|ui| {
+                                if ui.button("Resume").clicked() {
+                                    resume = Some(summary.clone());
+                                }
+                                if ui.button("Delete…").clicked() {
+                                    self.deleting = Some(summary.clone());
+                                }
+                            });
+                            ui.end_row();
+                        }
+                    });
+            });
+        });
+        if let Some(summary) = resume {
+            self.resume_run(&summary);
+        }
+    }
+
+    /// Delete…: asks first, then deletes the Run's file.
+    fn delete_prompt(&mut self, ctx: &egui::Context) {
+        let Some(summary) = self.deleting.clone() else {
+            return;
+        };
+        let (mut delete, mut keep) = (false, false);
+        let modal = egui::Modal::new(egui::Id::unique("delete run")).show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.heading("Delete this Run?");
+            ui.label(format!(
+                "Delete {} ({}, {} deaths)?",
+                summary.name, summary.game_name, summary.deaths
+            ));
+            ui.weak(
+                "Its Run file, checkpoints and log are removed from this PC and can't be brought back. \
+                 Friends keep their own copies. Your ROM and saves aren't touched.",
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                // Keep it is the default: it has the focus, so Enter keeps the Run.
+                let keep_button = ui.button("Keep it");
+                if !ui.memory(|m| m.focused().is_some()) {
+                    keep_button.request_focus();
+                }
+                keep = keep_button.clicked();
+                delete = ui
+                    .button(egui::RichText::new("Delete the Run").color(theme::DANGER))
+                    .clicked();
+            });
+        });
+        if delete {
+            if let Ok(library) = &self.library
+                && let Err(e) = library.delete(&summary.id)
+            {
+                self.error = Some(format!("{} couldn't be deleted: {e}", summary.name));
+            }
+            log::info!("Deleted the Run {}", summary.name);
+            self.deleting = None;
+            self.refresh_runs();
+        } else if keep || modal.should_close() {
+            self.deleting = None;
+        }
+    }
+
+    /// The first start: the Player's name, which other Players see.
+    fn first_launch(&mut self, ctx: &egui::Context) {
+        if self.settings.name.is_some() || self.smoke_frames_left.is_some() {
+            return;
+        }
+        let mut done = false;
+        egui::Modal::new(egui::Id::unique("first launch")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.heading("Welcome to Pactlocke");
+            ui.label("What should other Players call you? It shows in their Lobby, Player strip and feed.");
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut self.name_draft)
+                    .hint_text("Your name")
+                    .char_limit(settings::NAME_LIMIT),
+            );
+            field.request_focus();
+            ui.weak("Settings → General changes it any time.");
+            let named = !self.name_draft.trim().is_empty();
+            let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            done = ui.add_enabled(named, egui::Button::new("Continue")).clicked() || (enter && named);
+        });
+        if done {
+            self.settings.name = Some(self.name_draft.trim().to_owned());
+            self.settings.save();
+            self.apply_settings();
+        }
+    }
+
+    fn about(&mut self, ctx: &egui::Context) {
+        if !self.about {
+            return;
+        }
+        let mut close = false;
+        let modal = egui::Modal::new(egui::Id::unique("about")).show(ctx, |ui| {
+            ui.heading("Pactlocke");
+            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            ui.label("Nuzlocke and Soul Link challenge Runs on GBA Pokémon games, alone or with up to two friends.");
+            ui.weak("GPL-3.0-or-later. The emulator core is libmgba. Pactlocke never copies or changes ROMs, saves or patches.");
+            close = ui.button("Close").clicked();
+        });
+        if close || modal.should_close() {
+            self.about = false;
+        }
+    }
+
+    /// Settings, while open; a solo game is paused meanwhile.
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = self.settings_dialog.as_mut() else {
+            return;
+        };
+        let gamepad = self.pads.connected();
+        let facts = settings_ui::Facts {
+            devices: &self.devices,
+            data_dir: &data_folder(),
+            gamepad: gamepad.as_deref(),
+            pausing: self.playing.as_ref().is_some_and(|p| p.spectate.is_none()),
+        };
+        match dialog.show(ctx, &facts) {
+            settings_ui::Outcome::Open => {}
+            settings_ui::Outcome::Cancel => self.settings_dialog = None,
+            settings_ui::Outcome::Save(settings) => {
+                self.settings = *settings;
+                self.settings.save();
+                self.apply_settings();
+                self.settings_dialog = None;
+                // A new filter or colour correction shows at once, paused or not.
+                if let Some(playing) = self.playing.as_mut() {
+                    playing.texture = None;
+                }
+            }
+        }
+    }
+
+    /// Puts the settings to work where they apply at once.
+    fn apply_settings(&mut self) {
+        self.lobbies.name = self.settings.name().to_owned();
+        self.lobbies.relays = self.settings.relay_choice();
+        logger::set_verbose(self.settings.verbose_log);
+    }
+
+    /// The developer's local Game Profiles folder, from Settings or the environment.
+    fn dev_profiles(&self) -> Option<PathBuf> {
+        self.settings.dev_profiles.clone().or_else(dev_profiles_dir)
     }
 
     fn game_screen(&mut self, ui: &mut egui::Ui) {
@@ -886,18 +1397,26 @@ impl PactlockeApp {
         let frames = match &watched {
             Some((name, frames, status, cant_watch)) => {
                 let mut back = false;
-                ui.horizontal(|ui| {
-                    ui.strong(format!("Watching {name}"));
-                    if let Some(why) = cant_watch {
-                        ui.colored_label(ui.visuals().error_fg_color, why);
-                    } else if status.catching_up {
-                        ui.weak("catching up…");
-                    }
-                    back = ui.button("Back to your game").clicked();
-                });
+                egui::Frame::new()
+                    .fill(ui.visuals().faint_bg_color)
+                    .inner_margin(6)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.strong(format!("Watching {name}"));
+                            if let Some(why) = cant_watch {
+                                ui.colored_label(ui.visuals().error_fg_color, why);
+                            } else if status.catching_up {
+                                ui.weak("catching up…");
+                            } else {
+                                ui.weak("Their game and sound, about half a second behind. Yours is paused.");
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                back = ui.button("Back to your game").clicked();
+                            });
+                        });
+                    });
                 if back && let Some(spectate) = playing.spectate.as_mut() {
                     spectate.stop_watching();
-                    playing.play.set_paused(false);
                 }
                 ui.ctx().request_repaint();
                 frames.clone()
@@ -911,30 +1430,44 @@ impl PactlockeApp {
         }
 
         // Hold the keys that are down right now (only while the window has focus).
+        let pad = if self.settings.gamepad {
+            self.pads.held()
+        } else {
+            Keys::NONE
+        };
+        // Asked outside `input`: egui's context is locked while that runs.
+        // Keys pressed in Settings (rebinding one, say) never reach the game.
+        let typing = ui.ctx().egui_wants_keyboard_input() || self.settings_dialog.is_some();
         let keys = ui.input(|i| {
-            if !i.focused || watched.is_some() {
+            if watched.is_some() || typing {
                 return Keys::NONE;
             }
-            KEY_MAP
-                .iter()
-                .filter(|(key, _, _)| i.key_down(*key))
-                .fold(Keys::NONE, |held, (_, gba, _)| held | *gba)
+            let keyboard = if i.focused { self.settings.held(i) } else { Keys::NONE };
+            keyboard | pad
         });
         playing.play.set_keys(keys);
 
         // Show the newest published frame.
+        let filter = if self.settings.smooth {
+            egui::TextureOptions::LINEAR
+        } else {
+            egui::TextureOptions::NEAREST
+        };
         if let Some(newest) = frames.latest()
             && (playing.texture.is_none() || newest.seq != playing.shown_seq)
         {
+            let rgba = if self.settings.colour_correction {
+                colour_correct(&newest.frame.rgba)
+            } else {
+                newest.frame.rgba.clone()
+            };
             let image = egui::ColorImage::from_rgba_unmultiplied(
                 [newest.frame.width as usize, newest.frame.height as usize],
-                &newest.frame.rgba,
+                &rgba,
             );
             match &mut playing.texture {
-                Some(texture) => texture.set(image, egui::TextureOptions::NEAREST),
-                None => {
-                    playing.texture = Some(ui.ctx().load_texture("game", image, egui::TextureOptions::NEAREST));
-                }
+                Some(texture) => texture.set(image, filter),
+                None => playing.texture = Some(ui.ctx().load_texture("game", image, filter)),
             }
             playing.shown_seq = newest.seq;
         }
@@ -942,195 +1475,169 @@ impl PactlockeApp {
         if let Some(texture) = &playing.texture {
             let available = ui.available_size();
             let size = texture.size_vec2();
-            let scale = (available.x / size.x).min(available.y / size.y).max(0.1);
-            ui.centered_and_justified(|ui| {
-                ui.add(egui::Image::new(texture).fit_to_exact_size(size * scale));
-            });
-        }
-    }
-}
-
-/// What the side panel asked for this frame.
-#[derive(Default)]
-struct PanelAsks {
-    strip: Option<player_strip::Asked>,
-    vote: Option<RunEvent>,
-    dropout: Option<spectate::DropoutAsk>,
-}
-
-/// The side panel: in a Run with other Players the Player strip, the ready
-/// check, Retries, the parties and the Links; then the Run's own panel. A
-/// command for the Run goes straight to it.
-fn side_panel(ui: &mut egui::Ui, playing: &Playing, lobbies: &lobby_ui::Lobbies, speed: u8, popped: bool) -> PanelAsks {
-    let mut asks = PanelAsks::default();
-    let Play::Run { view, commands, .. } = &playing.play else {
-        rom_report::rules_panel(ui, &playing.identity);
-        return asks;
-    };
-    let view = view.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let mut links_tab = None;
-    if let (Some(spectate), Some(log)) = (&playing.spectate, lobbies.log()) {
-        let players: Vec<(pactlocke_run::PlayerKey, String)> = log
-            .locked()
-            .map(|l| l.roster.iter().map(|p| (p.key, p.name.clone())).collect())
-            .unwrap_or_default();
-        let statuses: Vec<_> = spectate.shadows.iter().map(|s| (s.key, s.status())).collect();
-        let rows: Vec<player_strip::Row> = players
-            .iter()
-            .map(|(key, name)| {
-                let you = *key == spectate.me();
-                let shadow = spectate.shadows.iter().position(|s| s.key == *key);
-                let (area, doing) = match shadow {
-                    _ if you => (view.area.clone(), view.doing.to_string()),
-                    Some(i) => {
-                        let status = &statuses[i].1;
-                        let doing = if status.catching_up {
-                            "catching up…".to_owned()
-                        } else {
-                            status.seen.doing.to_string()
-                        };
-                        (status.seen.area.clone(), doing)
-                    }
-                    None => (None, String::new()),
-                };
-                let doing = match log.ready_gate_of(key) {
-                    Some(gate) if !doing.starts_with("At ") => format!("Ready at {gate}"),
-                    _ => doing,
-                };
-                player_strip::Row {
-                    name: name.clone(),
-                    you,
-                    area,
-                    speed: if you { speed } else { log.speed_of(key) },
-                    reach: if !you && spectate.shows_offline(key) {
-                        Some(player_strip::Reach::Offline)
-                    } else {
-                        lobbies.reach(*key)
-                    },
-                    doing,
-                    watch: shadow.map(|i| (i, spectate.shadows[i].cant_watch())),
-                }
-            })
-            .collect();
-        let toggles = player_strip::Toggles {
-            battery_saver: spectate.battery_saver,
-            partner_view: playing.partner_view,
-            popped_out: popped,
-        };
-        asks.strip = player_strip::show(ui, &rows, &toggles);
-        if !lobbies.online() {
-            ui.colored_label(
-                ui.visuals().warn_fg_color,
-                "You're offline: your game goes on and your Run is kept, and Sync Gate battles and votes wait until you're back.",
-            );
-        }
-        ui.separator();
-        if let Some(check) = log.ready_check() {
-            ui.horizontal_wrapped(|ui| {
-                ui.strong(format!(
-                    "Next Sync Gate: {} · {} of {} ready",
-                    check.gate,
-                    check.ready(),
-                    check.players.len()
-                ));
-            });
-            ui.horizontal_wrapped(|ui| {
-                for (name, ready) in &check.players {
-                    let state = if *ready { "Ready" } else { "Not yet" };
-                    ui.label(format!("{name}: {state}"));
-                }
-            });
-            ui.separator();
-        }
-        asks.vote = spectate::votes(ui, log, spectate.me(), lobbies.online());
-        asks.dropout = spectate::dropouts(ui, log, spectate, lobbies.online());
-        ui.separator();
-        let links_on = log.locked().is_some_and(|l| l.ruleset.links);
-        let links = if links_on { spectate.links(log) } else { Vec::new() };
-        let mut parties = Vec::new();
-        for (key, name) in &players {
-            let pokemon = if *key == spectate.me() {
-                &view.party[..]
+            let fit = (available.x / size.x).min(available.y / size.y);
+            let scale = if self.settings.integer_scale && fit >= 1.0 {
+                fit.floor()
             } else {
-                statuses
-                    .iter()
-                    .find(|(k, _)| k == key)
-                    .map_or(&[][..], |(_, status)| &status.seen.party[..])
+                fit.max(0.1)
             };
-            parties.push(links_panel::Party {
-                player: *key,
-                name,
-                pokemon,
+            ui.centered_and_justified(|ui| {
+                let image = ui.add(egui::Image::new(texture).fit_to_exact_size(size * scale));
+                if self.paused && watched.is_none() {
+                    ui.painter().text(
+                        image.rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Paused",
+                        egui::FontId::proportional(28.0),
+                        egui::Color32::WHITE,
+                    );
+                }
             });
         }
-        links_panel::parties(ui, &parties, &links);
-        ui.separator();
-        if links_on {
-            links_tab = Some((links, players, spectate.me()));
-        }
-    } else {
-        let pop = if popped { "Dock the panel" } else { "Pop out" };
-        if ui.button(pop).clicked() {
-            asks.strip = Some(player_strip::Asked::PopOut(!popped));
-        }
     }
-    let mut show_links = links_tab.as_ref().map(|(links, players, me)| {
-        (links.len(), move |ui: &mut egui::Ui| {
-            links_panel::tab(ui, links, players, me)
-        })
-    });
-    let tab = show_links
-        .as_mut()
-        .map(|(count, show)| (*count, show as &mut run_panel::LinksTab<'_>));
-    if let Some(command) = run_panel::show(ui, &view, playing.spectate.is_none(), tab) {
-        // The emulator thread only stops when the Run is closed.
-        let _ = commands.send(command);
-    }
-    asks
 }
 
-/// The partner view: each other Player's Shadow Game as a small tile.
-fn partner_tiles(ui: &mut egui::Ui, playing: &mut Playing) {
-    let Some(spectate) = &playing.spectate else {
-        return;
+/// What a menu item asked for.
+#[derive(Clone)]
+enum Menu {
+    NewRun,
+    JoinRun,
+    OpenRom,
+    OpenRecent(PathBuf),
+    Close,
+    Suspend,
+    Exit,
+    Pause,
+    Speed(Speed),
+    Retry,
+    Screenshot,
+    TogglePanel,
+    TogglePopOut,
+    TogglePartners,
+    ToggleSaver,
+    WindowSize(u8),
+    Fullscreen,
+    Settings(Category),
+    LogFolder,
+    About,
+}
+
+/// A menu item with its shortcut; whether it was clicked.
+fn item(ui: &mut egui::Ui, text: &str, shortcut: &str, enabled: bool) -> bool {
+    let clicked = ui
+        .add_enabled(enabled, egui::Button::new(text).shortcut_text(shortcut))
+        .clicked();
+    if clicked {
+        ui.close();
+    }
+    clicked
+}
+
+/// A menu item that is on or off, with a tick when on; whether it was clicked.
+fn check(ui: &mut egui::Ui, text: &str, shortcut: &str, on: bool) -> bool {
+    let label = if on {
+        format!("✔ {text}")
+    } else {
+        format!("    {text}")
     };
-    playing.tiles.resize_with(spectate.shadows.len(), || None);
-    ui.vertical(|ui| {
-        for (shadow, tile) in spectate.shadows.iter().zip(playing.tiles.iter_mut()) {
-            ui.vertical(|ui| {
-                ui.weak(&shadow.name);
-                let newest = shadow.frames().latest();
-                if let Some(newest) = newest.filter(|n| tile.as_ref().is_none_or(|(seq, _)| *seq != n.seq)) {
-                    let image = egui::ColorImage::from_rgba_unmultiplied(
-                        [newest.frame.width as usize, newest.frame.height as usize],
-                        &newest.frame.rgba,
-                    );
-                    match tile {
-                        Some((seq, texture)) => {
-                            texture.set(image, egui::TextureOptions::NEAREST);
-                            *seq = newest.seq;
-                        }
-                        None => {
-                            let texture = ui.ctx().load_texture(
-                                format!("tile {}", shadow.name),
-                                image,
-                                egui::TextureOptions::NEAREST,
-                            );
-                            *tile = Some((newest.seq, texture));
-                        }
-                    }
-                }
-                match tile {
-                    Some((_, texture)) => {
-                        ui.add(egui::Image::new(&*texture).fit_to_exact_size(egui::vec2(160.0, 107.0)));
-                    }
-                    None => {
-                        ui.weak("no picture yet");
-                    }
-                }
-            });
+    item(ui, &label, shortcut, true)
+}
+
+use side_panel::preset_name;
+
+/// The folder the app keeps its data in: the Runs, the log, settings.
+fn data_folder() -> PathBuf {
+    logger::path().parent().map(Path::to_path_buf).unwrap_or_default()
+}
+
+/// Opens a folder in the system's file manager.
+pub fn open_folder(dir: &Path) {
+    let program = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    if let Err(e) = std::process::Command::new(program).arg(dir).spawn() {
+        log::warn!("Couldn't open {}: {e}", dir.display());
+    }
+}
+
+/// A frame as a PNG file.
+fn write_png(path: &Path, frame: &pactlocke_emu::Frame) -> Result<(), Box<dyn std::error::Error>> {
+    let file = std::io::BufWriter::new(std::fs::File::create(path)?);
+    let mut encoder = png::Encoder::new(file, frame.width, frame.height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.write_header()?.write_image_data(&frame.rgba)?;
+    Ok(())
+}
+
+/// A GBA screen's colours, for a modern one: its LCD was darker and its
+/// colours ran into each other a little.
+fn colour_correct(rgba: &[u8]) -> Vec<u8> {
+    let mut out = rgba.to_vec();
+    for px in out.as_chunks_mut::<4>().0 {
+        let [r, g, b] = [px[0], px[1], px[2]].map(|c| (f32::from(c) / 255.0).powf(2.2));
+        let mix = [
+            0.82 * r + 0.24 * g - 0.06 * b,
+            0.09 * r + 0.70 * g + 0.21 * b,
+            0.09 * r + 0.06 * g + 0.85 * b,
+        ];
+        for (c, v) in px[..3].iter_mut().zip(mix) {
+            *c = (v.clamp(0.0, 1.0).powf(1.0 / 2.0) * 255.0) as u8;
         }
-    });
+    }
+    out
+}
+
+/// The partner view: each other Player's Shadow Game as a tile, live, with
+/// Watch. Returns the Shadow to watch, if one was asked for.
+fn partner_tiles(ui: &mut egui::Ui, playing: &mut Playing) -> Option<usize> {
+    let spectate = playing.spectate.as_ref()?;
+    let mut watch = None;
+    playing.tiles.resize_with(spectate.shadows.len(), || None);
+    ui.strong("Partner view");
+    for (i, (shadow, tile)) in spectate.shadows.iter().zip(playing.tiles.iter_mut()).enumerate() {
+        ui.add_space(6.0);
+        let newest = shadow.frames().latest();
+        if let Some(newest) = newest.filter(|n| tile.as_ref().is_none_or(|(seq, _)| *seq != n.seq)) {
+            let image = egui::ColorImage::from_rgba_unmultiplied(
+                [newest.frame.width as usize, newest.frame.height as usize],
+                &newest.frame.rgba,
+            );
+            match tile {
+                Some((seq, texture)) => {
+                    texture.set(image, egui::TextureOptions::NEAREST);
+                    *seq = newest.seq;
+                }
+                None => {
+                    let texture =
+                        ui.ctx()
+                            .load_texture(format!("tile {}", shadow.name), image, egui::TextureOptions::NEAREST);
+                    *tile = Some((newest.seq, texture));
+                }
+            }
+        }
+        match tile {
+            Some((_, texture)) => {
+                ui.add(egui::Image::new(&*texture).fit_to_exact_size(egui::vec2(GBA_W * 0.85, GBA_H * 0.85)));
+            }
+            None => {
+                ui.weak("no picture yet");
+            }
+        }
+        ui.horizontal(|ui| {
+            ui.label(&shadow.name);
+            if shadow.cant_watch().is_none() && ui.button("Watch").clicked() {
+                watch = Some(i);
+            }
+        });
+    }
+    ui.add_space(6.0);
+    ui.weak("View → Partner view turns this off.");
+    watch
 }
 
 impl Playing {
@@ -1146,6 +1653,17 @@ impl Playing {
             shown_source: None,
             partner_view: false,
             tiles: Vec::new(),
+            icons: None,
+            ruleset: Ruleset::default(),
+            paused: false,
+        }
+    }
+
+    /// The Run's view, in a Run.
+    fn view(&self) -> Option<RunView> {
+        match &self.play {
+            Play::Run { view, .. } => Some(view.lock().unwrap_or_else(|e| e.into_inner()).clone()),
+            Play::Free(_) => None,
         }
     }
 }
@@ -1157,59 +1675,141 @@ fn file_stem(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// The side panel's contents: a Run's panel, the ROM report outside a Run,
+/// or the Lobby before a Run with friends starts.
+#[allow(clippy::too_many_arguments)]
+fn panel_contents(
+    ui: &mut egui::Ui,
+    playing: Option<&mut Playing>,
+    lobbies: &mut lobby_ui::Lobbies,
+    tab: &mut side_panel::Tab,
+    speed: u8,
+) -> side_panel::Asks {
+    let Some(playing) = playing else {
+        side_panel::lobby_only(ui, lobbies);
+        return side_panel::Asks::default();
+    };
+    let Some(view) = playing.view() else {
+        rom_report::rules_panel(ui, &playing.identity);
+        return side_panel::Asks::default();
+    };
+    let locked_ruleset = lobbies.log().and_then(|l| l.locked()).map(|l| l.ruleset);
+    let ruleset = match (&playing.spectate, locked_ruleset) {
+        (Some(_), Some(locked)) => locked,
+        _ => playing.ruleset.clone(),
+    };
+    let Some(icons) = playing.icons.as_mut() else {
+        return side_panel::Asks::default();
+    };
+    let run = side_panel::RunPanel {
+        view: &view,
+        ruleset: &ruleset,
+        spectate: playing.spectate.as_ref(),
+        speed,
+    };
+    side_panel::show(ui, run, icons, lobbies, tab)
+}
+
 impl eframe::App for PactlockeApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
+        let ctx = ui.ctx().clone();
+        self.shortcuts(&ctx);
+        egui::Panel::top("menu bar").show(ui, |ui| self.menu_bar(ui));
         if let Some(error) = &self.error {
             let error = error.clone();
             egui::Panel::bottom("error").show(ui, |ui| {
-                ui.colored_label(ui.visuals().error_fg_color, error);
+                ui.horizontal(|ui| {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                    if ui.small_button("✕").clicked() {
+                        self.error = None;
+                    }
+                });
             });
         }
-        if let Some(playing) = self.playing.as_mut() {
-            let lobbies = &self.lobbies;
-            let speed = self.speed.multiplier() as u8;
-            let popped = self.panel_popped;
-            let mut asks = PanelAsks::default();
-            if popped {
-                let mut closed = false;
-                ui.ctx().show_viewport_immediate(
-                    egui::ViewportId::from_hash_of("side panel window"),
-                    egui::ViewportBuilder::default()
-                        .with_title(format!("{} · Pactlocke", playing.name))
-                        .with_inner_size([400.0, 760.0]),
-                    |ui, _class| {
-                        egui::CentralPanel::default_margins().show(ui, |ui| {
-                            asks = side_panel(ui, playing, lobbies, speed, popped);
-                        });
-                        closed = ui.ctx().input(|i| i.viewport().close_requested());
-                    },
-                );
-                if closed {
-                    asks.strip = Some(player_strip::Asked::PopOut(false));
+
+        // Fast-forward while its key is held; mute meanwhile if Settings say so.
+        let keyboard = !ctx.egui_wants_keyboard_input()
+            && self.settings_dialog.is_none()
+            && egui::Key::from_name(&self.settings.fast_forward_key).is_some_and(|k| ctx.input(|i| i.key_down(k)));
+        let held = keyboard || (self.settings.gamepad && self.pads.fast_forward());
+        if held != self.fast_forward {
+            self.fast_forward = held;
+            let speed = self.effective_speed();
+            if let Some(playing) = &self.playing {
+                playing.play.set_speed(speed);
+                if let Play::Run { commands, .. } = &playing.play {
+                    let _ = commands.send(RunCommand::Speed(speed.multiplier() as u8));
                 }
-            } else {
-                egui::Panel::right("side panel")
-                    .resizable(true)
-                    .default_size(360.0)
-                    .show(ui, |ui| asks = side_panel(ui, playing, lobbies, speed, popped));
             }
-            if let Some(player_strip::Asked::PopOut(out)) = asks.strip {
-                self.panel_popped = out;
+        }
+        let muted = self.settings.mute_fast_forward && self.fast_forward;
+        audio::set_gain(&self.gain, if muted { 0.0 } else { self.settings.volume });
+
+        // Pause: asked for, Settings open in a solo game, or a solo game unfocused.
+        if let Some(playing) = self.playing.as_mut() {
+            let solo = playing.spectate.is_none();
+            let unfocused = self.settings.pause_unfocused && !ctx.input(|i| i.focused);
+            let watching = playing.spectate.as_ref().is_some_and(|s| s.watching.is_some());
+            let pause = self.paused || watching || (solo && (self.settings_dialog.is_some() || unfocused));
+            if pause != playing.paused {
+                playing.paused = pause;
+                playing.play.set_paused(pause);
+            }
+        }
+
+        let in_lobby_only = self.playing.is_none() && self.lobbies.in_lobby();
+        let show_panel = (self.playing.is_some() && self.panel_shown) || in_lobby_only;
+        let speed = self.effective_speed().multiplier() as u8;
+        let mut asks = side_panel::Asks::default();
+        if show_panel && self.panel_popped && self.playing.is_some() {
+            let mut closed = false;
+            let title = self.playing.as_ref().map_or_else(String::new, |p| p.name.clone());
+            let (mut playing, lobbies, tab) = (self.playing.as_mut(), &mut self.lobbies, &mut self.panel_tab);
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("side panel window"),
+                egui::ViewportBuilder::default()
+                    .with_title(format!("{title} · Pactlocke"))
+                    .with_inner_size([400.0, 760.0]),
+                |ui, _class| {
+                    egui::CentralPanel::default_margins().show(ui, |ui| {
+                        asks = panel_contents(ui, playing.as_deref_mut(), lobbies, tab, speed);
+                    });
+                    closed = ui.ctx().input(|i| i.viewport().close_requested());
+                },
+            );
+            if closed {
+                self.panel_popped = false;
+            }
+        } else if show_panel {
+            let (playing, lobbies, tab) = (self.playing.as_mut(), &mut self.lobbies, &mut self.panel_tab);
+            let shown = egui::Panel::right("side panel")
+                .resizable(true)
+                .default_size(self.settings.panel_width)
+                .size_range(settings::PANEL_WIDTHS.0..=settings::PANEL_WIDTHS.1)
+                .show(ui, |ui| asks = panel_contents(ui, playing, lobbies, tab, speed));
+            let width = shown.response.rect.width();
+            if (width - self.settings.panel_width).abs() > 1.0 && !ctx.input(|i| i.pointer.any_down()) {
+                self.settings.panel_width = width;
+                self.settings.save();
+            }
+        }
+        if let Some(playing) = self.playing.as_mut() {
+            if let Some(command) = asks.command.take()
+                && let Play::Run { commands, .. } = &playing.play
+            {
+                // The emulator thread only stops when the Run is closed.
+                let _ = commands.send(command);
+            }
+            let mut watch = asks.watch;
+            if playing.partner_view && playing.spectate.is_some() {
+                egui::Panel::left("partner view")
+                    .resizable(false)
+                    .show(ui, |ui| watch = watch.or(partner_tiles(ui, playing)));
             }
             if let Some(spectate) = playing.spectate.as_mut() {
-                match asks.strip {
-                    // Spectate pauses this Player's own game until they come back.
-                    Some(player_strip::Asked::Watch(i)) => {
-                        spectate.watch(i, playing.audio_out.as_ref());
-                        playing.play.set_paused(true);
-                    }
-                    Some(player_strip::Asked::BatterySaver(on)) => spectate.set_battery_saver(on),
-                    Some(player_strip::Asked::PartnerView(on)) => {
-                        spectate.set_partner_view(on);
-                        playing.partner_view = on;
-                    }
-                    Some(player_strip::Asked::PopOut(_)) | None => {}
+                if let Some(i) = watch {
+                    let audio = playing.audio_out.as_ref().filter(|_| self.settings.watch_sound);
+                    spectate.watch(i, audio);
                 }
                 spectate.pump(&mut self.lobbies);
                 match asks.dropout {
@@ -1227,15 +1827,15 @@ impl eframe::App for PactlockeApp {
                     }
                 }
                 // Streams are passed on from the UI thread: keep it awake.
-                ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
-            }
-            if playing.partner_view {
-                egui::Panel::left("partner view").show(ui, |ui| partner_tiles(ui, playing));
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
             }
         }
         egui::CentralPanel::default_margins().show(ui, |ui| self.game_screen(ui));
-        let ctx = ui.ctx().clone();
         self.new_run_prompt(&ctx);
+        self.delete_prompt(&ctx);
+        self.settings_window(&ctx);
+        self.about(&ctx);
+        self.first_launch(&ctx);
         if let Some(Playing {
             play: Play::Run {
                 shared: Some(shared), ..
@@ -1248,16 +1848,56 @@ impl eframe::App for PactlockeApp {
                 self.lobbies.share(events);
             }
         }
+        let joined = self.lobbies.in_lobby();
         if let Some(start) = self.lobbies.show(&ctx) {
             self.start_coop_run(start);
+        }
+        // Hosting or joining opens the side panel on its Lobby tab; a game
+        // played alone closes, so the Lobby can be seen.
+        if !self.was_in_lobby && joined {
+            if self.playing.as_ref().is_some_and(|p| p.spectate.is_none()) {
+                self.stop_playing();
+            }
+            self.panel_shown = true;
+            self.panel_tab = side_panel::Tab::Lobby;
+        }
+        self.was_in_lobby = joined;
+        if self.settings.gamepad && self.playing.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+
+        if let Some((path, left)) = self.shot.as_mut() {
+            *left = left.saturating_sub(1);
+            if *left == 0 {
+                let (path, saved) = (path.clone(), self.shot_saved.clone());
+                ctx.request_screenshot(move |image| {
+                    let frame = pactlocke_emu::Frame {
+                        width: image.size[0] as u32,
+                        height: image.size[1] as u32,
+                        rgba: image.as_raw().to_vec(),
+                    };
+                    if let Err(e) = write_png(&path, &frame) {
+                        log::warn!("--shot couldn't write {}: {e}", path.display());
+                    }
+                    saved.store(true, std::sync::atomic::Ordering::Release);
+                });
+                self.shot = None;
+            }
+            ctx.request_repaint();
+        }
+        if self.shot_saved.load(std::sync::atomic::Ordering::Acquire) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else if self.shot.is_none() && Arc::strong_count(&self.shot_saved) > 1 {
+            // A screenshot is on its way: keep drawing until it lands.
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
         }
 
         if let Some(left) = self.smoke_frames_left.as_mut() {
             *left = left.saturating_sub(1);
             if *left == 0 {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            ui.ctx().request_repaint();
+            ctx.request_repaint();
         }
     }
 }

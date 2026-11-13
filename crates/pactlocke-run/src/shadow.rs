@@ -345,9 +345,12 @@ impl<G: PlayedGame> ShadowGame<G> {
             .iter()
             .map(|p| SeenPokemon {
                 pid: p.pid,
+                species: p.species,
                 species_name: self.game.species_name(p.species),
                 nickname: p.nickname.clone(),
+                level: p.stats.map_or(0, |s| s.level),
                 hp: p.stats.map_or(0, |s| s.hp),
+                max_hp: p.stats.map_or(0, |s| s.max_hp),
             })
             .collect();
     }
@@ -592,7 +595,11 @@ pub struct SeenAvatar {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeenPokemon {
     pub pid: u32,
+    /// The species number, for its party icon.
+    pub species: u16,
     pub species_name: String,
     pub nickname: String,
+    pub level: u8,
     pub hp: u16,
+    pub max_hp: u16,
 }

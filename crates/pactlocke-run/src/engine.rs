@@ -668,9 +668,12 @@ impl RunEngine {
             .into_iter()
             .map(|p| crate::SeenPokemon {
                 pid: p.pid,
+                species: p.species,
                 species_name: game.species_name(p.species),
                 nickname: p.nickname,
+                level: p.stats.map_or(0, |s| s.level),
                 hp: p.stats.map_or(0, |s| s.hp),
+                max_hp: p.stats.map_or(0, |s| s.max_hp),
             })
             .collect();
         if party != self.view.party {
@@ -727,6 +730,8 @@ impl RunEngine {
                 FeedEntry {
                     at_ms: self.clock.now_ms(),
                     kind: FeedKind::Problem,
+                    icon: crate::FeedIcon::Block,
+                    about: None,
                     text: format!("The Run file can't be written, so this Run may not resume as it is now: {why}"),
                 },
             );

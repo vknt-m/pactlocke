@@ -6,6 +6,7 @@ mod caps;
 mod fake;
 mod fake_core;
 mod game;
+mod icons;
 mod profile;
 mod profile_game;
 mod source;
@@ -21,6 +22,7 @@ pub use game::{
     OBJ_TILES, PartyStats, Pokemon, ScriptContext, ScriptStatus, Side, SpriteImage, StoredPokemon, Whereabouts,
     lead_of,
 };
+pub use icons::{ICON_SIZE, party_icon_rgba};
 pub use profile::{
     Bit, Family, GameProfile, GateDef, HexBytes, Layout, Method, OptionDef, PatchSite, ROM_BASE, RuleMethods,
     SCHEMA_VERSION, SupportStatus, Symbols, SyncGates,

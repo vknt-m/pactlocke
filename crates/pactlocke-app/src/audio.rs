@@ -1,4 +1,5 @@
-//! Plays the game's audio on the default output device.
+//! Plays the game's audio on the chosen output device, at the volume
+//! Settings ▸ Sound sets.
 //!
 //! The emulator thread pushes each frame's samples into a short shared queue,
 //! resampled to the device rate; the device callback drains it. Above 1x the
@@ -6,6 +7,7 @@
 //! dropped to keep the delay short.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -16,6 +18,31 @@ const MAX_QUEUE_SECONDS: f32 = 0.1;
 
 type Queue = Arc<Mutex<VecDeque<[f32; 2]>>>;
 
+/// The volume every stream plays at, 0 to 1, as an `f32`'s bits; 0 mutes.
+pub type Gain = Arc<AtomicU32>;
+
+/// A gain at `volume`.
+pub fn gain(volume: f32) -> Gain {
+    Arc::new(AtomicU32::new(volume.to_bits()))
+}
+
+/// Sets a gain to `volume`.
+pub fn set_gain(gain: &Gain, volume: f32) {
+    gain.store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+}
+
+/// The output devices by name, for Settings ▸ Sound.
+pub fn output_devices() -> Vec<String> {
+    cpal::default_host()
+        .output_devices()
+        .map(|devices| {
+            devices
+                .filter_map(|d| d.description().ok().map(|desc| desc.name().to_owned()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The open output stream. Dropping it stops the sound.
 pub struct AudioOut {
     _stream: cpal::Stream,
@@ -24,10 +51,17 @@ pub struct AudioOut {
 }
 
 impl AudioOut {
-    /// Opens the default output device, or returns `None` when there is none
-    /// (the game then runs silently).
-    pub fn open() -> Option<Self> {
-        let device = cpal::default_host().default_output_device()?;
+    /// Opens the output device named `device` (the default one when it is
+    /// `None` or gone), or returns `None` when there is none (the game then
+    /// runs silently). Every sample is scaled by `gain`.
+    pub fn open(device: Option<&str>, gain: Gain) -> Option<Self> {
+        let host = cpal::default_host();
+        let named = device.and_then(|name| {
+            host.output_devices()
+                .ok()?
+                .find(|d| d.description().is_ok_and(|desc| desc.name() == name))
+        });
+        let device = named.or_else(|| host.default_output_device())?;
         let supported = device.default_output_config().ok()?;
         let config = supported.config();
         let channels = usize::from(config.channels);
@@ -36,19 +70,19 @@ impl AudioOut {
 
         let stream = match supported.sample_format() {
             cpal::SampleFormat::F32 => {
-                let queue = queue.clone();
+                let (queue, gain) = (queue.clone(), gain.clone());
                 device.build_output_stream(
                     config,
-                    move |out: &mut [f32], _| fill(out, channels, &queue, |s| s),
+                    move |out: &mut [f32], _| fill(out, channels, &queue, &gain, |s| s),
                     on_error,
                     None,
                 )
             }
             cpal::SampleFormat::I16 => {
-                let queue = queue.clone();
+                let (queue, gain) = (queue.clone(), gain.clone());
                 device.build_output_stream(
                     config,
-                    move |out: &mut [i16], _| fill(out, channels, &queue, |s| (s * f32::from(i16::MAX)) as i16),
+                    move |out: &mut [i16], _| fill(out, channels, &queue, &gain, |s| (s * f32::from(i16::MAX)) as i16),
                     on_error,
                     None,
                 )
@@ -78,10 +112,12 @@ impl AudioOut {
     }
 }
 
-fn fill<T: Copy + Default>(out: &mut [T], channels: usize, queue: &Queue, convert: impl Fn(f32) -> T) {
+fn fill<T: Copy + Default>(out: &mut [T], channels: usize, queue: &Queue, gain: &Gain, convert: impl Fn(f32) -> T) {
+    let volume = f32::from_bits(gain.load(Ordering::Relaxed));
     let mut queue = queue.lock().unwrap_or_else(|e| e.into_inner());
     for frame in out.chunks_mut(channels) {
         let [l, r] = queue.pop_front().unwrap_or([0.0; 2]);
+        let (l, r) = (l * volume, r * volume);
         for (i, sample) in frame.iter_mut().enumerate() {
             *sample = match i {
                 0 => convert(l),

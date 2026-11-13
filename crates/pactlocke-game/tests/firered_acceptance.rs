@@ -280,3 +280,43 @@ fn every_profiled_level_cap_site_is_found_by_byte_pattern_in_the_real_rom() {
         );
     }
 }
+
+#[test]
+fn party_icons_read_from_the_real_rom_are_each_species_own_32x32_picture() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
+        return;
+    };
+    let store = ProfileStore::from_env().unwrap();
+    let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
+        panic!("FireRed (USA) 1.0 should match its profile by SHA-1");
+    };
+    let size = pactlocke_game::ICON_SIZE;
+    let mut sheet = vec![0u8; size * 3 * size * 4];
+    // Bulbasaur, Charmander, Squirtle.
+    for (i, species) in [1u16, 4, 7].into_iter().enumerate() {
+        let icon = pactlocke_game::party_icon_rgba(&profile, &rom, species).expect("an icon");
+        assert_eq!(icon.len(), size * size * 4);
+        assert_eq!(icon[3], 0, "{species}: the corner is transparent");
+        let opaque = icon.as_chunks::<4>().0.iter().filter(|px| px[3] == 255).count();
+        assert!((100..900).contains(&opaque), "{species}: {opaque} pixels drawn");
+        for y in 0..size {
+            let row = &icon[y * size * 4..(y + 1) * size * 4];
+            let at = (y * size * 3 + i * size) * 4;
+            sheet[at..at + size * 4].copy_from_slice(row);
+        }
+    }
+    assert_ne!(
+        pactlocke_game::party_icon_rgba(&profile, &rom, 1),
+        pactlocke_game::party_icon_rgba(&profile, &rom, 4),
+        "each species its own"
+    );
+    // For a person to look at.
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("acceptance");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = std::fs::File::create(dir.join("party-icons.png")).unwrap();
+    let mut encoder = png::Encoder::new(file, (size * 3) as u32, size as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.write_header().unwrap().write_image_data(&sheet).unwrap();
+}

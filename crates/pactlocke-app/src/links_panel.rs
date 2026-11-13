@@ -1,68 +1,9 @@
-//! Links in the side panel: every Player's party, with a hovered Pokémon's
-//! Link-mates highlighted, and the Links tab, one row per source and one
-//! column per Player. It displays the Run engine's Link data; its one
-//! question, skipping a Gift the others took, warns first.
+//! The Links tab of the side panel: one row per source and one column per
+//! Player. It displays the Run engine's Link data; its one question,
+//! skipping a Gift the others took, warns first.
 
 use eframe::egui;
-use pactlocke_run::{Link, Member, PlayerKey, RunCommand, SeenPokemon};
-
-/// One Player's party, as the side panel shows it.
-pub struct Party<'a> {
-    pub player: PlayerKey,
-    pub name: &'a str,
-    pub pokemon: &'a [SeenPokemon],
-}
-
-/// Every Player's party. Hovering a Pokémon highlights its Link-mates.
-pub fn parties(ui: &mut egui::Ui, parties: &[Party<'_>], links: &[Link]) {
-    let hover_id = egui::Id::unique("hovered link");
-    let hovered: Option<String> = ui.data(|d| d.get_temp(hover_id));
-    let mut now_hovered = None;
-    for party in parties {
-        ui.horizontal_wrapped(|ui| {
-            ui.strong(party.name);
-            for pokemon in party.pokemon {
-                let link = links.iter().find(
-                    |l| matches!(l.member(&party.player), Some(Member::Caught { pid, .. }) if *pid == pokemon.pid),
-                );
-                let name = if pokemon.nickname.is_empty() {
-                    &pokemon.species_name
-                } else {
-                    &pokemon.nickname
-                };
-                let mut text = egui::RichText::new(name);
-                if pokemon.hp == 0 {
-                    text = text.strikethrough();
-                }
-                if link.is_some_and(|l| Some(&l.source.key) == hovered.as_ref()) {
-                    text = text.background_color(ui.visuals().selection.bg_fill);
-                }
-                let label = ui.label(text);
-                if let Some(link) = link {
-                    if link.pending() {
-                        // The pending outline: not every Player has had this Encounter yet.
-                        ui.painter().rect_stroke(
-                            label.rect.expand(1.0),
-                            2.0,
-                            egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
-                            egui::StrokeKind::Outside,
-                        );
-                    }
-                    if label.hovered() {
-                        now_hovered = Some(link.source.key.clone());
-                    }
-                    label.on_hover_text(format!("Linked from {}", link.source.name));
-                }
-            }
-        });
-    }
-    ui.data_mut(|d| match now_hovered {
-        Some(key) => {
-            d.insert_temp(hover_id, key);
-        }
-        None => d.remove::<String>(hover_id),
-    });
-}
+use pactlocke_run::{Link, Member, PlayerKey, RunCommand};
 
 /// The Links tab: one row per source, one column per Player. Returns a
 /// Skip once the Player confirms it.

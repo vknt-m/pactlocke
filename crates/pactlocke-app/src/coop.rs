@@ -708,18 +708,28 @@ fn locked_section(ui: &mut egui::Ui, locked: &Locked, log: &RunLog, now_ms: i64)
         ui.strong("The Run has started.");
     }
     let tallies = log.tallies();
-    egui::Grid::new("tallies").num_columns(5).show(ui, |ui| {
-        for heading in ["Player", "Encounters", "Catches", "Deaths", "Violations"] {
+    let flags = log.flags();
+    egui::Grid::new("tallies").num_columns(6).show(ui, |ui| {
+        for heading in ["Player", "Encounters", "Catches", "Deaths", "Violations", "Cheat flags"] {
             ui.strong(heading);
         }
         ui.end_row();
-        for player in &locked.roster {
+        for (index, player) in locked.roster.iter().enumerate() {
             let count = |map: &std::collections::BTreeMap<[u8; 32], u32>| map.get(&player.key).copied().unwrap_or(0);
-            ui.label(&player.name);
+            ui.horizontal(|ui| {
+                crate::theme::dot(ui, index);
+                ui.label(&player.name);
+            });
             ui.label(count(&tallies.encounters).to_string());
             ui.label(count(&tallies.catches).to_string());
             ui.label(count(&tallies.deaths).to_string());
             ui.label(count(&tallies.violations).to_string());
+            let flagged = flags.iter().filter(|f| f.player == player.key).count();
+            if flagged > 0 {
+                ui.colored_label(crate::theme::CHEAT, flagged.to_string());
+            } else {
+                ui.label("0");
+            }
             ui.end_row();
         }
     });

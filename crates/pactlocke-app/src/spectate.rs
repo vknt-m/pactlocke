@@ -68,6 +68,10 @@ pub struct Spectate {
     keep_waiting: Vec<PlayerKey>,
     /// What this app has seen of the others' streams, to flag cheats.
     watch: CheatWatch,
+    /// The other Players' Run events from the Run log, for the feed: whose,
+    /// and the line, newest first; and how far into the log that is.
+    others_feed: Vec<(PlayerKey, pactlocke_run::FeedEntry)>,
+    fed: usize,
     /// Shadow Games that stopped matching, as their threads said: whose, and at what frame.
     diverged: Arc<Mutex<Vec<(PlayerKey, u64)>>>,
     /// Partner Avatars: where this Player's game reads them from.
@@ -125,6 +129,8 @@ impl Spectate {
             presence: pactlocke_run::Presence::new(SystemRunClock.now_ms()),
             keep_waiting: Vec::new(),
             watch: CheatWatch::new(locked.start_ms),
+            others_feed: Vec::new(),
+            fed: 0,
             diverged,
         })
     }
@@ -213,12 +219,30 @@ impl Spectate {
     /// What this Player's Run should do about the log's new entries and
     /// the Links as they stand now.
     pub fn follow(&mut self, log: &RunLog) -> Vec<RunCommand> {
+        // Only the entries new since last time, each read on its own, so one
+        // that can't be read never shifts the rest.
+        let now = SystemRunClock.now_ms();
+        for entry in log.entries().iter().skip(self.fed) {
+            let author = entry.submission.author;
+            if author != self.me
+                && let Ok(pactlocke_run::LogBody::Event(event)) = serde_json::from_slice(&entry.submission.body)
+                && let Some(line) = pactlocke_run::FeedEntry::of_others(&event, now)
+            {
+                self.others_feed.insert(0, (author, line));
+            }
+        }
+        self.fed = log.entries().len();
         let mut commands = self.follower.follow(log);
         if log.locked().is_some_and(|l| l.ruleset.links) {
             let links = self.links(log);
             commands.extend(self.keeper.keep(log, &links));
         }
         commands
+    }
+
+    /// The other Players' feed lines, newest first.
+    pub fn others_feed(&self) -> &[(PlayerKey, pactlocke_run::FeedEntry)] {
+        &self.others_feed
     }
 
     /// Every Link, with the other Players' catches and Deaths judged by

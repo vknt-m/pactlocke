@@ -80,6 +80,8 @@ pub struct LevelCapView {
 /// A Dead Pokémon, as the Graveyard tab shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grave {
+    /// The Pokémon's personality value, which identifies it for the whole Run.
+    pub pid: u32,
     pub name: String,
     pub species_name: String,
     /// What killed it and where, such as "a wild RATTATA on Route 1".
@@ -91,6 +93,7 @@ pub struct Grave {
 impl Grave {
     pub(crate) fn of(recorded: &Recorded) -> Option<Self> {
         let RunEvent::Died {
+            pid,
             name,
             species_name,
             area,
@@ -101,6 +104,7 @@ impl Grave {
             return None;
         };
         Some(Self {
+            pid: *pid,
             name: name.clone(),
             species_name: species_name.clone(),
             killed_by: killed_by(cause, area.as_ref()),
@@ -146,7 +150,62 @@ pub struct FeedEntry {
     /// Unix time in milliseconds.
     pub at_ms: i64,
     pub kind: FeedKind,
+    /// The small icon the feed shows beside it.
+    pub icon: FeedIcon,
+    /// The other Player it is about, by name; `None` for this Player.
+    pub about: Option<String>,
     pub text: String,
+}
+
+/// What a feed line's icon shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedIcon {
+    Catch,
+    Encounter,
+    Death,
+    Link,
+    Gate,
+    Retry,
+    Speed,
+    Violation,
+    Cheat,
+    Gift,
+    Block,
+    /// Anything else: the Run itself.
+    Run,
+}
+
+impl FeedIcon {
+    fn of(event: &RunEvent, kind: FeedKind) -> Self {
+        match event {
+            RunEvent::Caught { .. } => FeedIcon::Catch,
+            RunEvent::Encounter { .. } | RunEvent::StaticEncounter { .. } | RunEvent::NotCounted { .. } => {
+                FeedIcon::Encounter
+            }
+            RunEvent::Died {
+                cause: DeathCause::Link { .. },
+                ..
+            }
+            | RunEvent::SourceClosed { .. }
+            | RunEvent::Skipped { .. } => FeedIcon::Link,
+            RunEvent::GateReady { .. } | RunEvent::GateOpened { .. } | RunEvent::GateRefused { .. } => FeedIcon::Gate,
+            RunEvent::Retried { .. } | RunEvent::RetryFailed { .. } => FeedIcon::Retry,
+            RunEvent::SpeedChanged { .. } | RunEvent::OthersSpeed { .. } => FeedIcon::Speed,
+            RunEvent::CheatFlag { .. } | RunEvent::Flagged { .. } => FeedIcon::Cheat,
+            _ => match kind {
+                FeedKind::Death => FeedIcon::Death,
+                FeedKind::Violation => FeedIcon::Violation,
+                // A problem isn't anyone's fault: no accusing icon.
+                FeedKind::Problem => FeedIcon::Block,
+                FeedKind::Gift => FeedIcon::Gift,
+                FeedKind::Block => FeedIcon::Block,
+                FeedKind::Catch => FeedIcon::Catch,
+                FeedKind::Encounter => FeedIcon::Encounter,
+                FeedKind::Cheat => FeedIcon::Cheat,
+                FeedKind::Run => FeedIcon::Run,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +226,32 @@ pub enum FeedKind {
 }
 
 impl FeedEntry {
+    /// What the feed says of another Player's event from the shared Run
+    /// log, seen at `at_ms`. `None` for one the feed doesn't show, one
+    /// written to the Player who made it ("You play at 3x"), or one every
+    /// Player's own feed shows already (a Retry, a Sync Gate opening).
+    pub fn of_others(event: &RunEvent, at_ms: i64) -> Option<Self> {
+        if matches!(
+            event,
+            RunEvent::SpeedChanged { .. }
+                | RunEvent::CheatFlag { .. }
+                | RunEvent::DroppedOut
+                | RunEvent::GateRefused { .. }
+                | RunEvent::GateOpened { .. }
+                | RunEvent::Retried { .. }
+                | RunEvent::RetryFailed { .. }
+        ) {
+            return None;
+        }
+        Self::of(&Recorded {
+            seq: 0,
+            boot: 0,
+            frame: 0,
+            at_ms,
+            event: event.clone(),
+        })
+    }
+
     /// What the feed says of an event; some, such as checkpoints, it doesn't show.
     pub(crate) fn of(recorded: &Recorded) -> Option<Self> {
         let (kind, text) = match &recorded.event {
@@ -464,9 +549,16 @@ impl FeedEntry {
                 ),
             ),
         };
+        let about = match &recorded.event {
+            RunEvent::OthersSpeed { player, .. } => Some(player.clone()),
+            RunEvent::Flagged { player, .. } if player != "you" => Some(player.clone()),
+            _ => None,
+        };
         Some(Self {
             at_ms: recorded.at_ms,
             kind,
+            icon: FeedIcon::of(&recorded.event, kind),
+            about,
             text,
         })
     }

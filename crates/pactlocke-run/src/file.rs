@@ -100,6 +100,8 @@ pub struct RunSummary {
     pub created_ms: i64,
     /// When anything last happened in it.
     pub last_played_ms: i64,
+    /// Deaths recorded in it, a Retry's undone ones included.
+    pub deaths: u32,
 }
 
 /// The folder of Run files.
@@ -146,6 +148,17 @@ impl RunLibrary {
         RunFile::open(path)
     }
 
+    /// Deletes a Run's file for good, with SQLite's journal files beside it.
+    pub fn delete(&self, id: &RunId) -> std::io::Result<()> {
+        let path = self.path(id);
+        for extra in ["-wal", "-shm"] {
+            let mut side = path.clone().into_os_string();
+            side.push(extra);
+            let _ = std::fs::remove_file(side);
+        }
+        std::fs::remove_file(path)
+    }
+
     /// Every started Run in the folder, most recently played first. Files
     /// that aren't Runs are left out.
     pub fn list(&self) -> Vec<RunSummary> {
@@ -174,8 +187,16 @@ fn summary(path: &Path) -> Option<RunSummary> {
     let last_event: Option<i64> = db
         .query_row("SELECT MAX(at_ms) FROM events", [], |row| row.get(0))
         .ok()?;
+    let deaths: u32 = db
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE event LIKE '%\"kind\":\"died\"%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
     Some(RunSummary {
         id,
+        deaths,
         last_played_ms: last_event.unwrap_or(info.created_ms),
         name: info.name,
         game_name: info.game_name,

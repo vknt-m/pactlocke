@@ -11,6 +11,15 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Settings ▸ Data and logs: write Pactlocke's Debug lines and other crates' Info lines too.
+static VERBOSE: AtomicBool = AtomicBool::new(false);
+
+/// Turns the extra detail on or off, from now on.
+pub fn set_verbose(on: bool) {
+    VERBOSE.store(on, Ordering::Relaxed);
+}
 
 use log::{Level, LevelFilter, Log, Metadata, Record};
 
@@ -28,13 +37,10 @@ pub fn init() {
         return;
     };
     let verbose = std::env::var("PACTLOCKE_LOG").is_ok_and(|v| v.eq_ignore_ascii_case("debug"));
-    let logger = FileLogger {
-        file: Mutex::new(file),
-        ours: if verbose { Level::Debug } else { Level::Info },
-        others: if verbose { Level::Info } else { Level::Warn },
-    };
+    VERBOSE.store(verbose, Ordering::Relaxed);
+    let logger = FileLogger { file: Mutex::new(file) };
     if log::set_boxed_logger(Box::new(logger)).is_ok() {
-        log::set_max_level(if verbose { LevelFilter::Debug } else { LevelFilter::Info });
+        log::set_max_level(LevelFilter::Debug);
     }
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -47,17 +53,15 @@ pub fn init() {
 
 struct FileLogger {
     file: Mutex<File>,
-    /// The lowest level written for Pactlocke's own crates, and for the rest.
-    ours: Level,
-    others: Level,
 }
 
 impl Log for FileLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        let floor = if metadata.target().starts_with("pactlocke") {
-            self.ours
-        } else {
-            self.others
+        let verbose = VERBOSE.load(Ordering::Relaxed);
+        let floor = match (metadata.target().starts_with("pactlocke"), verbose) {
+            (true, true) => Level::Debug,
+            (true, false) | (false, true) => Level::Info,
+            (false, false) => Level::Warn,
         };
         metadata.level() <= floor
     }
