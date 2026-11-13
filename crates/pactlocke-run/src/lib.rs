@@ -6,6 +6,7 @@
 //! Dependencies are passed in: the game (through [`LiveGame`]), storage
 //! (through [`RunStorage`]) and the clock (through [`RunClock`]).
 
+mod avatars;
 mod boot;
 mod clock;
 mod engine;
@@ -24,6 +25,7 @@ mod storage;
 mod stream;
 mod view;
 
+pub use avatars::{Painter, PartnerAvatar};
 pub use boot::{BootPlan, Booted, boot_core};
 pub use clock::{RunClock, SystemRunClock};
 pub use engine::RunEngine;
@@ -36,7 +38,9 @@ pub use setup::{
     COUNTDOWN_MS, Locked, Mismatch, Preset, RosterEntry, RunSetup, SetupCheck, SetupError, SetupMessage, SetupPlayer,
     SetupView, settle, unavailable,
 };
-pub use shadow::{BUFFER_FRAMES, CATCH_UP_SPEED, PREDICT_FRAMES, Seen, SeenPokemon, ShadowGame, ShadowState};
+pub use shadow::{
+    BUFFER_FRAMES, CATCH_UP_SPEED, PREDICT_FRAMES, Seen, SeenAvatar, SeenPokemon, ShadowGame, ShadowState,
+};
 pub use shadow_runner::{ShadowRunner, ShadowStatus};
 pub use shared_log::{
     Call, GamePoint, LogBody, LogEntry, LogError, LogFollower, Part, ReadyCheck, RunLog, Signer, Submission, Tallies,

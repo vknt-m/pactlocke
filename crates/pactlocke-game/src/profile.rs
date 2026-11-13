@@ -53,6 +53,34 @@ pub struct GameProfile {
     /// The battles that can be Sync Gates, and where their hold scripts go.
     #[serde(default)]
     pub sync_gates: Option<SyncGates>,
+    /// Partner Avatars and Followers: on the original games only.
+    #[serde(default)]
+    pub avatars: Option<Avatars>,
+}
+
+/// What drawing Partner Avatars and Followers needs: where a game keeps the
+/// Player's position, where its own Player sprite sits on screen, the hardware
+/// sprite slots, tiles and palettes the game leaves free on the overworld, and
+/// its party icons.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Avatars {
+    /// In save block 1: the Player's tile (two s16) and, then, map group and number.
+    pub position: u32,
+    pub location: u32,
+    /// Where the Player's own 16x32 sprite's top-left corner is on screen.
+    pub anchor_x: u16,
+    pub anchor_y: u16,
+    /// The first hardware OAM entry the game never fills on the overworld.
+    pub first_oam: u8,
+    /// The first 4bpp OBJ tile Pactlocke may draw into (64 from here).
+    pub first_tile: u16,
+    /// OBJ palette slots Pactlocke may load (one per partner, then icons).
+    pub palettes: Vec<u8>,
+    /// gMonIconTable, gMonIconPaletteIndices and gMonIconPaletteTable.
+    pub icon_table: u32,
+    pub icon_palette_indices: u32,
+    pub icon_palette_table: u32,
 }
 
 /// Sync Gates: each gate trainer's verified `trainerbattle` instructions,

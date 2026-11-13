@@ -69,6 +69,9 @@ pub struct RunningGame<G: PlayedGame> {
     stream: Option<(StreamOut, Arc<Mutex<Vec<InputChunk>>>)>,
     /// How many of the engine's stamped changes are in the stream.
     streamed: usize,
+    /// In a Run with other Players on an original game: the Partner
+    /// Avatars, and where the app puts them as their Shadows show them.
+    avatars: Option<(crate::Painter, Arc<Mutex<Vec<crate::PartnerAvatar>>>)>,
 }
 
 impl<G: PlayedGame> RunningGame<G> {
@@ -85,6 +88,7 @@ impl<G: PlayedGame> RunningGame<G> {
             shared: None,
             stream: None,
             streamed: 0,
+            avatars: None,
         };
         running.checkpoint_if_wanted();
         running
@@ -218,6 +222,15 @@ impl<G: PlayedGame> RunningGame<G> {
         outbox
     }
 
+    /// Draws every other Player's Partner Avatar walking around in this
+    /// game, with every Follower. The app keeps them here up to date from
+    /// their Shadow Games.
+    pub fn draw_partner_avatars(&mut self) -> Arc<Mutex<Vec<crate::PartnerAvatar>>> {
+        let partners: Arc<Mutex<Vec<crate::PartnerAvatar>>> = Arc::default();
+        self.avatars = Some((crate::Painter::new(), partners.clone()));
+        partners
+    }
+
     /// A change made outside the rules, such as a test's or a developer
     /// tool's setup write, stamped at this frame boundary like the Run's
     /// own, so Shadow Games see it.
@@ -311,6 +324,12 @@ impl<G: PlayedGame> CoreAdapter for RunningGame<G> {
             && !events.is_empty()
         {
             shared.lock().unwrap_or_else(|e| e.into_inner()).extend(events);
+        }
+        if let Some((painter, partners)) = self.avatars.as_mut() {
+            let avatars = partners.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let now = self.engine.now_ms();
+            let writes = painter.paint(&mut self.game, &avatars, now);
+            self.game.core_mut().overlay(&writes);
         }
         if self.engine.frames_run().is_multiple_of(SAVE_CHECK_FRAMES) {
             self.check_save_memory();

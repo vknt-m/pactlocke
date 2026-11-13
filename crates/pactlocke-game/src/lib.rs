@@ -17,8 +17,9 @@ pub use caps::{LevelCap, LevelCapDef, MAX_LEVEL, level_cap_sites};
 pub use fake::FakeGame;
 pub use fake_core::{FakeCore, SAVE_KEYS};
 pub use game::{
-    Actions, Badges, Battle, BattleKind, Battler, Change, Game, GameError, Memory, PartyStats, Pokemon, ScriptContext,
-    ScriptStatus, Side, StoredPokemon,
+    Actions, AvatarRoom, Badges, Battle, BattleKind, Battler, Change, Game, GameError, Memory, OAM, OBJ_PALETTES,
+    OBJ_TILES, PartyStats, Pokemon, ScriptContext, ScriptStatus, Side, SpriteImage, StoredPokemon, Whereabouts,
+    lead_of,
 };
 pub use profile::{
     Bit, Family, GameProfile, GateDef, HexBytes, Layout, Method, OptionDef, PatchSite, ROM_BASE, RuleMethods,

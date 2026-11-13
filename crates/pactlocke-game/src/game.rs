@@ -29,6 +29,45 @@ pub enum Change {
     Patch { addr: u32, bytes: Vec<u8> },
 }
 
+/// Where a Player stands: the map (group and number) and the tile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Whereabouts {
+    pub map: (u8, u8),
+    pub x: i16,
+    pub y: i16,
+}
+
+/// A sprite's look: its 4bpp tiles (in 1D order), its 16-colour palette,
+/// whether it is mirrored, and its priority against the background.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpriteImage {
+    pub tiles: Vec<u8>,
+    pub palette: Vec<u8>,
+    pub hflip: bool,
+    pub priority: u8,
+    /// 32x32 (a bike, surfing, a party icon) rather than 16x32.
+    pub square: bool,
+}
+
+/// Hardware OAM, OBJ tiles and OBJ palettes on the GBA's bus.
+pub const OAM: u32 = 0x0700_0000;
+pub const OBJ_TILES: u32 = 0x0601_0000;
+pub const OBJ_PALETTES: u32 = 0x0500_0200;
+
+/// The Pokémon that leads the party: the first one alive that isn't an egg.
+pub fn lead_of(party: &[Pokemon]) -> Option<&Pokemon> {
+    party.iter().find(|p| !p.is_egg && p.stats.is_some_and(|s| s.hp > 0))
+}
+
+/// Where a game lets Partner Avatars be drawn (see the profile's `[avatars]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvatarRoom {
+    pub anchor: (u16, u16),
+    pub first_oam: u8,
+    pub first_tile: u16,
+    pub palettes: Vec<u8>,
+}
+
 /// A Pokémon in the party or the PC.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pokemon {
@@ -243,6 +282,19 @@ pub trait Game {
     fn force_set_mode(&mut self) -> Actions;
     /// Sets one of the game's options, such as a native option written back.
     fn set_option(&mut self, name: &str, value: &str) -> Actions;
+
+    // Partner Avatars.
+
+    /// Where the Player stands, on the overworld, if the game says (only the
+    /// original games' profiles know).
+    fn whereabouts(&mut self) -> Option<Whereabouts>;
+    /// The Player's own sprite as the game drew it last: its tiles, palette
+    /// and flip, to draw them in another Player's game.
+    fn player_sprite(&mut self) -> Option<SpriteImage>;
+    /// A species' party icon, its first frame: what a Follower looks like.
+    fn party_icon(&mut self, species: u16) -> Option<SpriteImage>;
+    /// Where this game lets Pactlocke draw Partner Avatars: none on a Romhack.
+    fn avatar_room(&mut self) -> Option<AvatarRoom>;
 
     // Sync Gates.
 

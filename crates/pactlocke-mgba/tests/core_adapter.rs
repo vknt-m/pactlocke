@@ -203,3 +203,72 @@ fn a_new_game_boots_with_save_memory_taken_from_an_earlier_one() {
     assert_eq!(flash_read_byte(&mut second, 0x0010), 0x42);
     assert_eq!(second.save_memory(), save);
 }
+
+#[test]
+fn an_overlay_lands_in_oam_vram_and_palettes_at_every_frame_start_and_never_in_work_ram() {
+    let mut plain = powered_on();
+    let mut drawn = powered_on();
+    let overlay = vec![
+        (0x0700_0200, vec![0x40, 0x00, 0x70, 0x00, 0xC0, 0x03]), // OAM entry 64
+        (0x0601_7800, vec![0x11; 32]),                           // an OBJ tile
+        (0x0500_03C0, vec![0x1F, 0x00, 0xE0, 0x03]),             // OBJ palette 14
+    ];
+    drawn.overlay(&overlay);
+    for _ in 0..30 {
+        plain.run_frame(Keys::A);
+        drawn.run_frame(Keys::A);
+    }
+    let read = |core: &mut MgbaCore, addr, len| {
+        let mut out = vec![0; len];
+        core.read(addr, &mut out);
+        out
+    };
+    assert_eq!(read(&mut drawn, 0x0700_0200, 6), overlay[0].1);
+    assert_eq!(read(&mut drawn, 0x0601_7800, 32), overlay[1].1);
+    assert_eq!(read(&mut drawn, 0x0500_03C0, 4), overlay[2].1);
+    assert_eq!(
+        read(&mut drawn, 0x0200_0000, 0x4_0000),
+        read(&mut plain, 0x0200_0000, 0x4_0000),
+        "EWRAM untouched"
+    );
+    assert_eq!(
+        read(&mut drawn, 0x0300_0000, 0x8000),
+        read(&mut plain, 0x0300_0000, 0x8000)
+    );
+
+    // Gone once cleared, as the game's own state would have it.
+    drawn.overlay(&[]);
+    // (OAM takes 16-bit writes only, as on a GBA.)
+    for at in [0x0700_0200, 0x0700_0202, 0x0700_0204] {
+        drawn.write16(at, 0);
+    }
+    drawn.run_frame(Keys::NONE);
+    assert_eq!(read(&mut drawn, 0x0700_0200, 6), [0; 6]);
+}
+
+#[test]
+fn an_overlay_never_writes_outside_display_memory() {
+    let mut plain = powered_on();
+    let mut drawn = powered_on();
+    drawn.overlay(&[
+        (0x0200_0100, vec![0xAB; 16]),
+        (0x0300_0100, vec![0xCD; 16]),
+        (0x0400_0000, vec![0xFF; 2]),
+    ]);
+    for _ in 0..5 {
+        plain.run_frame(Keys::NONE);
+        drawn.run_frame(Keys::NONE);
+    }
+    let read = |core: &mut MgbaCore, addr, len| {
+        let mut out = vec![0; len];
+        core.read(addr, &mut out);
+        out
+    };
+    assert_eq!(read(&mut drawn, 0x0200_0100, 16), read(&mut plain, 0x0200_0100, 16));
+    assert_eq!(read(&mut drawn, 0x0300_0100, 16), read(&mut plain, 0x0300_0100, 16));
+    assert_eq!(
+        read(&mut drawn, 0x0400_0000, 2),
+        read(&mut plain, 0x0400_0000, 2),
+        "nor IO"
+    );
+}

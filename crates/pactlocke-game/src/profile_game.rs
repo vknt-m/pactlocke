@@ -11,6 +11,7 @@ use crate::game::{
 use crate::profile::HOLD_SCRIPT_LEN;
 use crate::profile::{GameProfile, Method, PatchSite, ROM_BASE};
 use crate::{Area, Source, text};
+use crate::{AvatarRoom, OAM, OBJ_PALETTES, OBJ_TILES, SpriteImage, Whereabouts};
 
 /// The order of the four substructures (Growth, Attacks, EVs, Misc) for each
 /// PID mod 24.
@@ -679,6 +680,90 @@ impl<M: Memory> Game for ProfileGame<M> {
             addr,
             bytes: vec![(current & !def.mask) | setting],
         }])
+    }
+
+    fn whereabouts(&mut self) -> Option<Whereabouts> {
+        let avatars = self.profile.avatars.clone()?;
+        if !self.at_safe_overworld_point() {
+            return None;
+        }
+        let block = self.u32(self.profile.symbols.save_block_1_pointer);
+        let at = |offset: u32| block.wrapping_add(offset);
+        Some(Whereabouts {
+            map: (self.u8(at(avatars.location)), self.u8(at(avatars.location + 1))),
+            x: self.u16(at(avatars.position)) as i16,
+            y: self.u16(at(avatars.position + 2)) as i16,
+        })
+    }
+
+    fn player_sprite(&mut self) -> Option<SpriteImage> {
+        let avatars = self.profile.avatars.clone()?;
+        // The game's own Player sprite: 16x32 at the anchor, or 32x32 (a bike,
+        // surfing) centred over it; surfing bobs it a few pixels up and down.
+        for entry in 0..u32::from(avatars.first_oam) {
+            let at = OAM + entry * 8;
+            let (a0, a1, a2) = (self.u16(at), self.u16(at + 2), self.u16(at + 4));
+            if a0 & 0x0300 == 0x0200 || a1 >> 14 != 2 {
+                continue;
+            }
+            let square = match a0 >> 14 {
+                0 => true,
+                2 => false,
+                _ => continue,
+            };
+            let x = a1 & 0x1FF;
+            let y = a0 & 0xFF;
+            let left = if square {
+                avatars.anchor_x.wrapping_sub(8)
+            } else {
+                avatars.anchor_x
+            };
+            if x != left || y.abs_diff(avatars.anchor_y) > 8 {
+                continue;
+            }
+            let tile = u32::from(a2 & 0x3FF);
+            let palette = u32::from(a2 >> 12);
+            let tiles = if square { 16 } else { 8 };
+            return Some(SpriteImage {
+                tiles: self.bytes(OBJ_TILES + tile * 32, tiles * 32),
+                palette: self.bytes(OBJ_PALETTES + palette * 32, 32),
+                hflip: a1 & 0x1000 != 0,
+                priority: ((a2 >> 10) & 3) as u8,
+                square,
+            });
+        }
+        None
+    }
+
+    fn party_icon(&mut self, species: u16) -> Option<SpriteImage> {
+        let avatars = self.profile.avatars.clone()?;
+        let tiles_at = self.u32(avatars.icon_table + u32::from(species) * 4);
+        if !(ROM_BASE..ROM_BASE + 0x0200_0000).contains(&tiles_at) {
+            return None;
+        }
+        let index = u32::from(self.u8(avatars.icon_palette_indices + u32::from(species)));
+        let palette_at = self.u32(avatars.icon_palette_table + index * 8);
+        if !(ROM_BASE..ROM_BASE + 0x0200_0000).contains(&palette_at) {
+            return None;
+        }
+        Some(SpriteImage {
+            // The first of its two 32x32 frames.
+            tiles: self.bytes(tiles_at, 16 * 32),
+            palette: self.bytes(palette_at, 32),
+            hflip: false,
+            priority: 2,
+            square: true,
+        })
+    }
+
+    fn avatar_room(&mut self) -> Option<AvatarRoom> {
+        let avatars = self.profile.avatars.as_ref()?;
+        Some(AvatarRoom {
+            anchor: (avatars.anchor_x, avatars.anchor_y),
+            first_oam: avatars.first_oam,
+            first_tile: avatars.first_tile,
+            palettes: avatars.palettes.clone(),
+        })
     }
 
     fn sync_gates(&mut self) -> Vec<String> {

@@ -27,6 +27,7 @@ unsafe extern "C" {
     pub fn pact_core_write16(pc: *mut PactCore, addr: u32, value: u16);
     pub fn pact_core_write32(pc: *mut PactCore, addr: u32, value: u32);
     pub fn pact_core_patch_rom(pc: *mut PactCore, addr: u32, data: *const u8, len: usize);
+    pub fn pact_core_set_overlay(pc: *mut PactCore, data: *const u8, len: usize) -> bool;
 
     pub fn pact_core_state_size(pc: *mut PactCore) -> usize;
     pub fn pact_core_save_state(pc: *mut PactCore, out: *mut u8) -> bool;

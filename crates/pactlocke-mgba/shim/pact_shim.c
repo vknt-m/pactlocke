@@ -23,7 +23,39 @@ struct PactCore {
 	unsigned width;
 	unsigned height;
 	bool loaded;
+	/* Display-only writes applied as every frame starts to draw: records of
+	 * a 32-bit address, a 16-bit length and the bytes. */
+	uint8_t* overlay;
+	size_t overlay_len;
+	struct mCoreCallbacks callbacks;
 };
+
+/* At line 0, after the game's VBlank handler has copied its own OAM and
+ * palettes over, so the overlay is what this frame draws. 16-bit stores:
+ * OAM ignores 8-bit writes. */
+static void pact_frame_started(void* context) {
+	PactCore* pc = context;
+	size_t at = 0;
+	while (at + 6 <= pc->overlay_len) {
+		const uint8_t* r = pc->overlay + at;
+		uint32_t addr = (uint32_t) r[0] | (uint32_t) r[1] << 8 | (uint32_t) r[2] << 16 | (uint32_t) r[3] << 24;
+		size_t len = (size_t) r[4] | (size_t) r[5] << 8;
+		at += 6;
+		if (at + len > pc->overlay_len) {
+			break;
+		}
+		/* Display memory only: palette RAM, VRAM and OAM, never work RAM or IO. */
+		if (addr < 0x05000000 || addr + len > 0x08000000) {
+			at += len;
+			continue;
+		}
+		for (size_t i = 0; i + 1 < len; i += 2) {
+			uint16_t value = (uint16_t) (pc->overlay[at + i] | pc->overlay[at + i + 1] << 8);
+			pc->core->busWrite16(pc->core, addr + (uint32_t) i, value);
+		}
+		at += len;
+	}
+}
 
 static void pact_quiet_log(struct mLogger* logger, int category, enum mLogLevel level, const char* format, va_list args) {
 	(void) logger;
@@ -78,6 +110,9 @@ PactCore* pact_core_new(void) {
 		return NULL;
 	}
 	pc->core->setVideoBuffer(pc->core, pc->video, pc->width);
+	pc->callbacks.context = pc;
+	pc->callbacks.videoFrameStarted = pact_frame_started;
+	pc->core->addCoreCallbacks(pc->core, &pc->callbacks);
 	pc->core->setAudioBufferSize(pc->core, PACT_AUDIO_BUFFER_FRAMES);
 	return pc;
 }
@@ -89,7 +124,23 @@ void pact_core_free(PactCore* pc) {
 	mCoreConfigDeinit(&pc->core->config);
 	pc->core->deinit(pc->core);
 	free(pc->video);
+	free(pc->overlay);
 	free(pc);
+}
+
+bool pact_core_set_overlay(PactCore* pc, const uint8_t* data, size_t len) {
+	uint8_t* copy = NULL;
+	if (len) {
+		copy = malloc(len);
+		if (!copy) {
+			return false;
+		}
+		memcpy(copy, data, len);
+	}
+	free(pc->overlay);
+	pc->overlay = copy;
+	pc->overlay_len = len;
+	return true;
 }
 
 bool pact_core_load_rom(PactCore* pc, const uint8_t* data, size_t len) {

@@ -1552,3 +1552,70 @@ w 60",
     let shadow = &d.watcher.as_ref().unwrap().shadow;
     assert_eq!(shadow.state(), ShadowState::Matched);
 }
+
+#[test]
+fn a_partner_avatar_is_drawn_in_firered_from_their_shadow_game_and_nothing_else_changes() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
+        return;
+    };
+    // A draws partners; a control gets exactly A's presses and draws none; B walks off.
+    let mut a = firered_run(rom.clone());
+    a.watched();
+    let mut control = firered_run(rom.clone());
+    let mut b = firered_run(rom);
+    b.watched();
+    for d in [&mut a, &mut control, &mut b] {
+        d.play(FR_STARTER);
+        d.play("w 60");
+    }
+    b.play("h L 32\nw 120");
+    let avatars = a.game.draw_partner_avatars();
+    for _ in 0..180 {
+        let seen = b.watcher().shadow.seen().avatar.clone();
+        *avatars.lock().unwrap() = seen
+            .map(|seen| vec![pactlocke_run::PartnerAvatar { player: [2; 32], seen }])
+            .unwrap_or_default();
+        a.frame(Keys::NONE);
+        control.frame(Keys::NONE);
+        b.frame(Keys::NONE);
+    }
+
+    let mine = a.game.game_mut().whereabouts().expect("A on the overworld");
+    let theirs = b.watcher().shadow.seen().avatar.clone().expect("B's Shadow shows B");
+    assert_eq!(theirs.at.map, mine.map, "the same map: Oak's lab");
+    let (dx, dy) = (i32::from(theirs.at.x - mine.x), i32::from(theirs.at.y - mine.y));
+    assert_ne!((dx, dy), (0, 0), "B walked off");
+    // Slot 0, OAM entry 64: the first Partner Avatar.
+    let entry = a.read(0x0700_0000 + 64 * 8, 6);
+    let attr0 = u16::from_le_bytes([entry[0], entry[1]]);
+    let attr1 = u16::from_le_bytes([entry[2], entry[3]]);
+    let attr2 = u16::from_le_bytes([entry[4], entry[5]]);
+    let (x, y) = (112 + 16 * dx, 56 + 16 * dy);
+    assert_eq!(attr0 & 0x0200, 0, "drawn");
+    assert_eq!(
+        (i32::from(attr1 & 0x1FF), i32::from(attr0 & 0xFF)),
+        (x, y),
+        "at B's tile"
+    );
+    let tile = u32::from(attr2 & 0x3FF);
+    assert_eq!(
+        a.read(0x0601_0000 + tile * 32, 256),
+        theirs.sprite.tiles,
+        "B's own look, from B's game"
+    );
+
+    // The game never saw it: A's RAM is the control's, and A's Shadow still matches.
+    assert_eq!(ram_hash(&mut a), ram_hash(&mut control));
+    assert_eq!(a.watcher().shadow.state(), ShadowState::Matched);
+    // But A's picture has B in it, where the control's doesn't.
+    let (drawn, plain) = (a.game.frame(), control.game.frame());
+    let differs = (y.max(0)..(y + 32).min(160)).any(|row| {
+        (x.max(0)..(x + 16).min(240)).any(|col| {
+            let at = ((row * 240 + col) * 4) as usize;
+            drawn.rgba[at..at + 3] != plain.rgba[at..at + 3]
+        })
+    });
+    dump_screen(&a.game, "partner-avatar");
+    assert!(differs, "B is on A's screen");
+}

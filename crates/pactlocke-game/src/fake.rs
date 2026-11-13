@@ -91,6 +91,11 @@ pub struct FakeGame {
     pub gates_closed: std::collections::BTreeSet<String>,
     /// The gate whose hold script is running, as the test sets it.
     pub at_gate: Option<String>,
+    /// Partner Avatars: where the Player stands, their sprite, and room to
+    /// draw (`None`, as on a Romhack, draws nothing).
+    pub whereabouts: Option<crate::Whereabouts>,
+    pub player_sprite: Option<crate::SpriteImage>,
+    pub avatar_room: Option<crate::AvatarRoom>,
 
     /// The emulator under the fake: driven by keys and changed by every
     /// change applied, so a copy fed the same input stream matches it.
@@ -138,6 +143,9 @@ impl Default for FakeGame {
             sync_gates: Vec::new(),
             gates_closed: std::collections::BTreeSet::new(),
             at_gate: None,
+            whereabouts: None,
+            player_sprite: None,
+            avatar_room: None,
             core: FakeCore::default(),
         }
     }
@@ -448,6 +456,30 @@ impl Game for FakeGame {
             return Err(GameError::UnknownOption(format!("{name} = {value}")));
         }
         Ok(vec![fake_write(SET_OPTION, format!("{name}={value}").into_bytes())])
+    }
+
+    fn whereabouts(&mut self) -> Option<crate::Whereabouts> {
+        self.whereabouts
+    }
+
+    fn player_sprite(&mut self) -> Option<crate::SpriteImage> {
+        self.player_sprite.clone()
+    }
+
+    /// Every species' icon is its number, over and over, with a palette of its number.
+    fn party_icon(&mut self, species: u16) -> Option<crate::SpriteImage> {
+        let [low, high] = species.to_le_bytes();
+        Some(crate::SpriteImage {
+            tiles: [low, high].repeat(256),
+            palette: [high, low].repeat(16),
+            hflip: false,
+            priority: 2,
+            square: true,
+        })
+    }
+
+    fn avatar_room(&mut self) -> Option<crate::AvatarRoom> {
+        self.avatar_room.clone()
     }
 
     fn sync_gates(&mut self) -> Vec<String> {

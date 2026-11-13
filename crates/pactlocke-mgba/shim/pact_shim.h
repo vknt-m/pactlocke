@@ -39,6 +39,10 @@ void pact_core_write(PactCore* pc, uint32_t addr, const uint8_t* data, size_t le
 void pact_core_write16(PactCore* pc, uint32_t addr, uint16_t value);
 void pact_core_write32(PactCore* pc, uint32_t addr, uint32_t value);
 void pact_core_patch_rom(PactCore* pc, uint32_t addr, const uint8_t* data, size_t len);
+/* Display-only writes (OAM, OBJ tiles, OBJ palettes) applied as every frame
+ * starts to draw, until replaced: records of a little-endian 32-bit address,
+ * a 16-bit even length and the bytes. Copied. False if out of memory. */
+bool pact_core_set_overlay(PactCore* pc, const uint8_t* data, size_t len);
 
 size_t pact_core_state_size(PactCore* pc);
 bool pact_core_save_state(PactCore* pc, uint8_t* out);

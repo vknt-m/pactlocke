@@ -137,6 +137,11 @@ pub trait CoreAdapter: Send {
     fn write32(&mut self, addr: u32, value: u32);
     /// Patch ROM bytes in memory; the ROM file is untouched.
     fn patch_rom(&mut self, addr: u32, data: &[u8]);
+    /// Display-only writes (OAM, OBJ tiles, OBJ palettes) applied as every
+    /// frame starts to draw, after the game's own VBlank copies, until
+    /// replaced. They never touch work RAM, so the game can't see them.
+    /// A core without a display to draw on ignores them.
+    fn overlay(&mut self, _writes: &[(u32, Vec<u8>)]) {}
     /// Take a checkpoint (save memory plus savestate).
     fn checkpoint(&mut self) -> Checkpoint;
     /// Restore a checkpoint: save memory first, then the savestate.

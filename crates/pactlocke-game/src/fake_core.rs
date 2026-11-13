@@ -34,6 +34,8 @@ pub struct FakeCore {
     clock_ms: i64,
     save: Vec<u8>,
     audio: Vec<i16>,
+    /// The display writes last given, kept apart: the game never sees them.
+    pub overlay: Vec<(u32, Vec<u8>)>,
 }
 
 impl Default for FakeCore {
@@ -48,6 +50,7 @@ impl Default for FakeCore {
             clock_ms: 0,
             save: vec![0xFF; SAVE_LEN],
             audio: Vec::new(),
+            overlay: Vec::new(),
         }
     }
 }
@@ -156,6 +159,10 @@ impl CoreAdapter for FakeCore {
         for (i, &byte) in data.iter().enumerate() {
             self.rom_patches.insert(addr + i as u32, byte);
         }
+    }
+
+    fn overlay(&mut self, writes: &[(u32, Vec<u8>)]) {
+        self.overlay = writes.to_vec();
     }
 
     /// RAM and the clock; like a real savestate, not the ROM patches.

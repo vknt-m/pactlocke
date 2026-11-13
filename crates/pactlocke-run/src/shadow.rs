@@ -31,6 +31,9 @@ pub const PREDICT_FRAMES: u64 = 120;
 pub const CATCH_UP_SPEED: u64 = 20;
 /// How often (in real frames) a Shadow looks at the Player's Pokémon.
 const LOOK_EVERY: u64 = 30;
+/// How often (in real frames) a Shadow looks at where its Player stands, for
+/// their Partner Avatar.
+const AVATAR_EVERY: u64 = 4;
 /// How many of its own Run Checkpoints a Shadow keeps.
 const CHECKPOINTS_KEPT: usize = 8;
 /// Behind by more than this, a Shadow is catching up rather than watchable live.
@@ -294,6 +297,9 @@ impl<G: PlayedGame> ShadowGame<G> {
         if self.confirmed.is_multiple_of(LOOK_EVERY) {
             self.look();
         }
+        if self.confirmed.is_multiple_of(AVATAR_EVERY) {
+            self.look_for_the_avatar();
+        }
     }
 
     /// Runs a frame past the newest received on a guess: the last keys held,
@@ -344,6 +350,16 @@ impl<G: PlayedGame> ShadowGame<G> {
                 hp: p.stats.map_or(0, |s| s.hp),
             })
             .collect();
+    }
+
+    /// Where the Player stands and how they look, for their Partner Avatar
+    /// in other Players' games; nothing off the overworld.
+    fn look_for_the_avatar(&mut self) {
+        self.seen.avatar = self.game.whereabouts().and_then(|at| {
+            let sprite = self.game.player_sprite()?;
+            let lead = pactlocke_game::lead_of(&self.game.party()).map(|p| p.species);
+            Some(SeenAvatar { at, sprite, lead })
+        });
     }
 
     /// Lands every change and takes every Run Checkpoint up to this boundary, in order.
@@ -560,6 +576,16 @@ pub struct Seen {
     /// Their Area, and what they were doing, at the last look.
     pub area: Option<String>,
     pub doing: crate::Doing,
+    /// Where they stand and how they look, on the overworld, for their Partner Avatar.
+    pub avatar: Option<SeenAvatar>,
+}
+
+/// A Player as their Partner Avatar shows them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeenAvatar {
+    pub at: pactlocke_game::Whereabouts,
+    pub sprite: pactlocke_game::SpriteImage,
+    pub lead: Option<u16>,
 }
 
 /// A party Pokémon as a Shadow Game last showed it.

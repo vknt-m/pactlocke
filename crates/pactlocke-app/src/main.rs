@@ -553,7 +553,10 @@ impl PactlockeApp {
                     .public_key()
                     .ok_or("This install has no network key, so the Run can't be shared.")?;
                 let outbox = running.stream_as(me);
-                Some(spectate::Spectate::new(me, locked, &rom, &profile, outbox, &commands)?)
+                let mut spectate = spectate::Spectate::new(me, locked, &rom, &profile, outbox, &commands)?;
+                // Partner Avatars: the game draws none where its profile gives no room (a Romhack).
+                spectate.draw_partner_avatars(running.draw_partner_avatars());
+                Some(spectate)
             }
             None => None,
         };

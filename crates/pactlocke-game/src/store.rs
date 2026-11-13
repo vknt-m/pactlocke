@@ -373,6 +373,16 @@ fn check(profile: &GameProfile) -> Result<(), String> {
             }
         }
     }
+    if let Some(avatars) = &profile.avatars {
+        // Five sprite slots (two Partner Avatars, their Followers, and the
+        // Player's own), 16 tiles and a palette each.
+        if avatars.palettes.len() < 5 || avatars.palettes.iter().any(|p| *p > 15) {
+            return Err("avatars: give five OBJ palette slots, 0 to 15".into());
+        }
+        if u32::from(avatars.first_tile) + 80 > 1024 || u32::from(avatars.first_oam) + 5 > 128 {
+            return Err("avatars: 80 OBJ tiles from first_tile and 5 OAM entries from first_oam must fit".into());
+        }
+    }
     for stage in &profile.level_caps {
         if stage.trainers.is_empty() {
             return Err(format!("level cap {:?}: no trainers", stage.name));

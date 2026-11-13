@@ -102,6 +102,23 @@ impl CoreAdapter for MgbaCore {
         unsafe { ffi::pact_core_patch_rom(self.ptr(), addr, data.as_ptr(), data.len()) }
     }
 
+    fn overlay(&mut self, writes: &[(u32, Vec<u8>)]) {
+        let mut records = Vec::new();
+        // Display memory only (palette RAM, VRAM, OAM); the shim checks too.
+        let display = |addr: u32, len: usize| addr >= 0x0500_0000 && u64::from(addr) + len as u64 <= 0x0800_0000;
+        for (addr, bytes) in writes.iter().filter(|(addr, bytes)| display(*addr, bytes.len())) {
+            let len = bytes.len().min(0xFFFE) & !1;
+            records.extend_from_slice(&addr.to_le_bytes());
+            records.extend_from_slice(&(len as u16).to_le_bytes());
+            records.extend_from_slice(&bytes[..len]);
+        }
+        // SAFETY: the shim copies the bytes before returning. Out of memory
+        // leaves the last overlay in place, which only affects the picture.
+        unsafe {
+            ffi::pact_core_set_overlay(self.ptr(), records.as_ptr(), records.len());
+        }
+    }
+
     fn checkpoint(&mut self) -> Checkpoint {
         // SAFETY: the state buffer is exactly the size the core asked for, and
         // the save memory copy is freed by the shim's allocator.

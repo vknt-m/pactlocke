@@ -549,3 +549,20 @@ sites = [
     { at = 0x08162CD0, expect = "5C 03 B7 01 00" },
     { at = 0x08162CDB, expect = "5C 03 B8 01 00" },
 ]
+
+# Partner Avatars and Followers. The Player's tile (two s16) and map (group,
+# number) in save block 1; their own 16x32 sprite's top-left on screen; and
+# what the overworld leaves free: OAM entries 64-127 (gOamLimit = 64), the
+# last 80 OBJ tiles and the top five OBJ palettes. Party icons from
+# gMonIconTable, gMonIconPaletteIndices and gMonIconPaletteTable.
+[avatars]
+position = 0x00
+location = 0x04
+anchor_x = 112
+anchor_y = 56
+first_oam = 64
+first_tile = 944
+palettes = [11, 12, 13, 14, 15]
+icon_table = 0x083D37A0
+icon_palette_indices = 0x083D3E80
+icon_palette_table = 0x083D4038

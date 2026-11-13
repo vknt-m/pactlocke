@@ -61,6 +61,8 @@ pub struct Spectate {
     /// The Shadow being watched.
     pub watching: Option<usize>,
     pub battery_saver: bool,
+    /// Partner Avatars: where this Player's game reads them from.
+    avatars: Option<Arc<Mutex<Vec<pactlocke_run::PartnerAvatar>>>>,
 }
 
 impl Spectate {
@@ -103,11 +105,35 @@ impl Spectate {
             shadows,
             watching: None,
             battery_saver: false,
+            avatars: None,
         })
     }
 
-    /// Sends this Player's new chunks, and takes in everyone else's.
+    /// This Player's game draws the Partner Avatars from here.
+    pub fn draw_partner_avatars(&mut self, avatars: Arc<Mutex<Vec<pactlocke_run::PartnerAvatar>>>) {
+        self.avatars = Some(avatars);
+    }
+
+    /// Sends this Player's new chunks, takes in everyone else's, and tells
+    /// this Player's game where every Partner Avatar is, as their Shadows
+    /// show them: only a Shadow that matches and is caught up.
     pub fn pump(&mut self, lobbies: &mut Lobbies) {
+        if let Some(avatars) = &self.avatars {
+            let now: Vec<pactlocke_run::PartnerAvatar> = self
+                .shadows
+                .iter()
+                .filter_map(|shadow| {
+                    let status = shadow.status();
+                    let live = status.state == ShadowState::Matched && !status.catching_up;
+                    let seen = status.seen.avatar.filter(|_| live)?;
+                    Some(pactlocke_run::PartnerAvatar {
+                        player: shadow.key,
+                        seen,
+                    })
+                })
+                .collect();
+            *avatars.lock().unwrap_or_else(|e| e.into_inner()) = now;
+        }
         let own = std::mem::take(&mut *self.outbox.lock().unwrap_or_else(|e| e.into_inner()));
         for chunk in own {
             for out in self.hub.own(chunk) {

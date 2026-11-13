@@ -315,6 +315,11 @@ impl RunEngine {
         &self.patches
     }
 
+    /// The Run's clock now, in Unix milliseconds.
+    pub fn now_ms(&self) -> i64 {
+        self.clock.now_ms()
+    }
+
     /// Which time this Run's game has been booted, from 1.
     pub fn boot(&self) -> u32 {
         self.boot

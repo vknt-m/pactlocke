@@ -50,6 +50,8 @@ pub struct App {
     shared: Arc<Mutex<Vec<RunEvent>>>,
     follower: LogFollower,
     links: pactlocke_run::LinkKeeper,
+    /// Partner Avatars: where this app puts them for its game to draw.
+    pub partners: Option<Arc<Mutex<Vec<pactlocke_run::PartnerAvatar>>>>,
     /// Entries this app refused from the Host, and why.
     pub refused: Vec<String>,
 }
@@ -169,6 +171,7 @@ impl Table {
                     shared,
                     follower: LogFollower::new(key(i)),
                     links: pactlocke_run::LinkKeeper::new(key(i)),
+                    partners: None,
                     refused: Vec::new(),
                 }
             })
@@ -311,6 +314,21 @@ impl Table {
             let from = self.apps[to].key;
             self.post(from, out);
         }
+        for app in &mut self.apps {
+            if let Some(partners) = &app.partners {
+                let now: Vec<pactlocke_run::PartnerAvatar> = app
+                    .shadows
+                    .iter()
+                    .filter_map(|(key, shadow)| {
+                        Some(pactlocke_run::PartnerAvatar {
+                            player: *key,
+                            seen: shadow.seen().avatar.clone()?,
+                        })
+                    })
+                    .collect();
+                *partners.lock().unwrap() = now;
+            }
+        }
         let names: BTreeMap<PlayerKey, String> = self.apps.iter().map(|a| (a.key, a.name.clone())).collect();
         for app in &mut self.apps {
             let mut diverged = Vec::new();
@@ -390,6 +408,13 @@ impl Table {
     pub fn now(&self) -> i64 {
         use pactlocke_run::RunClock;
         self.clock.now_ms()
+    }
+
+    /// Every app draws its Partner Avatars, as the app does on an original game.
+    pub fn draw_partner_avatars(&mut self) {
+        for app in &mut self.apps {
+            app.partners = Some(app.running.draw_partner_avatars());
+        }
     }
 
     /// Player `i`'s game, to set what happens in it.
