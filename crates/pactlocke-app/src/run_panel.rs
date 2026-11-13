@@ -7,8 +7,14 @@ use eframe::egui;
 use pactlocke_run::{FeedKind, NicknameWanted, RunClock, RunCommand, RunView, SystemRunClock};
 
 /// Shows the panel; returns what the Player asked of the Run, if anything.
-/// `alone`: a solo Run, where a Retry needs no vote.
-pub fn show(ui: &mut egui::Ui, view: &RunView, alone: bool) -> Option<RunCommand> {
+/// `alone`: a solo Run, where a Retry needs no vote. `links`: in a Run
+/// with Links, how many there are and what shows the Links tab.
+pub fn show(
+    ui: &mut egui::Ui,
+    view: &RunView,
+    alone: bool,
+    mut links: Option<(usize, &mut LinksTab<'_>)>,
+) -> Option<RunCommand> {
     ui.heading(&view.name);
     ui.weak(&view.game_name);
     if let Some(cap) = &view.level_cap {
@@ -53,18 +59,36 @@ pub fn show(ui: &mut egui::Ui, view: &RunView, alone: bool) -> Option<RunCommand
     let now = SystemRunClock.now_ms();
     // The tab bar sits at the bottom; an open tab opens above it, and the feed takes the rest.
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-        let open_id = egui::Id::unique("graveyard tab open");
-        let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+        let open_id = egui::Id::unique("open tab");
+        let mut open: Option<Tab> = ui.data(|d| d.get_temp(open_id)).unwrap_or_default();
         ui.horizontal(|ui| {
+            if let Some((count, _)) = &links {
+                let tab = format!("Links · {count}");
+                if ui.selectable_label(open == Some(Tab::Links), tab).clicked() {
+                    open = (open != Some(Tab::Links)).then_some(Tab::Links);
+                }
+            }
             let tab = format!("Graveyard · {}", view.graveyard.len());
-            if ui.selectable_label(open, tab).clicked() {
-                open = !open;
+            if ui.selectable_label(open == Some(Tab::Graveyard), tab).clicked() {
+                open = (open != Some(Tab::Graveyard)).then_some(Tab::Graveyard);
             }
         });
         ui.data_mut(|d| d.insert_temp(open_id, open));
-        if open {
-            ui.separator();
-            graveyard(ui, view, now);
+        match (open, links.as_mut()) {
+            (Some(Tab::Graveyard), _) => {
+                ui.separator();
+                graveyard(ui, view, now);
+            }
+            (Some(Tab::Links), Some((_, show))) => {
+                ui.separator();
+                // Bottom-up here: the tab's own layout reads top-down.
+                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                    if let Some(skip) = show(ui) {
+                        command = Some(skip);
+                    }
+                });
+            }
+            _ => {}
         }
         ui.separator();
 
@@ -98,6 +122,16 @@ pub fn show(ui: &mut egui::Ui, view: &RunView, alone: bool) -> Option<RunCommand
         });
     });
     command
+}
+
+/// What shows the Links tab; it returns a Skip once the Player confirms one.
+pub type LinksTab<'a> = dyn FnMut(&mut egui::Ui) -> Option<RunCommand> + 'a;
+
+/// The tab open above the tab bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Links,
+    Graveyard,
 }
 
 /// The Dead, newest first, with what killed each.

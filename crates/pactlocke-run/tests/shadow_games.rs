@@ -315,7 +315,7 @@ fn until(what: &str, mut done: impl FnMut() -> bool) {
 #[test]
 fn in_battery_saver_a_shadow_waits_until_watched_then_catches_up_with_picture_and_sound() {
     use pactlocke_run::{ShadowGame, ShadowRunner, SystemRunClock};
-    let shadow = ShadowGame::power_on(pactlocke_game::FakeCore::default(), support::START_MS);
+    let shadow = ShadowGame::power_on(pactlocke_game::FakeGame::default(), support::START_MS);
     let runner = ShadowRunner::spawn(shadow, Box::new(SystemRunClock), Box::new(|_| {}));
     runner.battery_saver(true);
     for chunk in stream_of(600) {
@@ -339,7 +339,7 @@ fn in_battery_saver_a_shadow_waits_until_watched_then_catches_up_with_picture_an
 #[test]
 fn without_battery_saver_a_shadow_always_runs() {
     use pactlocke_run::{ShadowGame, ShadowRunner, SystemRunClock};
-    let shadow = ShadowGame::power_on(pactlocke_game::FakeCore::default(), support::START_MS);
+    let shadow = ShadowGame::power_on(pactlocke_game::FakeGame::default(), support::START_MS);
     let runner = ShadowRunner::spawn(shadow, Box::new(SystemRunClock), Box::new(|_| {}));
     for chunk in stream_of(300) {
         runner.receive(chunk);
@@ -355,7 +355,7 @@ fn without_battery_saver_a_shadow_always_runs() {
 fn a_shadow_thread_reports_divergence_once() {
     use pactlocke_run::{ShadowGame, ShadowRunner, SystemRunClock};
     let told = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let shadow = ShadowGame::power_on(pactlocke_game::FakeCore::default(), support::START_MS);
+    let shadow = ShadowGame::power_on(pactlocke_game::FakeGame::default(), support::START_MS);
     let runner = {
         let told = told.clone();
         ShadowRunner::spawn(
@@ -417,7 +417,7 @@ fn many_changes_at_one_boundary_still_cross_in_messages_the_wire_carries() {
 
 #[test]
 fn when_a_player_boots_their_game_again_the_shadow_says_it_cant_be_watched_yet() {
-    let mut shadow = pactlocke_run::ShadowGame::power_on(pactlocke_game::FakeCore::default(), support::START_MS);
+    let mut shadow = pactlocke_run::ShadowGame::power_on(pactlocke_game::FakeGame::default(), support::START_MS);
     for chunk in stream_of(60) {
         shadow.receive(&chunk, 0);
     }
@@ -429,7 +429,7 @@ fn when_a_player_boots_their_game_again_the_shadow_says_it_cant_be_watched_yet()
 
 #[test]
 fn a_diverged_shadow_keeps_nothing_more_of_the_stream() {
-    let mut shadow = pactlocke_run::ShadowGame::power_on(pactlocke_game::FakeCore::default(), support::START_MS);
+    let mut shadow = pactlocke_run::ShadowGame::power_on(pactlocke_game::FakeGame::default(), support::START_MS);
     let mut chunks = stream_of(600);
     chunks[0].hashes[0].ram = [0; 20];
     shadow.receive(&chunks[0], 0);

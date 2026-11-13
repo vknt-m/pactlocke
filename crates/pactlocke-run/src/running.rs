@@ -27,6 +27,12 @@ pub enum RunCommand {
     JoinCheckpoint { call: u64 },
     /// A Retry.
     Retry { to: RetryTo },
+    /// Links: this Pokémon dies with its Link (`why` says how it broke).
+    LinkDeath { pid: u32, why: String },
+    /// Links: this source's Link broke elsewhere, so it is closed here too.
+    CloseSource { source: crate::SourceRef, why: String },
+    /// The Player skips this Gift, breaking its Link for everyone.
+    Skip { source: crate::SourceRef },
 }
 
 /// Where a Retry goes back to.
@@ -170,6 +176,9 @@ impl<G: PlayedGame> RunningGame<G> {
                 RunCommand::Nickname { pid, name } => self.engine.name_pokemon(pid, &name, &mut self.game),
                 RunCommand::OutOfSync { player, frame } => self.engine.out_of_sync(player, frame),
                 RunCommand::JoinCheckpoint { call } => self.engine.join_checkpoint(call),
+                RunCommand::LinkDeath { pid, why } => self.engine.link_death(pid, why, &mut self.game),
+                RunCommand::CloseSource { source, why } => self.engine.close_source(source, why),
+                RunCommand::Skip { source } => self.engine.skip(source),
                 RunCommand::Retry { to } => {
                     if let Err(why) = self.retry(&to) {
                         self.engine.retry_failed(why);

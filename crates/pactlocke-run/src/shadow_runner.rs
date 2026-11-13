@@ -8,16 +8,16 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use pactlocke_emu::{AudioSink, CoreAdapter, FrameSlot};
+use pactlocke_emu::{AudioSink, FrameSlot};
 
 use crate::stream::InputChunk;
-use crate::{RunClock, ShadowGame, ShadowState};
+use crate::{PlayedGame, RunClock, Seen, ShadowGame, ShadowState};
 
 /// How long the thread sleeps between slices when there's nothing to do.
 const TICK: Duration = Duration::from_millis(8);
 
 /// A Shadow Game's state, for the side panel and Spectate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShadowStatus {
     pub state: ShadowState,
     /// Well behind where the Player is, fast-forwarding.
@@ -25,6 +25,8 @@ pub struct ShadowStatus {
     /// Frames run, and the frame after the newest received.
     pub frame: u64,
     pub received: u64,
+    /// What it has shown of the Player's Pokémon.
+    pub seen: Seen,
 }
 
 enum Command {
@@ -46,8 +48,8 @@ pub struct ShadowRunner {
 impl ShadowRunner {
     /// Runs `shadow` on a thread, paced by `clock`. `on_diverged` is called
     /// once, from that thread, with the boundary where it stopped matching.
-    pub fn spawn<C: CoreAdapter + 'static>(
-        shadow: ShadowGame<C>,
+    pub fn spawn<G: PlayedGame + 'static>(
+        shadow: ShadowGame<G>,
         clock: Box<dyn RunClock>,
         on_diverged: Box<dyn FnOnce(u64) + Send>,
     ) -> Self {
@@ -58,6 +60,7 @@ impl ShadowRunner {
             catching_up: false,
             frame: 0,
             received: 0,
+            seen: Seen::default(),
         }));
         let thread = {
             let frames = frames.clone();
@@ -102,7 +105,7 @@ impl ShadowRunner {
 
     /// Where it stands, as of its last slice.
     pub fn status(&self) -> ShadowStatus {
-        *self.status.lock().unwrap_or_else(|e| e.into_inner())
+        self.status.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
@@ -115,8 +118,8 @@ impl Drop for ShadowRunner {
     }
 }
 
-fn run<C: CoreAdapter>(
-    mut shadow: ShadowGame<C>,
+fn run<G: PlayedGame>(
+    mut shadow: ShadowGame<G>,
     clock: Box<dyn RunClock>,
     on_diverged: Box<dyn FnOnce(u64) + Send>,
     inbox: &Receiver<Command>,
@@ -171,6 +174,7 @@ fn run<C: CoreAdapter>(
             catching_up: shadow.catching_up(now),
             frame: shadow.frame(),
             received: shadow.received(),
+            seen: shadow.seen().clone(),
         };
     }
 }

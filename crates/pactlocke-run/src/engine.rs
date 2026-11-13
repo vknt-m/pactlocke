@@ -19,6 +19,9 @@ use crate::{LiveGame, NewRun, Recorded, RunClock, RunEvent};
 /// How often the input stream is flushed to storage, so a crash loses at most this much.
 const FLUSH_EVERY_MS: i64 = 1000;
 
+/// How often the side panel's party is brought up to date, in frames.
+const PARTY_LOOK_FRAMES: u64 = 30;
+
 /// How many Run Checkpoints stay in RAM, for instant Retries.
 const RUN_CHECKPOINTS_IN_RAM: usize = 2;
 
@@ -119,6 +122,8 @@ struct BattleWatch {
     /// Whether the rules have looked at it yet; they wait until the opponent is known.
     decided: bool,
     catches_blocked: bool,
+    /// The source whose Encounter this battle is, once decided.
+    encounter: Option<SourceRef>,
 }
 
 impl RunEngine {
@@ -495,6 +500,7 @@ impl RunEngine {
                     owned_before: owned(game),
                     decided,
                     catches_blocked: decided,
+                    encounter: None,
                 });
                 self.decide(game);
             }
@@ -522,6 +528,10 @@ impl RunEngine {
             }
         }
 
+        if self.frame.is_multiple_of(PARTY_LOOK_FRAMES) {
+            self.look_at_the_party(game);
+        }
+
         if battle.is_none() && self.quiet(game) {
             self.check_nicknames(game);
             self.write_names_given(game);
@@ -534,6 +544,27 @@ impl RunEngine {
 
         if self.clock.now_ms() - self.last_flush_ms >= FLUSH_EVERY_MS {
             self.flush();
+        }
+    }
+
+    /// Brings the side panel's party up to date, on the overworld or in battle.
+    fn look_at_the_party(&mut self, game: &mut impl LiveGame) {
+        if game.battle().is_none() && !game.at_safe_overworld_point() {
+            return;
+        }
+        let party: Vec<crate::SeenPokemon> = game
+            .party()
+            .into_iter()
+            .map(|p| crate::SeenPokemon {
+                pid: p.pid,
+                species_name: game.species_name(p.species),
+                nickname: p.nickname,
+                hp: p.stats.map_or(0, |s| s.hp),
+            })
+            .collect();
+        if party != self.view.party {
+            self.view.party = party;
+            self.view_version += 1;
         }
     }
 
@@ -645,6 +676,7 @@ impl RunEngine {
             }
             (Verdict::Encounter, Some(area)) => {
                 let species_name = game.species_name(species);
+                self.battle.as_mut().expect("a battle is being watched").encounter = Some(SourceRef::area(&area));
                 self.record(RunEvent::Encounter {
                     area,
                     species,
@@ -653,6 +685,7 @@ impl RunEngine {
             }
             (Verdict::StaticEncounter, area) => {
                 let source = static_source.expect("a Static has a source");
+                self.battle.as_mut().expect("a battle is being watched").encounter = Some(source.clone());
                 self.record(RunEvent::StaticEncounter {
                     area,
                     source,
@@ -724,9 +757,11 @@ impl RunEngine {
         let area = watch.area.as_ref().map(AreaRef::from);
         let party = game.party();
         let pc = game.pc().into_iter().map(|stored| stored.pokemon);
+        let mut caught = None;
         for pokemon in party.into_iter().chain(pc) {
             if !watch.owned_before.iter().any(|&(pid, _)| pid == pokemon.pid) {
                 let species_name = game.species_name(pokemon.species);
+                caught.get_or_insert(pokemon.pid);
                 self.record(RunEvent::Caught {
                     area: area.clone(),
                     pid: pokemon.pid,
@@ -735,6 +770,68 @@ impl RunEngine {
                 });
             }
         }
+        if let Some(source) = watch.encounter {
+            self.record(RunEvent::EncounterOver { source, pid: caught });
+        }
+    }
+
+    /// Links: this Player's Pokémon `pid` dies with its Link, `why`. Out in
+    /// battle it faints through the game's own Perish Song path by the end
+    /// of the turn; on the bench at once. Where the game can't be made to
+    /// faint it, it is Dead all the same.
+    pub fn link_death(&mut self, pid: u32, why: String, game: &mut impl LiveGame) {
+        if self.rules.is_dead(pid) {
+            return;
+        }
+        let party = game.party();
+        let pokemon = match party.iter().position(|p| p.pid == pid) {
+            Some(slot) => {
+                let slot = u8::try_from(slot).expect("a party has six slots");
+                let out = game.battle().and_then(|battle| {
+                    battle
+                        .battlers
+                        .iter()
+                        .find(|b| b.side == Side::Player && b.party_slot == Some(slot))
+                        .map(|b| b.position)
+                });
+                let changes = match out {
+                    Some(position) => game.faint_active_battler(position),
+                    None => game.faint_benched(slot),
+                };
+                if let Ok(changes) = changes {
+                    self.apply(changes, game);
+                }
+                party[usize::from(slot)].clone()
+            }
+            None => match game.pc().into_iter().find(|s| s.pokemon.pid == pid) {
+                Some(stored) => stored.pokemon,
+                // Released or traded away: nothing left to die.
+                None => return,
+            },
+        };
+        let species_name = game.species_name(pokemon.species);
+        let area = game.area().as_ref().map(AreaRef::from);
+        self.record(RunEvent::Died {
+            pid,
+            species: pokemon.species,
+            name: display_name(&pokemon, &species_name),
+            species_name,
+            area,
+            cause: DeathCause::Link { why },
+        });
+    }
+
+    /// Links: another Player missed, skipped or lost this source's
+    /// Encounter, so it is closed here too.
+    pub fn close_source(&mut self, source: SourceRef, why: String) {
+        if !self.rules.source_closed(&source) {
+            self.record(RunEvent::SourceClosed { source, why });
+        }
+    }
+
+    /// The Player skips this Gift: its Link breaks for everyone.
+    pub fn skip(&mut self, source: SourceRef) {
+        self.record(RunEvent::Skipped { source });
     }
 
     /// Records a Death for each party Pokémon newly at 0 HP. Outside battle

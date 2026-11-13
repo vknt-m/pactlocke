@@ -21,6 +21,8 @@ pub struct RunView {
     pub retries_left: Option<u8>,
     /// Whether there is a Run Checkpoint a Retry can go back to.
     pub run_checkpoint: bool,
+    /// The Player's party, as of the last look.
+    pub party: Vec<crate::SeenPokemon>,
 }
 
 /// A Pokémon left with its species name, waiting for the Player to name it.
@@ -92,6 +94,8 @@ fn killed_by(cause: &DeathCause, area: Option<&AreaRef>) -> String {
         DeathCause::Wild { foe } => format!("a wild {foe}"),
         DeathCause::Trainer { foe } => format!("a trainer's {foe}"),
         DeathCause::Poison => "poison".to_owned(),
+        // Its Link, wherever it was.
+        DeathCause::Link { why } => return format!("its Link: {why}"),
     };
     match area {
         // "on Route 1", "on Cycling Road", but "in Pallet Town" and "in Viridian Forest".
@@ -145,6 +149,15 @@ impl FeedEntry {
                 },
             ),
             RunEvent::Checkpoint { .. } | RunEvent::Closed | RunEvent::RetryVote { .. } => return None,
+            // The catch or the way it ended is in the feed already.
+            RunEvent::EncounterOver { .. } => return None,
+            RunEvent::Skipped { source } => (
+                FeedKind::Block,
+                format!("You skipped {}: its Link is broken for everyone", source.name),
+            ),
+            RunEvent::SourceClosed { source, why } => {
+                (FeedKind::Block, format!("{} is closed for you too: {why}", source.name))
+            }
             RunEvent::RetryFailed { reason } => (FeedKind::Problem, format!("The Retry couldn't be made: {reason}")),
             RunEvent::Retried { .. } => (
                 FeedKind::Run,
@@ -278,6 +291,7 @@ impl FeedEntry {
             RunEvent::Died { name, area, cause, .. } => {
                 let how = match cause {
                     DeathCause::Poison => "fainted from ",
+                    DeathCause::Link { .. } => "fainted with ",
                     _ => "fainted against ",
                 };
                 (

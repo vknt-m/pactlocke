@@ -12,6 +12,7 @@ mod engine;
 mod event;
 mod families;
 mod file;
+mod links;
 mod live;
 mod rules;
 mod running;
@@ -26,15 +27,16 @@ mod view;
 pub use boot::{BootPlan, Booted, boot_core};
 pub use clock::{RunClock, SystemRunClock};
 pub use engine::RunEngine;
-pub use event::{AreaRef, CheckpointReason, DeathCause, Recorded, ResumedFrom, RunEvent};
+pub use event::{AreaRef, CheckpointReason, DeathCause, Recorded, ResumedFrom, RunEvent, SourceRef};
 pub use file::{RunFile, RunId, RunLibrary, RunSummary};
+pub use links::{Judge, Link, LinkKeeper, Member, links};
 pub use live::{LiveGame, PlayedGame};
 pub use running::{RetryTo, RunCommand, RunningGame};
 pub use setup::{
     COUNTDOWN_MS, Locked, Mismatch, Preset, RosterEntry, RunSetup, SetupCheck, SetupError, SetupMessage, SetupPlayer,
     SetupView, settle, unavailable,
 };
-pub use shadow::{BUFFER_FRAMES, CATCH_UP_SPEED, PREDICT_FRAMES, ShadowGame, ShadowState};
+pub use shadow::{BUFFER_FRAMES, CATCH_UP_SPEED, PREDICT_FRAMES, Seen, SeenPokemon, ShadowGame, ShadowState};
 pub use shadow_runner::{ShadowRunner, ShadowStatus};
 pub use shared_log::{
     Call, GamePoint, LogBody, LogEntry, LogError, LogFollower, Part, RunLog, Signer, Submission, Tallies, Vote,

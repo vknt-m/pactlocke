@@ -87,7 +87,7 @@ const FRAME_MS: i64 = 17;
 /// Another Player's app: this Player's stream arrives after `lag_ms`, goes
 /// through a stream store and is replayed by a Shadow Game on its own core.
 struct Watcher {
-    shadow: ShadowGame<MgbaCore>,
+    shadow: ShadowGame<ProfileGame<MgbaCore>>,
     outbox: std::sync::Arc<std::sync::Mutex<Vec<InputChunk>>>,
     store: StreamStore,
     in_flight: std::collections::VecDeque<(i64, InputChunk)>,
@@ -134,9 +134,13 @@ impl Driver {
     fn watched(&mut self) {
         let mut core = MgbaCore::new();
         core.load_rom(&self.rom).unwrap();
+        let store = ProfileStore::from_env().unwrap();
+        let RomIdentity::Profiled { profile, .. } = store.identify(&self.rom) else {
+            panic!("FireRed should be profiled");
+        };
         let outbox = self.game.stream_as([1; 32]);
         self.watcher = Some(Watcher {
-            shadow: ShadowGame::power_on(core, CLOCK),
+            shadow: ShadowGame::power_on(ProfileGame::new(profile, self.rom.clone(), core), CLOCK),
             outbox,
             store: StreamStore::new(),
             in_flight: Default::default(),
@@ -1332,5 +1336,68 @@ fn after_a_retry_on_firered_the_game_is_back_at_its_run_checkpoint_and_its_shado
         shadow.hashes_matched() >= matched_before + 6,
         "{} hashes matched, {matched_before} before the Retry",
         shadow.hashes_matched()
+    );
+}
+
+#[test]
+fn a_link_mates_death_faints_the_starter_mid_battle_through_the_games_own_faint() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
+        return;
+    };
+    let ruleset = Ruleset {
+        first_encounter: true,
+        faint_is_dead: true,
+        ..Ruleset::default()
+    };
+    let mut d = firered_run_with(rom, ruleset);
+    d.watched();
+    d.play(FR_STARTER);
+    d.fast_text();
+    d.play("h D 64\nw 60");
+    d.until_action_menu(Keys::A, 3000);
+    let starter = d.game.game_mut().party()[0].clone();
+    assert!(d.read(BATTLE_MONS + BATTLE_MON_HP, 2) != [0, 0]);
+
+    // The partner's Pokémon in this Link died: the starter goes at the end of the turn.
+    d.game
+        .commands()
+        .send(RunCommand::LinkDeath {
+            pid: starter.pid,
+            why: "Blue's BULBASAUR died".into(),
+        })
+        .unwrap();
+    d.play("w 2");
+    let deaths = d.feed(FeedKind::Death);
+    assert!(
+        deaths
+            .iter()
+            .any(|e| e.contains("fainted with its Link: Blue's BULBASAUR died")),
+        "{deaths:?}"
+    );
+    assert!(
+        d.in_battle(),
+        "still in the battle: the faint comes at the end of the turn"
+    );
+    // FIGHT, the first move: the turn ends and the game's own faint sequence runs.
+    for _ in 0..600 {
+        if d.read(BATTLE_MONS + BATTLE_MON_HP, 2) == [0, 0] {
+            break;
+        }
+        d.play("p A 20");
+    }
+    assert_eq!(d.read(BATTLE_MONS + BATTLE_MON_HP, 2), [0, 0], "fainted in battle");
+    d.until_battle_over(Keys::A, 6000);
+    d.play("m B 900");
+    let shadow = &d.watcher.as_ref().unwrap().shadow;
+    assert_eq!(
+        shadow.state(),
+        ShadowState::Matched,
+        "the Perish writes went through the stream"
+    );
+    assert!(
+        d.feed(FeedKind::Death).iter().any(|e| e.starts_with("Moved ")),
+        "then to the Dead box: {:?}",
+        d.feed(FeedKind::Death)
     );
 }

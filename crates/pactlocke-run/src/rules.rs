@@ -330,6 +330,14 @@ impl Rules {
         self.cap_stage
     }
 
+    /// Whether this source's Encounter is used or closed here.
+    pub fn source_closed(&self, source: &crate::SourceRef) -> bool {
+        match source.area_id() {
+            Some(area) => self.closed.contains(&area),
+            None => self.used_sources.contains(&source.key),
+        }
+    }
+
     pub fn is_soft_cap(&self) -> bool {
         self.soft_cap
     }
@@ -342,6 +350,14 @@ impl Rules {
                 self.closed.insert(area.id);
             }
             RunEvent::PokeBallsObtained => self.had_poke_balls = true,
+            RunEvent::SourceClosed { source, .. } | RunEvent::Skipped { source } => match source.area_id() {
+                Some(area) => {
+                    self.closed.insert(area);
+                }
+                None => {
+                    self.used_sources.insert(source.key.clone());
+                }
+            },
             RunEvent::Gift {
                 source: Some(source),
                 pid,

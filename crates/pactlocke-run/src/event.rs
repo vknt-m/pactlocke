@@ -31,6 +31,15 @@ pub enum RunEvent {
     Retried { to_seq: u64, hash: String },
     /// A Retry was called for but couldn't be made.
     RetryFailed { reason: String },
+    /// The battle that was a source's Encounter is over: `pid` is the
+    /// Pokémon caught in it, if one was. With Links, this Player's part of
+    /// the source's Link.
+    EncounterOver { source: SourceRef, pid: Option<u32> },
+    /// The Player chose to skip this Gift: its Link breaks for everyone.
+    Skipped { source: SourceRef },
+    /// Links: another Player missed, skipped or lost this source's
+    /// Encounter, so it is closed here too (`why` says whose).
+    SourceClosed { source: SourceRef, why: String },
     /// A Player's vote on a Retry back to the `call`th Run Checkpoint: the
     /// first Yes starts the vote, and the first No ends it.
     RetryVote { call: u64, yes: bool },
@@ -253,6 +262,8 @@ impl RunEvent {
                 | RunEvent::Died { .. }
                 | RunEvent::RetryVote { .. }
                 | RunEvent::Retried { .. }
+                | RunEvent::EncounterOver { .. }
+                | RunEvent::Skipped { .. }
         ) || self.is_run_checkpoint()
             || self.is_violation()
     }
@@ -281,6 +292,21 @@ pub struct SourceRef {
     /// The same in every Player's game for the same Gift or Static.
     pub key: String,
     pub name: String,
+}
+
+impl SourceRef {
+    /// An Area's own Encounter, as a Link source.
+    pub fn area(area: &AreaRef) -> Self {
+        Self {
+            key: format!("area:{}", area.id),
+            name: area.name.clone(),
+        }
+    }
+
+    /// The Area it is, if it is an Area's Encounter.
+    pub fn area_id(&self) -> Option<u16> {
+        self.key.strip_prefix("area:")?.parse().ok()
+    }
 }
 
 impl From<pactlocke_game::Source> for SourceRef {
@@ -312,6 +338,9 @@ pub enum DeathCause {
     Trainer { foe: String },
     /// Fainting outside battle, which only poison does.
     Poison,
+    /// Its Link broke in another Player's game: `why`, such as "Blue's
+    /// PIDGEY died" or "Blue didn't catch it".
+    Link { why: String },
 }
 
 /// An Area as the log keeps it.

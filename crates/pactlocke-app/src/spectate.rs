@@ -7,10 +7,11 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 use pactlocke_emu::{CoreAdapter, FrameSlot};
+use pactlocke_game::{GameProfile, ProfileGame};
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
-    InputChunk, Locked, LogFollower, PlayerKey, RunCommand, RunEvent, RunLog, ShadowGame, ShadowRunner, ShadowState,
-    ShadowStatus, StreamHub, StreamMessage, SystemRunClock,
+    InputChunk, Judge, Link, LinkKeeper, Locked, LogFollower, PlayerKey, RunCommand, RunEvent, RunLog, Seen,
+    ShadowGame, ShadowRunner, ShadowState, ShadowStatus, StreamHub, StreamMessage, SystemRunClock,
 };
 
 use crate::audio::AudioOut;
@@ -52,6 +53,8 @@ pub struct Spectate {
     me: PlayerKey,
     /// Joins other Players' Run Checkpoints and goes back on a Retry.
     follower: LogFollower,
+    /// Kills this Player's member of a broken Link and closes its source.
+    keeper: LinkKeeper,
     hub: StreamHub,
     outbox: Arc<Mutex<Vec<InputChunk>>>,
     pub shadows: Vec<Shadow>,
@@ -67,7 +70,8 @@ impl Spectate {
     pub fn new(
         me: PlayerKey,
         locked: &Locked,
-        rom: &[u8],
+        rom: &Arc<[u8]>,
+        profile: &Arc<GameProfile>,
         outbox: Arc<Mutex<Vec<InputChunk>>>,
         commands: &Sender<RunCommand>,
     ) -> Result<Self, String> {
@@ -76,7 +80,8 @@ impl Spectate {
         for player in locked.roster.iter().filter(|p| p.key != me) {
             let mut core = MgbaCore::new();
             core.load_rom(rom).map_err(|e| e.to_string())?;
-            let shadow = ShadowGame::power_on(core, locked.start_ms);
+            let game = ProfileGame::new(profile.clone(), rom.clone(), core);
+            let shadow = ShadowGame::power_on(game, locked.start_ms);
             let commands = commands.clone();
             let name = player.name.clone();
             let tell = Box::new(move |frame| {
@@ -92,6 +97,7 @@ impl Spectate {
         Ok(Self {
             me,
             follower: LogFollower::new(me),
+            keeper: LinkKeeper::new(me),
             hub: StreamHub::new(me, host),
             outbox,
             shadows,
@@ -129,9 +135,22 @@ impl Spectate {
         self.me
     }
 
-    /// What this Player's Run should do about the log's new entries.
+    /// What this Player's Run should do about the log's new entries and
+    /// the Links as they stand now.
     pub fn follow(&mut self, log: &RunLog) -> Vec<RunCommand> {
-        self.follower.follow(log)
+        let mut commands = self.follower.follow(log);
+        if log.locked().is_some_and(|l| l.ruleset.links) {
+            let links = self.links(log);
+            commands.extend(self.keeper.keep(log, &links));
+        }
+        commands
+    }
+
+    /// Every Link, with the other Players' catches and Deaths judged by
+    /// what their Shadow Games here have shown.
+    pub fn links(&self, log: &RunLog) -> Vec<Link> {
+        let judge = Seeing(self.shadows.iter().map(|s| (s.key, s.status().seen)).collect());
+        pactlocke_run::links(log, &self.me, &judge)
     }
 
     /// Watches Shadow `i`, playing its sound through `audio`.
@@ -266,4 +285,19 @@ pub fn votes(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey) -> Option<R
         }
     }
     cast
+}
+
+/// What every Shadow Game here has shown, by Player.
+struct Seeing(Vec<(PlayerKey, Seen)>);
+
+impl Judge for Seeing {
+    fn has(&self, player: &PlayerKey, pid: u32) -> bool {
+        self.0.iter().any(|(p, seen)| p == player && seen.owned.contains(&pid))
+    }
+
+    fn fainted(&self, player: &PlayerKey, pid: u32) -> bool {
+        self.0
+            .iter()
+            .any(|(p, seen)| p == player && seen.fainted.contains(&pid))
+    }
 }

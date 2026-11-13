@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, VecDeque};
 use pactlocke_emu::{Checkpoint, CoreAdapter, Frame, Keys};
 use pactlocke_game::Change;
 
+use crate::PlayedGame;
 use crate::stream::{FrameHash, HASH_EVERY, InputChunk};
 
 /// How far behind the newest frame received a Shadow plays.
@@ -28,6 +29,8 @@ pub const BUFFER_FRAMES: u64 = 30;
 pub const PREDICT_FRAMES: u64 = 120;
 /// How much faster than the Player a Shadow that is behind catches up.
 pub const CATCH_UP_SPEED: u64 = 20;
+/// How often (in real frames) a Shadow looks at the Player's Pokémon.
+const LOOK_EVERY: u64 = 30;
 /// How many of its own Run Checkpoints a Shadow keeps.
 const CHECKPOINTS_KEPT: usize = 8;
 /// Behind by more than this, a Shadow is catching up rather than watchable live.
@@ -49,8 +52,8 @@ pub enum ShadowState {
 }
 
 /// A copy of one Player's game, replayed from their input stream.
-pub struct ShadowGame<C: CoreAdapter> {
-    core: C,
+pub struct ShadowGame<G: PlayedGame> {
+    game: G,
     /// Which boot of the Player's game it copies.
     boot: u32,
     /// Frames run on the Player's real keys.
@@ -87,15 +90,16 @@ pub struct ShadowGame<C: CoreAdapter> {
     state: ShadowState,
     rewinds: u64,
     matched: u64,
+    seen: Seen,
 }
 
-impl<C: CoreAdapter> ShadowGame<C> {
+impl<G: PlayedGame> ShadowGame<G> {
     /// A Shadow of a game booted from power-on with its clock at `clock_ms`:
     /// `core` has the same ROM loaded and has run nothing.
-    pub fn power_on(mut core: C, clock_ms: i64) -> Self {
-        core.set_clock(clock_ms);
+    pub fn power_on(mut game: G, clock_ms: i64) -> Self {
+        game.core_mut().set_clock(clock_ms);
         Self {
-            core,
+            game,
             boot: 1,
             confirmed: 0,
             keys: VecDeque::new(),
@@ -116,6 +120,7 @@ impl<C: CoreAdapter> ShadowGame<C> {
             state: ShadowState::Matched,
             rewinds: 0,
             matched: 0,
+            seen: Seen::default(),
         }
     }
 
@@ -249,22 +254,27 @@ impl<C: CoreAdapter> ShadowGame<C> {
 
     /// Its picture now.
     pub fn video(&self) -> Frame {
-        self.core.frame()
+        self.game.core().frame()
     }
 
     /// The rate of the samples `drain_audio` gives.
     pub fn audio_sample_rate(&self) -> u32 {
-        self.core.audio_sample_rate()
+        self.game.core().audio_sample_rate()
     }
 
     /// Its sound since the last call, as interleaved stereo.
     pub fn drain_audio(&mut self, out: &mut Vec<i16>) {
-        self.core.drain_audio(out);
+        self.game.core_mut().drain_audio(out);
     }
 
-    /// The core under it, to read its memory.
-    pub fn core_mut(&mut self) -> &mut C {
-        &mut self.core
+    /// The game, to read through the game interface.
+    pub fn game_mut(&mut self) -> &mut G {
+        &mut self.game
+    }
+
+    /// What it has seen of the Player's Pokémon so far, on real frames only.
+    pub fn seen(&self) -> &Seen {
+        &self.seen
     }
 
     /// Runs the next frame on the Player's keys: the changes stamped at
@@ -273,30 +283,64 @@ impl<C: CoreAdapter> ShadowGame<C> {
         let boundary = self.confirmed;
         self.reach(boundary);
         if boundary.is_multiple_of(HASH_EVERY) {
-            let hash = FrameHash::of(&mut self.core, boundary);
+            let hash = FrameHash::of(self.game.core_mut(), boundary);
             self.ours.insert(boundary, hash);
             self.compare();
         }
         let keys = self.keys.pop_front().expect("a real frame to run");
-        self.core.run_frame(keys);
+        self.game.core_mut().run_frame(keys);
         self.last_keys = keys;
         self.confirmed += 1;
+        if self.confirmed.is_multiple_of(LOOK_EVERY) {
+            self.look();
+        }
     }
 
     /// Runs a frame past the newest received on a guess: the last keys held,
     /// and nothing stamped. A checkpoint is taken before the first guess.
     fn run_guess(&mut self) {
         if self.rollback.is_none() {
-            self.rollback = Some(self.core.checkpoint());
+            self.rollback = Some(self.game.core_mut().checkpoint());
         }
         let boundary = self.frame();
         if boundary.is_multiple_of(HASH_EVERY) {
-            let hash = FrameHash::of(&mut self.core, boundary);
+            let hash = FrameHash::of(self.game.core_mut(), boundary);
             self.guessed_hashes.insert(boundary, hash);
         }
         let keys = self.keys.back().copied().unwrap_or(self.last_keys);
-        self.core.run_frame(keys);
+        self.game.core_mut().run_frame(keys);
         self.guessed.push(keys);
+    }
+
+    /// Looks at the Player's Pokémon, as their own game would show them now.
+    fn look(&mut self) {
+        let in_battle = self.game.battle().is_some();
+        if !in_battle && !self.game.at_safe_overworld_point() {
+            return;
+        }
+        let dead_box = self.game.dead_box();
+        let party = self.game.party();
+        for pokemon in &party {
+            self.seen.owned.insert(pokemon.pid);
+            if pokemon.stats.is_some_and(|s| s.hp == 0) {
+                self.seen.fainted.insert(pokemon.pid);
+            }
+        }
+        for stored in self.game.pc() {
+            self.seen.owned.insert(stored.pokemon.pid);
+            if stored.box_number == dead_box {
+                self.seen.fainted.insert(stored.pokemon.pid);
+            }
+        }
+        self.seen.party = party
+            .iter()
+            .map(|p| SeenPokemon {
+                pid: p.pid,
+                species_name: self.game.species_name(p.species),
+                nickname: p.nickname.clone(),
+                hp: p.stats.map_or(0, |s| s.hp),
+            })
+            .collect();
     }
 
     /// Lands every change and takes every Run Checkpoint up to this boundary, in order.
@@ -306,21 +350,23 @@ impl<C: CoreAdapter> ShadowGame<C> {
         {
             let (frame, item) = self.items.pop_front().expect("just looked");
             match item {
-                Item::Change(Change::Write { addr, bytes }) => self.core.write(addr, &bytes),
-                Item::Change(Change::Patch { addr, bytes }) => {
-                    if !self.originals.contains_key(&addr) {
-                        let mut original = vec![0; bytes.len()];
-                        self.core.read(addr, &mut original);
-                        self.originals.insert(addr, original);
+                // Through the game, as the Player's Run engine landed it.
+                Item::Change(change) => {
+                    if let Change::Patch { addr, bytes } = &change {
+                        if !self.originals.contains_key(addr) {
+                            let mut original = vec![0; bytes.len()];
+                            self.game.core_mut().read(*addr, &mut original);
+                            self.originals.insert(*addr, original);
+                        }
+                        self.patches.insert(*addr, bytes.clone());
                     }
-                    self.core.patch_rom(addr, &bytes);
-                    self.patches.insert(addr, bytes);
+                    self.game.apply(&change);
                 }
                 Item::Checkpoint => {
                     self.checkpoints.push_back(Kept {
                         boot: self.boot,
                         frame,
-                        core: self.core.checkpoint(),
+                        core: self.game.core_mut().checkpoint(),
                         patches: self.patches.clone(),
                     });
                     while self.checkpoints.len() > CHECKPOINTS_KEPT {
@@ -384,15 +430,15 @@ impl<C: CoreAdapter> ShadowGame<C> {
             return ran;
         };
         for (addr, original) in &self.originals {
-            self.core.patch_rom(*addr, original);
+            self.game.core_mut().patch_rom(*addr, original);
         }
-        if self.core.restore(&kept.core).is_err() {
+        if self.game.core_mut().restore(&kept.core).is_err() {
             self.next_boot = None;
             self.state = ShadowState::Diverged { frame: self.confirmed };
             return ran;
         }
         for (addr, bytes) in &kept.patches {
-            self.core.patch_rom(*addr, bytes);
+            self.game.core_mut().patch_rom(*addr, bytes);
         }
         let next = self.next_boot.take().expect("a next boot");
         self.boot = next.boot;
@@ -403,6 +449,8 @@ impl<C: CoreAdapter> ShadowGame<C> {
         self.items.clear();
         self.theirs.clear();
         self.ours.clear();
+        // What it saw after the checkpoint is undone with it.
+        self.seen = Seen::default();
         let now = self.last_arrival_ms.unwrap_or(0);
         for chunk in &next.chunks {
             self.receive(chunk, now);
@@ -413,12 +461,12 @@ impl<C: CoreAdapter> ShadowGame<C> {
     /// Back to the checkpoint before the guesses, keeping the real frames received.
     fn drop_guesses(&mut self) {
         let checkpoint = self.rollback.take().expect("a checkpoint before the guesses");
-        if self.core.restore(&checkpoint).is_err() {
+        if self.game.core_mut().restore(&checkpoint).is_err() {
             self.state = ShadowState::Diverged { frame: self.confirmed };
             return;
         }
         for (addr, bytes) in &self.patches {
-            self.core.patch_rom(*addr, bytes);
+            self.game.core_mut().patch_rom(*addr, bytes);
         }
         self.guessed.clear();
         self.guessed_hashes.clear();
@@ -494,4 +542,25 @@ struct NextBoot {
     /// The boot and frame of the Run Checkpoint it began from.
     from: (u32, u64),
     chunks: Vec<InputChunk>,
+}
+
+/// What a Shadow Game has shown of its Player's Pokémon, on their real frames:
+/// how their own game had them, whatever their app claims.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Seen {
+    /// Every PID seen in their party or PC.
+    pub owned: std::collections::BTreeSet<u32>,
+    /// Every PID seen at 0 HP in their party, or in their Dead box.
+    pub fainted: std::collections::BTreeSet<u32>,
+    /// Their party at the last look.
+    pub party: Vec<SeenPokemon>,
+}
+
+/// A party Pokémon as a Shadow Game last showed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeenPokemon {
+    pub pid: u32,
+    pub species_name: String,
+    pub nickname: String,
+    pub hp: u16,
 }

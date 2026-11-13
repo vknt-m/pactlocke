@@ -285,7 +285,14 @@ fn only_run_state_goes_in_the_shared_log() {
         })
         .collect();
     assert!(events.iter().all(RunEvent::is_run_state), "{events:?}");
-    assert!(matches!(events[..], [RunEvent::Encounter { .. }]), "{events:?}");
+    // The Encounter, and how it ended (nothing caught): this Player's part of Route 1's Link.
+    assert!(
+        matches!(
+            events[..],
+            [RunEvent::Encounter { .. }, RunEvent::EncounterOver { pid: None, .. }]
+        ),
+        "{events:?}"
+    );
 }
 
 /// A locked three-Player log with an entry from each Player.

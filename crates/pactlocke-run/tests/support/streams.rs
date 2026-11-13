@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use pactlocke_emu::{CoreAdapter, Keys};
-use pactlocke_game::{Area, BattleKind, FakeCore, FakeGame};
+use pactlocke_game::{Area, BattleKind, FakeGame};
 use pactlocke_run::{
     InputChunk, Locked, LogBody, LogEntry, LogFollower, MemoryStorage, Outgoing, PlayerKey, RosterEntry, Ruleset,
     RunEngine, RunEvent, RunLog, RunningGame, ShadowGame, Signer, StreamHub, StreamMessage,
@@ -37,18 +37,37 @@ pub struct App {
     pub running: RunningGame<FakeGame>,
     outbox: Arc<Mutex<Vec<InputChunk>>>,
     pub hub: StreamHub,
-    pub shadows: BTreeMap<PlayerKey, ShadowGame<FakeCore>>,
+    pub shadows: BTreeMap<PlayerKey, ShadowGame<FakeGame>>,
     /// Frames this Player has played, so their keys vary.
     played: usize,
     /// This app's own copy of the Run log, checked entry by entry.
     pub log: RunLog,
     shared: Arc<Mutex<Vec<RunEvent>>>,
     follower: LogFollower,
+    links: pactlocke_run::LinkKeeper,
     /// Entries this app refused from the Host, and why.
     pub refused: Vec<String>,
 }
 
+/// Judges other Players' claims by what their Shadow Games here have shown.
+struct ByShadows<'a>(&'a BTreeMap<PlayerKey, ShadowGame<FakeGame>>);
+
+impl pactlocke_run::Judge for ByShadows<'_> {
+    fn has(&self, player: &PlayerKey, pid: u32) -> bool {
+        self.0.get(player).is_some_and(|s| s.seen().owned.contains(&pid))
+    }
+
+    fn fainted(&self, player: &PlayerKey, pid: u32) -> bool {
+        self.0.get(player).is_some_and(|s| s.seen().fainted.contains(&pid))
+    }
+}
+
 impl App {
+    /// The Links as this app works them out.
+    pub fn links(&self) -> Vec<pactlocke_run::Link> {
+        pactlocke_run::links(&self.log, &self.key, &ByShadows(&self.shadows))
+    }
+
     pub fn view_feed(&self) -> Vec<String> {
         self.running
             .engine()
@@ -59,7 +78,7 @@ impl App {
             .collect()
     }
 
-    pub fn shadow_of(&mut self, key: PlayerKey) -> &mut ShadowGame<FakeCore> {
+    pub fn shadow_of(&mut self, key: PlayerKey) -> &mut ShadowGame<FakeGame> {
         self.shadows.get_mut(&key).expect("a Shadow of that Player")
     }
 }
@@ -124,7 +143,7 @@ impl Table {
                 let shared = running.share();
                 let shadows = (0..names.len())
                     .filter(|&j| j != i)
-                    .map(|j| (key(j), ShadowGame::power_on(FakeCore::default(), START_MS)))
+                    .map(|j| (key(j), ShadowGame::power_on(FakeGame::default(), START_MS)))
                     .collect();
                 App {
                     name: (*name).into(),
@@ -137,6 +156,7 @@ impl Table {
                     log: RunLog::new(host),
                     shared,
                     follower: LogFollower::new(key(i)),
+                    links: pactlocke_run::LinkKeeper::new(key(i)),
                     refused: Vec::new(),
                 }
             })
@@ -316,7 +336,10 @@ impl Table {
             self.submit(0, &LogBody::Retry { call });
         }
         for app in &mut self.apps {
-            let commands = app.follower.follow(&app.log);
+            let mut commands = app.follower.follow(&app.log);
+            let judge = ByShadows(&app.shadows);
+            let links = pactlocke_run::links(&app.log, &app.key, &judge);
+            commands.extend(app.links.keep(&app.log, &links));
             for command in commands {
                 app.running.commands().send(command).unwrap();
             }
@@ -362,20 +385,61 @@ impl Table {
         self.apps[i].running.game_mut()
     }
 
+    /// Something happens in Player `i`'s game: in their game, and in every
+    /// Shadow Game of it, which replays the same game (the fake's state isn't
+    /// driven by keys, so the test sets it in each copy).
+    pub fn happens(&mut self, i: usize, change: impl Fn(&mut FakeGame)) {
+        change(self.apps[i].running.game_mut());
+        let key = self.apps[i].key;
+        for app in &mut self.apps {
+            if let Some(shadow) = app.shadows.get_mut(&key) {
+                change(shadow.game_mut());
+            }
+        }
+    }
+
     pub fn walks_into(&mut self, i: usize, area: Area) {
-        self.game(i).area = Some(area);
+        self.happens(i, |g| g.area = Some(area.clone()));
         self.plays(i, 10);
     }
 
     pub fn meets_wild(&mut self, i: usize, species: u16) {
-        let game = self.game(i);
-        game.opponent_party = vec![wild_pokemon(species)];
-        game.battle = Some(battle(BattleKind::Wild, species));
+        self.happens(i, |g| {
+            g.opponent_party = vec![wild_pokemon(species)];
+            g.battle = Some(battle(BattleKind::Wild, species));
+        });
+        self.plays(i, 10);
+    }
+
+    /// A trainer battle with the Player's first party Pokémon out.
+    pub fn meets_trainer(&mut self, i: usize, species: u16) {
+        self.happens(i, |g| {
+            g.opponent_party = vec![wild_pokemon(species)];
+            // The battle puts the first party Pokémon out, in position 0.
+            g.battle = Some(battle(BattleKind::Trainer, species));
+        });
+        self.plays(i, 10);
+    }
+
+    /// The wild Pokémon is caught and joins the party, then the battle ends.
+    pub fn catches(&mut self, i: usize, species: u16, pid: u32) {
+        self.happens(i, |g| g.party.push(super::party_pokemon(species, pid, "")));
+        self.plays(i, 10);
+        self.leaves_battle(i);
+    }
+
+    /// The party Pokémon with this PID faints.
+    pub fn faints(&mut self, i: usize, pid: u32) {
+        self.happens(i, |g| {
+            if let Some(p) = g.party.iter_mut().find(|p| p.pid == pid) {
+                p.stats.as_mut().expect("a party Pokémon").hp = 0;
+            }
+        });
         self.plays(i, 10);
     }
 
     pub fn leaves_battle(&mut self, i: usize) {
-        self.game(i).battle = None;
+        self.happens(i, |g| g.battle = None);
         self.plays(i, 10);
     }
 

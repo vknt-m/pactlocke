@@ -11,6 +11,7 @@
 mod audio;
 mod coop;
 mod data_dir;
+mod links_panel;
 mod lobby_ui;
 mod rom_report;
 mod run_panel;
@@ -532,7 +533,7 @@ impl PactlockeApp {
     ) -> Result<Playing, String> {
         let name = engine.info().name.clone();
         let rom: Arc<[u8]> = rom.into();
-        let mut running = RunningGame::boot(ProfileGame::new(profile, rom.clone(), core), engine, clock_ms)
+        let mut running = RunningGame::boot(ProfileGame::new(profile.clone(), rom.clone(), core), engine, clock_ms)
             .map_err(|e| format!("The Run's game couldn't be booted: {e}"))?;
         let view = running.view();
         let commands = running.commands();
@@ -544,7 +545,7 @@ impl PactlockeApp {
                     .public_key()
                     .ok_or("This install has no network key, so the Run can't be shared.")?;
                 let outbox = running.stream_as(me);
-                Some(spectate::Spectate::new(me, locked, &rom, outbox, &commands)?)
+                Some(spectate::Spectate::new(me, locked, &rom, &profile, outbox, &commands)?)
             }
             None => None,
         };
@@ -972,11 +973,48 @@ impl eframe::App for PactlockeApp {
                             ui.separator();
                         }
                         let view = view.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        let mut links_tab = None;
                         if let (Some(spectate), Some(log)) = (&playing.spectate, self.lobbies.log()) {
                             votes = spectate::votes(ui, log, spectate.me());
                             ui.separator();
+                            let links_on = log.locked().is_some_and(|l| l.ruleset.links);
+                            let links = if links_on { spectate.links(log) } else { Vec::new() };
+                            let players: Vec<(pactlocke_run::PlayerKey, String)> = log
+                                .locked()
+                                .map(|l| l.roster.iter().map(|p| (p.key, p.name.clone())).collect())
+                                .unwrap_or_default();
+                            let statuses: Vec<_> = spectate.shadows.iter().map(|s| (s.key, s.status())).collect();
+                            let mut parties = Vec::new();
+                            for (key, name) in &players {
+                                let pokemon = if *key == spectate.me() {
+                                    &view.party[..]
+                                } else {
+                                    statuses
+                                        .iter()
+                                        .find(|(k, _)| k == key)
+                                        .map_or(&[][..], |(_, status)| &status.seen.party[..])
+                                };
+                                parties.push(links_panel::Party {
+                                    player: *key,
+                                    name,
+                                    pokemon,
+                                });
+                            }
+                            links_panel::parties(ui, &parties, &links);
+                            ui.separator();
+                            if links_on {
+                                links_tab = Some((links, players, spectate.me()));
+                            }
                         }
-                        if let Some(command) = run_panel::show(ui, &view, playing.spectate.is_none()) {
+                        let mut show_links = links_tab.as_ref().map(|(links, players, me)| {
+                            (links.len(), move |ui: &mut egui::Ui| {
+                                links_panel::tab(ui, links, players, me)
+                            })
+                        });
+                        let tab = show_links
+                            .as_mut()
+                            .map(|(count, show)| (*count, show as &mut run_panel::LinksTab<'_>));
+                        if let Some(command) = run_panel::show(ui, &view, playing.spectate.is_none(), tab) {
                             // The emulator thread only stops when the Run is closed.
                             let _ = commands.send(command);
                         }

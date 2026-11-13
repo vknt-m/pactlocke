@@ -454,11 +454,11 @@ impl RunLog {
         (everyone && self.retries_left() > 0).then_some(vote.call)
     }
 
-    /// The tallies, recomputed from the entries. A Retry voids each
-    /// Player's entries after their part of its Run Checkpoint, up to the
-    /// entry that says their game went back (any sent from before it on the
-    /// way are void too).
-    pub fn tallies(&self) -> Tallies {
+    /// Every Player's events that stand, in log order, with their authors. A
+    /// Retry voids each Player's entries after their part of its Run
+    /// Checkpoint, up to the entry that says their game went back (any sent
+    /// from before it on the way are void too).
+    pub fn standing_events(&self) -> Vec<(PlayerKey, RunEvent)> {
         let mut standing: Vec<(usize, PlayerKey, RunEvent)> = Vec::new();
         let mut going_back: BTreeSet<PlayerKey> = BTreeSet::new();
         let mut calls: Option<Vec<Call>> = None;
@@ -479,8 +479,13 @@ impl RunLog {
                 _ => {}
             }
         }
+        standing.into_iter().map(|(_, author, event)| (author, event)).collect()
+    }
+
+    /// The tallies, recomputed from the events that stand.
+    pub fn tallies(&self) -> Tallies {
         let mut tallies = Tallies::default();
-        for (_, author, event) in standing {
+        for (author, event) in self.standing_events() {
             let counter = match event {
                 RunEvent::Encounter { .. } | RunEvent::StaticEncounter { .. } => &mut tallies.encounters,
                 RunEvent::Caught { .. } => &mut tallies.catches,
