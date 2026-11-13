@@ -86,6 +86,10 @@ _Avoid_: Fainted (fainting is temporary in the game itself), released
 A Ruleset rule broken in a way the app could not stop. It is shown to every Player, flagged in red in the live feed.
 _Avoid_: Strike, cheat (cheating is tampering with the game, not breaking a rule)
 
+**Lobby**:
+Where the Players of a Run with friends gather: the Host invites them, sets the Ruleset, and everyone says Ready before the lock. It stays open for the whole Run, as the Players' connection to each other.
+_Avoid_: Room, session
+
 **Host**:
 The Player whose app puts the Run's events in order. Hosting passes to the next Player who joined if the Host leaves. The Host cannot change or invent other Players' events.
 _Avoid_: Server, admin, owner
