@@ -106,8 +106,12 @@ _Avoid_: Save (a save belongs to one Player), savestate (that is the emulator me
 A Player's game as it stood when the app booted it, kept only to rebuild that game after a crash. It is never a Retry point.
 _Avoid_: Run Checkpoint (that is taken at in-game saves and Sync Gates)
 
+**Solo copy**:
+A new solo Run made from one Player's game in a Run with friends, exactly where they left it, for carrying on alone. The Run with friends stays as it was.
+_Avoid_: Fork, split, leaving the Run
+
 **Suspend slot**:
-The one place a Player's game is kept by Suspend and quit, so the Run resumes exactly there. It is used up on resume.
+The one place a Player's game is kept so the Run resumes exactly there. Suspend and quit fills it, and in a Run with friends it is kept up to date all along, so leaving in any way resumes where the Player stopped. It is used up on resume.
 _Avoid_: Save state, quicksave
 
 **Retry**:
