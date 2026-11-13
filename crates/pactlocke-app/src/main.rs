@@ -832,6 +832,7 @@ impl PactlockeApp {
                 path: draft.path.clone(),
                 capabilities: capabilities.clone(),
                 level_caps: draft.level_caps.clone(),
+                sync_gates: draft.profile.sync_gate_names(),
             };
             self.lobbies.host(run, rom);
             // The Ruleset is set in the lobby from here, for everyone.
@@ -975,6 +976,23 @@ impl eframe::App for PactlockeApp {
                         let view = view.lock().unwrap_or_else(|e| e.into_inner()).clone();
                         let mut links_tab = None;
                         if let (Some(spectate), Some(log)) = (&playing.spectate, self.lobbies.log()) {
+                            if let Some(check) = log.ready_check() {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.strong(format!(
+                                        "Next Sync Gate: {} · {} of {} ready",
+                                        check.gate,
+                                        check.ready(),
+                                        check.players.len()
+                                    ));
+                                });
+                                ui.horizontal_wrapped(|ui| {
+                                    for (name, ready) in &check.players {
+                                        let state = if *ready { "Ready" } else { "Not yet" };
+                                        ui.label(format!("{name}: {state}"));
+                                    }
+                                });
+                                ui.separator();
+                            }
                             votes = spectate::votes(ui, log, spectate.me());
                             ui.separator();
                             let links_on = log.locked().is_some_and(|l| l.ruleset.links);

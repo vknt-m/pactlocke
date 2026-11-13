@@ -151,6 +151,16 @@ impl FeedEntry {
             RunEvent::Checkpoint { .. } | RunEvent::Closed | RunEvent::RetryVote { .. } => return None,
             // The catch or the way it ended is in the feed already.
             RunEvent::EncounterOver { .. } => return None,
+            RunEvent::GateReady { gate } => (
+                FeedKind::Run,
+                format!("Ready at {gate}: waiting for your partners to be ready"),
+            ),
+            RunEvent::GateRefused { gate, reason } => (FeedKind::Block, format!("Can't ready up at {gate}: {reason}")),
+            RunEvent::GateOpened { gate } => (FeedKind::Run, format!("Everyone is Ready at {gate}: the battle is on")),
+            RunEvent::GateFailed { gate, reason } => (
+                FeedKind::Problem,
+                format!("The Sync Gate at {gate} doesn't work in this game: {reason}"),
+            ),
             RunEvent::Skipped { source } => (
                 FeedKind::Block,
                 format!("You skipped {}: its Link is broken for everyone", source.name),

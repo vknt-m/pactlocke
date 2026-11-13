@@ -36,6 +36,11 @@ impl Preset {
     }
 
     /// The preset's Ruleset, with `level_caps` (the game's defaults) where it uses them.
+    /// Whether it ticks every Sync Gate, once there is a second Player.
+    pub fn ticks_every_gate(self) -> bool {
+        matches!(self, Preset::SoulLink | Preset::Hardcore)
+    }
+
     pub fn ruleset(self, level_caps: &[LevelCap]) -> Ruleset {
         let classic = Ruleset {
             first_encounter: true,
@@ -58,7 +63,8 @@ impl Preset {
 }
 
 /// Every Ruleset rule a Player can choose.
-const CHOOSABLE: [Rule; 11] = [
+const CHOOSABLE: [Rule; 12] = [
+    Rule::SyncGates,
     Rule::FirstEncounter,
     Rule::DupesClause,
     Rule::Gifts,
@@ -78,6 +84,7 @@ pub fn unavailable(rule: Rule, ruleset: &Ruleset, capabilities: &CapabilityRepor
     let needs = match rule {
         Rule::DupesClause | Rule::Statics if !ruleset.first_encounter => Some("it needs First Encounter on"),
         Rule::Links if players < 2 => Some("a solo Run has no Links"),
+        Rule::SyncGates if players < 2 => Some("a solo Run has no Sync Gates"),
         Rule::Links if !ruleset.faint_is_dead => Some("it needs Faint = Dead on"),
         _ => None,
     };
@@ -121,7 +128,7 @@ fn turn_off(ruleset: &mut Ruleset, rule: Rule) {
         Rule::MustNickname => ruleset.must_nickname = false,
         Rule::SetMode => ruleset.set_mode = false,
         Rule::TypeClause => ruleset.type_clause = false,
-        Rule::SyncGates => {}
+        Rule::SyncGates => ruleset.sync_gates.clear(),
     }
 }
 
@@ -256,6 +263,13 @@ pub struct RunSetup {
     game_sha1: String,
     capabilities: CapabilityReport,
     level_caps: Vec<LevelCap>,
+    /// Every battle the Game Profile can make a Sync Gate, in order.
+    sync_gates: Vec<String>,
+    /// The gates the Ruleset has whenever there are two Players or more: the
+    /// preset's, or the Host's own choice since. A solo Run has none, so they
+    /// come back when a second Player joins.
+    gates_wanted: Vec<String>,
+    preset: Preset,
     ruleset: Ruleset,
     version: u64,
     players: Vec<SetupPlayer>,
@@ -280,6 +294,9 @@ impl RunSetup {
             game_sha1: game_sha1.to_owned(),
             capabilities,
             level_caps,
+            sync_gates: Vec::new(),
+            gates_wanted: Vec::new(),
+            preset,
             ruleset: Ruleset::default(),
             version: 0,
             players: vec![host],
@@ -290,10 +307,34 @@ impl RunSetup {
         setup
     }
 
+    /// The battles this ROM's Game Profile can make Sync Gates. Soul Link
+    /// and Hardcore tick them all once there is a second Player.
+    pub fn set_sync_gates(&mut self, gates: Vec<String>) {
+        self.sync_gates = gates;
+        if self.preset.ticks_every_gate() {
+            self.gates_wanted = self.sync_gates.clone();
+            let wanted = self.gates_wanted.clone();
+            // Only the gates change; a locked Run keeps its Ruleset.
+            let _ = self.edit(|r| r.sync_gates = wanted);
+        }
+    }
+
+    /// Every battle this ROM can make a Sync Gate, in order.
+    pub fn sync_gates(&self) -> &[String] {
+        &self.sync_gates
+    }
+
     /// Starts the Ruleset again from a preset.
     pub fn choose(&mut self, preset: Preset) -> Result<(), SetupError> {
-        let ruleset = preset.ruleset(&self.level_caps);
-        self.edit(|r| *r = ruleset)
+        let mut ruleset = preset.ruleset(&self.level_caps);
+        if preset.ticks_every_gate() {
+            ruleset.sync_gates = self.sync_gates.clone();
+        }
+        let wanted = ruleset.sync_gates.clone();
+        self.edit(|r| *r = ruleset)?;
+        self.preset = preset;
+        self.gates_wanted = wanted;
+        Ok(())
     }
 
     /// Changes the Ruleset. Rules that can't be chosen are turned off, and
@@ -302,7 +343,11 @@ impl RunSetup {
         if self.locked.is_some() {
             return Err(SetupError::Locked);
         }
+        let gates_before = self.ruleset.sync_gates.clone();
         change(&mut self.ruleset);
+        if self.ruleset.sync_gates != gates_before && self.players.len() > 1 {
+            self.gates_wanted = self.ruleset.sync_gates.clone();
+        }
         settle(&mut self.ruleset, &self.capabilities, self.players.len());
         self.changed();
         Ok(())
@@ -323,6 +368,10 @@ impl RunSetup {
             ready_for: None,
             ..player
         });
+        if self.ruleset.sync_gates.is_empty() {
+            self.ruleset.sync_gates = self.gates_wanted.clone();
+            settle(&mut self.ruleset, &self.capabilities, self.players.len());
+        }
         self.changed();
         Ok(())
     }

@@ -40,6 +40,14 @@ pub enum RunEvent {
     /// Links: another Player missed, skipped or lost this source's
     /// Encounter, so it is closed here too (`why` says whose).
     SourceClosed { source: SourceRef, why: String },
+    /// The Player came to this Sync Gate and is Ready there; it stays so.
+    GateReady { gate: String },
+    /// The Player came to this Sync Gate but can't ready up, and why.
+    GateRefused { gate: String, reason: String },
+    /// Every Player is Ready at this Sync Gate: its battle runs here now.
+    GateOpened { gate: String },
+    /// A Sync Gate couldn't be held or let go in this game.
+    GateFailed { gate: String, reason: String },
     /// A Player's vote on a Retry back to the `call`th Run Checkpoint: the
     /// first Yes starts the vote, and the first No ends it.
     RetryVote { call: u64, yes: bool },
@@ -239,8 +247,10 @@ pub enum CheckpointReason {
     Boot,
     /// The Player saved in-game.
     InGameSave,
-    /// Asked for at a moment that needs one, such as a Sync Gate.
+    /// Asked for at a moment that needs one.
     Asked,
+    /// Every Player was Ready at a Sync Gate.
+    SyncGate,
     /// Another Player's Run Checkpoint, the `call`th in the Run log (from
     /// 1): every Player's game is captured with it.
     Joined { call: u64 },
@@ -264,6 +274,7 @@ impl RunEvent {
                 | RunEvent::Retried { .. }
                 | RunEvent::EncounterOver { .. }
                 | RunEvent::Skipped { .. }
+                | RunEvent::GateReady { .. }
         ) || self.is_run_checkpoint()
             || self.is_violation()
     }

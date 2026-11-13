@@ -8,6 +8,7 @@ use crate::game::{
     Actions, Badges, Battle, BattleKind, Battler, Change, Game, GameError, Memory, PartyStats, Pokemon, ScriptContext,
     ScriptStatus, Side, StoredPokemon,
 };
+use crate::profile::HOLD_SCRIPT_LEN;
 use crate::profile::{GameProfile, Method, PatchSite, ROM_BASE};
 use crate::{Area, Source, text};
 
@@ -679,6 +680,81 @@ impl<M: Memory> Game for ProfileGame<M> {
             bytes: vec![(current & !def.mask) | setting],
         }])
     }
+
+    fn sync_gates(&mut self) -> Vec<String> {
+        self.profile.sync_gate_names()
+    }
+
+    fn close_gate(&mut self, gate: &str) -> Actions {
+        let gates = self
+            .profile
+            .sync_gates
+            .as_ref()
+            .ok_or(GameError::NoMethod("Sync Gates"))?;
+        let (index, def) = gates
+            .gates
+            .iter()
+            .enumerate()
+            .find(|(_, g)| g.name == gate)
+            .ok_or_else(|| GameError::NoSuchGate(gate.to_owned()))?;
+        let script_at = gates.hold_script(index);
+        let mut script = vec![0x0F, 0x00]; // loadword 0, the message
+        script.extend_from_slice(&gates.hold.to_le_bytes());
+        script.extend_from_slice(&[0x09, 0x04]); // callstd MSGBOX_DEFAULT
+        script.extend_from_slice(&[0x6B, 0x02]); // releaseall, end
+        let mut changes = vec![
+            Change::Patch {
+                addr: gates.hold,
+                bytes: hold_message(),
+            },
+            Change::Patch {
+                addr: script_at,
+                bytes: script,
+            },
+        ];
+        for site in &def.sites {
+            let mut goto = vec![0x05]; // goto the hold script
+            goto.extend_from_slice(&script_at.to_le_bytes());
+            changes.push(Change::Patch {
+                addr: site.at,
+                bytes: goto,
+            });
+        }
+        Ok(changes)
+    }
+
+    fn open_gate(&mut self, gate: &str) -> Actions {
+        let gates = self
+            .profile
+            .sync_gates
+            .as_ref()
+            .ok_or(GameError::NoMethod("Sync Gates"))?;
+        let def = gates
+            .gates
+            .iter()
+            .find(|g| g.name == gate)
+            .ok_or_else(|| GameError::NoSuchGate(gate.to_owned()))?;
+        Ok(def
+            .sites
+            .iter()
+            .map(|site| Change::Patch {
+                addr: site.at,
+                bytes: site.expect.0.clone(),
+            })
+            .collect())
+    }
+
+    fn at_gate(&mut self) -> Option<String> {
+        let first = self.profile.sync_gates.as_ref()?.hold_script(0);
+        let context = self.script();
+        let mut places = self.script_calls();
+        places.extend(context.position);
+        let index = places
+            .into_iter()
+            .find_map(|at| Some(at.checked_sub(first)? as usize / HOLD_SCRIPT_LEN))?;
+        let gates = self.profile.sync_gates.as_ref()?;
+        gates.gates.get(index).map(|g| g.name.clone())
+    }
 }
 
 /// Where must nickname's key filter looks, in battle and on the overworld.
@@ -689,4 +765,14 @@ struct NicknameFilter {
     battle_communication: u32,
     field_yes_no: Vec<u32>,
     question: Option<String>,
+}
+
+/// "Waiting for your partners / to be ready..." in the game's characters.
+fn hold_message() -> Vec<u8> {
+    let line = |text: &str| crate::text::encode(text, text.chars().count()).expect("the hold message is plain text");
+    let mut message = line("Waiting for your partners");
+    message.push(0xFE); // a new line
+    message.extend(line("to be ready..."));
+    message.push(crate::text::END);
+    message
 }

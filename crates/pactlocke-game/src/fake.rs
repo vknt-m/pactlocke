@@ -26,6 +26,8 @@ const RELEASE_FROM_PARTY: u32 = 10;
 const RELEASE_FROM_PC: u32 = 11;
 const PC_NICKNAME: u32 = 12;
 const NICKNAME_YES: u32 = 13;
+const CLOSE_GATE: u32 = 14;
+const OPEN_GATE: u32 = 15;
 
 const PC_BOXES: u8 = 14;
 const PC_BOX_SLOTS: u8 = 30;
@@ -83,6 +85,12 @@ pub struct FakeGame {
     /// Battler positions given a perish count of zero; the game faints them
     /// at the end of the turn.
     pub perishing: Vec<u8>,
+    /// The battles the profile lists as possible Sync Gates.
+    pub sync_gates: Vec<String>,
+    /// The gates held now.
+    pub gates_closed: std::collections::BTreeSet<String>,
+    /// The gate whose hold script is running, as the test sets it.
+    pub at_gate: Option<String>,
 
     /// The emulator under the fake: driven by keys and changed by every
     /// change applied, so a copy fed the same input stream matches it.
@@ -127,6 +135,9 @@ impl Default for FakeGame {
             bag_locked: false,
             nickname_cursor_kept: 0,
             perishing: Vec::new(),
+            sync_gates: Vec::new(),
+            gates_closed: std::collections::BTreeSet::new(),
+            at_gate: None,
             core: FakeCore::default(),
         }
     }
@@ -162,6 +173,12 @@ impl FakeGame {
                 BAN_WILD_ITEMS => self.wild_items_banned = bytes[0] != 0,
                 LOCK_BAG => self.bag_locked = bytes[0] != 0,
                 FAINT_ACTIVE => self.perishing.push(bytes[0]),
+                CLOSE_GATE => {
+                    self.gates_closed.insert(String::from_utf8_lossy(bytes).into_owned());
+                }
+                OPEN_GATE => {
+                    self.gates_closed.remove(&*String::from_utf8_lossy(bytes));
+                }
                 FAINT_BENCHED => {
                     if let Some(stats) = self.party[usize::from(bytes[0])].stats.as_mut() {
                         stats.hp = 0;
@@ -431,5 +448,27 @@ impl Game for FakeGame {
             return Err(GameError::UnknownOption(format!("{name} = {value}")));
         }
         Ok(vec![fake_write(SET_OPTION, format!("{name}={value}").into_bytes())])
+    }
+
+    fn sync_gates(&mut self) -> Vec<String> {
+        self.sync_gates.clone()
+    }
+
+    fn close_gate(&mut self, gate: &str) -> Actions {
+        if !self.sync_gates.iter().any(|g| g == gate) {
+            return Err(GameError::NoSuchGate(gate.to_owned()));
+        }
+        Ok(vec![fake_patch(CLOSE_GATE, gate.as_bytes().to_vec())])
+    }
+
+    fn open_gate(&mut self, gate: &str) -> Actions {
+        if !self.sync_gates.iter().any(|g| g == gate) {
+            return Err(GameError::NoSuchGate(gate.to_owned()));
+        }
+        Ok(vec![fake_patch(OPEN_GATE, gate.as_bytes().to_vec())])
+    }
+
+    fn at_gate(&mut self) -> Option<String> {
+        self.at_gate.clone()
     }
 }

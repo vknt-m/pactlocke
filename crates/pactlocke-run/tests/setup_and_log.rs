@@ -295,6 +295,45 @@ fn only_run_state_goes_in_the_shared_log() {
     );
 }
 
+#[test]
+fn soul_link_and_hardcore_tick_every_gate_once_a_second_player_joins_and_the_host_can_untick_any() {
+    let gates: Vec<String> = ["Brock", "Misty", "Champion"].map(String::from).to_vec();
+    let mut coop = Coop::host("Red", CapabilityReport::everything_enforceable(), Preset::SoulLink);
+    coop.setup.set_sync_gates(gates.clone());
+    assert!(
+        coop.setup.ruleset().sync_gates.is_empty(),
+        "a solo Run has no Sync Gates"
+    );
+    assert_eq!(
+        coop.setup.unavailable(Rule::SyncGates),
+        Some("a solo Run has no Sync Gates".to_owned())
+    );
+
+    coop.join("Blue").unwrap();
+    assert_eq!(coop.setup.ruleset().sync_gates, gates, "every gate, once there are two");
+    coop.setup.edit(|r| r.sync_gates.retain(|g| g != "Misty")).unwrap();
+    assert_eq!(coop.setup.ruleset().sync_gates, ["Brock", "Champion"]);
+
+    // Blue leaves and comes back: the Host's choice comes back with them.
+    let blue = coop.players[1].key();
+    coop.setup.leave(&blue);
+    assert!(coop.setup.ruleset().sync_gates.is_empty());
+    coop.setup
+        .join(pactlocke_run::SetupPlayer {
+            key: blue,
+            name: "Blue".into(),
+            check: coop.players[1].check.clone(),
+            ready_for: None,
+        })
+        .unwrap();
+    assert_eq!(coop.setup.ruleset().sync_gates, ["Brock", "Champion"]);
+
+    coop.setup.choose(Preset::ClassicNuzlocke).unwrap();
+    assert!(coop.setup.ruleset().sync_gates.is_empty(), "Classic Nuzlocke has none");
+    coop.setup.choose(Preset::Hardcore).unwrap();
+    assert_eq!(coop.setup.ruleset().sync_gates, gates);
+}
+
 /// A locked three-Player log with an entry from each Player.
 fn three_player_log() -> Coop {
     let mut coop = Coop::with(&["Red", "Blue", "Green"]);

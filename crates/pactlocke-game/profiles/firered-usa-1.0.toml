@@ -485,3 +485,67 @@ key = "mewtwo"
 name = "Mewtwo in Cerulean Cave"
 kind = "static"
 at = [0x0816251D]
+
+# Sync Gates: every gym leader, Elite Four member and the Champion, each by its
+# trainerbattle instruction(s), found by `cargo dev scan` and checked against the
+# ROM (the Champion has one per starter; the post-game rematches aren't gates).
+# A closed gate's first 5 bytes become a goto to its hold script, written with
+# the hold message into free ROM at `hold` (0xFF in a clean ROM).
+[sync_gates]
+hold = 0x08F00000
+
+[[sync_gates.gates]]
+name = "Brock"
+sites = [{ at = 0x0816A5A0, expect = "5C 01 9E 01 00" }]
+
+[[sync_gates.gates]]
+name = "Misty"
+sites = [{ at = 0x0816AAAE, expect = "5C 01 9F 01 00" }]
+
+[[sync_gates.gates]]
+name = "Lt. Surge"
+sites = [{ at = 0x0816B957, expect = "5C 01 A0 01 00" }]
+
+[[sync_gates.gates]]
+name = "Erika"
+sites = [{ at = 0x0816D06E, expect = "5C 01 A1 01 00" }]
+
+[[sync_gates.gates]]
+name = "Koga"
+sites = [{ at = 0x0816D55B, expect = "5C 01 A2 01 00" }]
+
+[[sync_gates.gates]]
+name = "Sabrina"
+sites = [{ at = 0x0816EDE5, expect = "5C 01 A4 01 00" }]
+
+[[sync_gates.gates]]
+name = "Blaine"
+sites = [{ at = 0x0816D9E1, expect = "5C 01 A3 01 00" }]
+
+[[sync_gates.gates]]
+name = "Giovanni"
+sites = [{ at = 0x08169ED7, expect = "5C 01 5E 01 00" }]
+
+[[sync_gates.gates]]
+name = "Lorelei"
+sites = [{ at = 0x08162653, expect = "5C 03 9A 01 00" }]
+
+[[sync_gates.gates]]
+name = "Bruno"
+sites = [{ at = 0x08162763, expect = "5C 03 9B 01 00" }]
+
+[[sync_gates.gates]]
+name = "Agatha"
+sites = [{ at = 0x081628FB, expect = "5C 03 9C 01 00" }]
+
+[[sync_gates.gates]]
+name = "Lance"
+sites = [{ at = 0x08162A8B, expect = "5C 03 9D 01 00" }]
+
+[[sync_gates.gates]]
+name = "Champion"
+sites = [
+    { at = 0x08162CC5, expect = "5C 03 B6 01 00" },
+    { at = 0x08162CD0, expect = "5C 03 B7 01 00" },
+    { at = 0x08162CDB, expect = "5C 03 B8 01 00" },
+]

@@ -18,6 +18,11 @@ use pactlocke_run::{
 
 use super::{CHARMANDER, PIDGEY, RATTATA, START_MS, TestClock, battle, new_solo_run, wild_pokemon};
 
+/// The battles the fake game's profile lists as Sync Gates.
+pub fn gate_names() -> Vec<String> {
+    vec!["Brock".into(), "Misty".into()]
+}
+
 /// About one GBA frame.
 pub const FRAME_MS: i64 = 17;
 
@@ -133,6 +138,7 @@ impl Table {
                         id: 0x58,
                         name: "Pallet Town".into(),
                     }),
+                    sync_gates: gate_names(),
                     ..FakeGame::default()
                 };
                 for (species, name) in [(PIDGEY, "PIDGEY"), (RATTATA, "RATTATA"), (CHARMANDER, "CHARMANDER")] {
@@ -143,7 +149,13 @@ impl Table {
                 let shared = running.share();
                 let shadows = (0..names.len())
                     .filter(|&j| j != i)
-                    .map(|j| (key(j), ShadowGame::power_on(FakeGame::default(), START_MS)))
+                    .map(|j| {
+                        let game = FakeGame {
+                            sync_gates: gate_names(),
+                            ..FakeGame::default()
+                        };
+                        (key(j), ShadowGame::power_on(game, START_MS))
+                    })
                     .collect();
                 App {
                     name: (*name).into(),
@@ -436,6 +448,23 @@ impl Table {
             }
         });
         self.plays(i, 10);
+    }
+
+    /// Player `i` talks to the gym leader at `gate`. A held gate runs its
+    /// hold script ("Waiting for your partners…") and lets them go; a gate
+    /// let go starts the battle. Says whether the battle started.
+    pub fn talks_to(&mut self, i: usize, gate: &str) -> bool {
+        if self.game(i).gates_closed.contains(gate) {
+            let gate = gate.to_owned();
+            self.happens(i, move |g| g.at_gate = Some(gate.clone()));
+            self.plays(i, 10);
+            self.happens(i, |g| g.at_gate = None);
+            self.plays(i, 10);
+            false
+        } else {
+            self.meets_trainer(i, super::CHARMANDER);
+            true
+        }
     }
 
     pub fn leaves_battle(&mut self, i: usize) {

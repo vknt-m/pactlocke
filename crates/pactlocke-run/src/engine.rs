@@ -1,4 +1,5 @@
 mod caps;
+mod gates;
 mod gifts;
 mod nicknames_and_types;
 mod no_items_and_set_mode;
@@ -106,6 +107,10 @@ pub struct RunEngine {
     retries_taken: u8,
     /// Handed its Run over to the engine after a Retry: it records nothing more.
     retired: bool,
+    /// The Sync Gates held in this boot.
+    gates_held: BTreeSet<String>,
+    /// The gate whose hold script was running at the last look.
+    at_gate: Option<String>,
     /// The newest events recorded, for a Retry to hand on without waiting for storage.
     recorded_since: VecDeque<Recorded>,
 }
@@ -318,7 +323,12 @@ impl RunEngine {
         self.record(RunEvent::OutOfSync { player, frame });
     }
 
-    /// Asks for a Run Checkpoint at this frame boundary, such as at a Sync Gate.
+    /// Asks for a Run Checkpoint for this reason at this frame boundary.
+    pub(crate) fn want_checkpoint_for(&mut self, reason: CheckpointReason) {
+        self.checkpoints_due.push_back(reason);
+    }
+
+    /// Asks for a Run Checkpoint at this frame boundary.
     pub fn want_checkpoint(&mut self) {
         self.checkpoints_due.push_back(CheckpointReason::Asked);
     }
@@ -416,6 +426,8 @@ impl RunEngine {
             latest_run_checkpoint: None,
             retries_taken: 0,
             retired: false,
+            gates_held: BTreeSet::new(),
+            at_gate: None,
             recorded_since: VecDeque::new(),
         }
     }
@@ -476,6 +488,7 @@ impl RunEngine {
         // Badges are won and the League's flags set on the overworld; before
         // a game is loaded they read as garbage.
         if game.at_safe_overworld_point() {
+            self.keep_gates_held(game);
             self.keep_level_cap(game);
             self.keep_items_banned(game);
             self.keep_set_mode(game);
@@ -511,6 +524,9 @@ impl RunEngine {
 
         if battle.is_none() && game.at_safe_overworld_point() && game.script().status == ScriptStatus::Idle {
             self.release_the_declined(game);
+        }
+        if battle.is_none() {
+            self.watch_gates(game);
         }
 
         if self.rules.faint_is_dead() {

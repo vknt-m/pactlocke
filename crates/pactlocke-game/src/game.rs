@@ -128,6 +128,8 @@ impl Badges {
 pub enum GameError {
     /// The Game Profile has no method for this rule.
     NoMethod(&'static str),
+    /// The Game Profile lists no Sync Gate by this name.
+    NoSuchGate(String),
     NoSuchSlot(u8),
     NoSuchBox(u8),
     BoxFull(u8),
@@ -143,6 +145,7 @@ impl fmt::Display for GameError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoMethod(rule) => write!(f, "the Game Profile has no way to enforce {rule}"),
+            Self::NoSuchGate(name) => write!(f, "the Game Profile has no Sync Gate called {name}"),
             Self::NoSuchSlot(slot) => write!(f, "no Pokémon in party slot {slot}"),
             Self::NoSuchBox(number) => write!(f, "there is no box {number}"),
             Self::BoxFull(number) => write!(f, "box {number} is full"),
@@ -240,4 +243,18 @@ pub trait Game {
     fn force_set_mode(&mut self) -> Actions;
     /// Sets one of the game's options, such as a native option written back.
     fn set_option(&mut self, name: &str, value: &str) -> Actions;
+
+    // Sync Gates.
+
+    /// Every battle the Game Profile lists as a possible Sync Gate, by name, in order.
+    fn sync_gates(&mut self) -> Vec<String>;
+    /// Holds the gate: its battle's `trainerbattle` becomes a jump to a hold
+    /// script that says "Waiting for your partners to be ready..." and
+    /// lets the Player go.
+    fn close_gate(&mut self, gate: &str) -> Actions;
+    /// Lets the gate's real battle run again: the original bytes back.
+    fn open_gate(&mut self, gate: &str) -> Actions;
+    /// The gate whose hold script is running, if one is: the Player has
+    /// come to it while it is closed.
+    fn at_gate(&mut self) -> Option<String>;
 }

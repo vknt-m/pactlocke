@@ -21,8 +21,8 @@ pub use game::{
     ScriptStatus, Side, StoredPokemon,
 };
 pub use profile::{
-    Bit, Family, GameProfile, HexBytes, Layout, Method, OptionDef, PatchSite, ROM_BASE, RuleMethods, SCHEMA_VERSION,
-    SupportStatus, Symbols,
+    Bit, Family, GameProfile, GateDef, HexBytes, Layout, Method, OptionDef, PatchSite, ROM_BASE, RuleMethods,
+    SCHEMA_VERSION, SupportStatus, Symbols, SyncGates,
 };
 pub use profile_game::ProfileGame;
 pub use source::{Source, SourceDef, SourceKind};

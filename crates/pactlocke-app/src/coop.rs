@@ -25,6 +25,8 @@ pub struct HostRom {
     pub path: PathBuf,
     pub capabilities: CapabilityReport,
     pub level_caps: Vec<LevelCap>,
+    /// The battles its Game Profile can make Sync Gates.
+    pub sync_gates: Vec<String>,
 }
 
 /// The countdown is over: the Run to start, on this ROM.
@@ -96,7 +98,7 @@ impl HostCoop {
     pub fn new(key: [u8; 32], name: &str, run: &RunAdvert, rom: HostRom) -> Self {
         let signer = Signer::from_secret(key);
         let preset = Preset::ClassicNuzlocke;
-        let setup = RunSetup::new(
+        let mut setup = RunSetup::new(
             SetupPlayer {
                 key: signer.public(),
                 name: name.to_owned(),
@@ -110,6 +112,7 @@ impl HostCoop {
             rom.level_caps.clone(),
             preset,
         );
+        setup.set_sync_gates(rom.sync_gates);
         let mut coop = Self {
             log: RunLog::new(signer.public()),
             setup,
@@ -302,6 +305,31 @@ impl HostCoop {
         );
         if caps != ruleset.level_caps.is_some() {
             ruleset.level_caps = caps.then(|| self.level_caps.clone());
+        }
+        let gates = self.setup.sync_gates().to_vec();
+        if !gates.is_empty() {
+            let unavailable = self.setup.unavailable(Rule::SyncGates);
+            ui.collapsing(format!("Sync Gates · {}", ruleset.sync_gates.len()), |ui| {
+                if let Some(reason) = &unavailable {
+                    ui.weak(format!("Unavailable: {reason}"));
+                }
+                ui.horizontal_wrapped(|ui| {
+                    for gate in &gates {
+                        let mut on = ruleset.sync_gates.contains(gate);
+                        if ui
+                            .add_enabled(unavailable.is_none(), egui::Checkbox::new(&mut on, gate))
+                            .changed()
+                        {
+                            // Kept in the profile's order.
+                            ruleset.sync_gates = gates
+                                .iter()
+                                .filter(|g| if *g == gate { on } else { ruleset.sync_gates.contains(g) })
+                                .cloned()
+                                .collect();
+                        }
+                    }
+                });
+            });
         }
         ui.horizontal(|ui| {
             ui.label("Retries");
@@ -585,6 +613,9 @@ impl JoinCoop {
         let mut caps = ruleset.level_caps.is_some();
         ui.add_enabled(false, egui::Checkbox::new(&mut caps, "Level caps"));
         ui.label(format!("Retries: {}", ruleset.retries));
+        if !ruleset.sync_gates.is_empty() {
+            ui.label(format!("Sync Gates: {}", ruleset.sync_gates.join(", ")));
+        }
         ui.separator();
         if let Some(ready) = ready_section(ui, &view, &self.me()) {
             self.set_ready(node, ready);
@@ -698,6 +729,7 @@ mod tests {
                 path: "red.gba".into(),
                 capabilities: CapabilityReport::everything_enforceable(),
                 level_caps: Vec::new(),
+                sync_gates: Vec::new(),
             },
         );
         until("the invite", || host_node.view().invite_link.is_some());

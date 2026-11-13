@@ -39,7 +39,8 @@ pub use setup::{
 pub use shadow::{BUFFER_FRAMES, CATCH_UP_SPEED, PREDICT_FRAMES, Seen, SeenPokemon, ShadowGame, ShadowState};
 pub use shadow_runner::{ShadowRunner, ShadowStatus};
 pub use shared_log::{
-    Call, GamePoint, LogBody, LogEntry, LogError, LogFollower, Part, RunLog, Signer, Submission, Tallies, Vote,
+    Call, GamePoint, LogBody, LogEntry, LogError, LogFollower, Part, ReadyCheck, RunLog, Signer, Submission, Tallies,
+    Vote,
 };
 pub use storage::{InputBatch, MemoryStorage, RunInfo, RunStorage, Stamped, StorageError, StoredCheckpoint, StoredRun};
 pub use stream::{
@@ -100,6 +101,11 @@ pub struct Ruleset {
     /// Player needs no vote). 0 turns Retries off.
     #[serde(default)]
     pub retries: u8,
+    /// Sync Gates: the battles (by the Game Profile's names, such as
+    /// "Brock") nobody can start until every Player is Ready there. None in
+    /// a solo Run.
+    #[serde(default)]
+    pub sync_gates: Vec<String>,
 }
 
 /// The most Retries a Ruleset's pool may hold.
@@ -125,6 +131,7 @@ impl Default for Ruleset {
             type_clause: false,
             links: false,
             retries: 0,
+            sync_gates: Vec::new(),
         }
     }
 }

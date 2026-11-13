@@ -365,6 +365,16 @@ fn booted(engine: RunEngine, storage: MemoryStorage, rom: Vec<u8>) -> Driver {
     let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
         panic!("FireRed should be profiled");
     };
+    booted_on(profile, engine, storage, rom)
+}
+
+/// The same on this Game Profile.
+fn booted_on(
+    profile: std::sync::Arc<pactlocke_game::GameProfile>,
+    engine: RunEngine,
+    storage: MemoryStorage,
+    rom: Vec<u8>,
+) -> Driver {
     let mut core = MgbaCore::new();
     core.load_rom(&rom).unwrap();
     let game = ProfileGame::new(profile, rom.clone(), core);
@@ -1400,4 +1410,145 @@ fn a_link_mates_death_faints_the_starter_mid_battle_through_the_games_own_faint(
         "then to the Dead box: {:?}",
         d.feed(FeedKind::Death)
     );
+}
+
+/// The lab rival's battle, one `trainerbattle` per starter, as a test-only
+/// Sync Gate: the nearest battle a script can reach again (it starts when the
+/// Player walks down to leave the lab).
+fn with_a_rival_gate(profile: &pactlocke_game::GameProfile) -> pactlocke_game::GameProfile {
+    use pactlocke_game::{GateDef, HexBytes, PatchSite};
+    let mut profile = profile.clone();
+    let site = |at, trainer: u8| PatchSite {
+        at,
+        expect: HexBytes(vec![0x5C, 0x09, trainer, 0x01, 0x03]),
+        write: None,
+    };
+    profile
+        .sync_gates
+        .as_mut()
+        .expect("FireRed lists gates")
+        .gates
+        .push(GateDef {
+            name: "Rival".into(),
+            sites: vec![
+                site(0x0816_93AC, 0x46),
+                site(0x0816_9424, 0x48),
+                site(0x0816_949F, 0x47),
+            ],
+        });
+    profile
+}
+
+/// A Run with the lab rival and Brock as Sync Gates, watched, to the lab
+/// with the starter chosen.
+fn gated_to_the_lab(rom: Vec<u8>) -> Driver {
+    pactlocke_mgba::force_utc_time_zone();
+    let store = ProfileStore::from_env().unwrap();
+    let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
+        panic!("FireRed should be profiled");
+    };
+    let profile = std::sync::Arc::new(with_a_rival_gate(&profile));
+    let report = pactlocke_game::CapabilityReport::check(&profile, &rom);
+    assert_eq!(
+        report.get(pactlocke_game::Rule::SyncGates),
+        &pactlocke_game::Capability::Enforceable,
+        "every gate site and the hold area check out on this ROM"
+    );
+    let storage = MemoryStorage::default();
+    let ruleset = Ruleset {
+        first_encounter: true,
+        sync_gates: vec!["Rival".into(), "Brock".into()],
+        ..Ruleset::default()
+    };
+    let engine = RunEngine::start(
+        NewRun {
+            name: "Acceptance".into(),
+            game_name: profile.name.clone(),
+            game_sha1: profile.sha1.clone(),
+            rom_path: None,
+            ruleset,
+        },
+        Box::new(storage.clone()),
+        Box::new(SystemRunClock),
+    )
+    .unwrap();
+    let mut d = booted_on(profile, engine, storage, rom);
+    d.watched();
+    d.play(FR_STARTER);
+    d.fast_text();
+    assert_eq!(d.read(0x0816_93AC, 1), [0x05], "held: a goto to the hold script");
+    assert_eq!(d.read(0x0816_A5A0, 1), [0x05], "Brock is held too");
+    d
+}
+
+#[test]
+fn a_held_sync_gate_shows_its_message_lets_the_player_go_and_readies_them_up() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
+        return;
+    };
+    let mut d = gated_to_the_lab(rom);
+    // Leaving the lab starts the rival battle's script: it reaches the held gate.
+    d.play(
+        "h D 64
+w 60",
+    );
+    let mut saw_message = false;
+    for _ in 0..40 {
+        saw_message |= shows_text(&mut d, &pactlocke_game::encode_text("partners", 8).unwrap());
+        d.play("p A 30");
+    }
+    dump_screen(&d.game, "gate-held");
+    assert!(saw_message, "\"Waiting for your partners to be ready...\" on screen");
+    assert!(!d.in_battle(), "no battle while the gate holds");
+    let run = d.feed(FeedKind::Run);
+    assert!(
+        run.iter()
+            .any(|e| e == "Ready at Rival: waiting for your partners to be ready"),
+        "{run:?}"
+    );
+    // Let go: the Player walks away, out of the lab.
+    let script = d.game.game_mut().script().status;
+    assert_eq!(script, pactlocke_game::ScriptStatus::Idle, "the hold script ended");
+    d.play("m B 300");
+    let shadow = &d.watcher.as_ref().unwrap().shadow;
+    assert_eq!(shadow.state(), ShadowState::Matched);
+}
+
+#[test]
+fn a_sync_gate_everyone_is_ready_at_lets_the_real_battle_run() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
+        return;
+    };
+    let mut d = gated_to_the_lab(rom);
+    // Everyone is Ready at the gate before this Player gets there.
+    d.game
+        .commands()
+        .send(RunCommand::OpenGate {
+            gate: "Rival".into(),
+            checkpoint: true,
+        })
+        .unwrap();
+    d.play("w 30");
+    assert_eq!(
+        d.read(0x0816_93AC, 5),
+        [0x5C, 0x09, 0x46, 0x01, 0x03],
+        "let go: the ROM's own bytes"
+    );
+    assert_eq!(d.read(0x0816_A5A0, 1), [0x05], "Brock is still held");
+    assert!(
+        d.feed(FeedKind::Run)
+            .iter()
+            .any(|e| e == "Everyone is Ready at Rival: the battle is on")
+    );
+    d.play(
+        "h D 64
+w 60",
+    );
+    d.until_action_menu(Keys::A, 3000);
+    assert!(d.in_battle(), "the real rival battle, through the game's own script");
+    d.play("m A 300");
+    let shadow = &d.watcher.as_ref().unwrap().shadow;
+    assert_eq!(shadow.state(), ShadowState::Matched);
 }

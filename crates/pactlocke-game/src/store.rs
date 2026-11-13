@@ -360,6 +360,19 @@ fn check(profile: &GameProfile) -> Result<(), String> {
     if profile.layout.trainer_mon_sizes.len() != 4 {
         return Err("layout trainer_mon_sizes must give a size for each of the 4 party flag values".into());
     }
+    if let Some(gates) = &profile.sync_gates {
+        if !ROM.contains(&gates.hold) {
+            return Err(format!("sync_gates hold {:#010X} is not in ROM", gates.hold));
+        }
+        for gate in &gates.gates {
+            if gate.sites.is_empty() || gate.sites.iter().any(|s| s.expect.0.len() != 5 || s.write.is_some()) {
+                return Err(format!(
+                    "sync gate {:?}: give each trainerbattle site with the 5 bytes a clean ROM holds, and no write",
+                    gate.name
+                ));
+            }
+        }
+    }
     for stage in &profile.level_caps {
         if stage.trainers.is_empty() {
             return Err(format!("level cap {:?}: no trainers", stage.name));

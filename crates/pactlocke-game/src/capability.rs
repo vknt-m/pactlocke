@@ -80,9 +80,6 @@ impl CapabilityReport {
     pub fn check(profile: &GameProfile, rom: &[u8]) -> Self {
         let methods = &profile.rules;
         let catch = method_capability(profile, methods.catch_block.as_ref(), rom);
-        let no_catalogue = |what: &str| Capability::GreyedOut {
-            reason: format!("this Game Profile has no {what} yet"),
-        };
         let no_items = match method_capability(profile, methods.no_items_trainer.as_ref(), rom) {
             Capability::Enforceable => method_capability(profile, methods.no_items_wild.as_ref(), rom),
             other => other,
@@ -95,7 +92,7 @@ impl CapabilityReport {
                     Rule::FirstEncounter | Rule::DupesClause => catch.clone(),
                     Rule::Gifts => catalogue_capability(profile, |kind| kind != SourceKind::Static, "Gifts"),
                     Rule::Statics => catalogue_capability(profile, |kind| kind == SourceKind::Static, "Statics"),
-                    Rule::SyncGates => no_catalogue("Sync Gate trainers"),
+                    Rule::SyncGates => sync_gate_capability(profile, rom),
                     // Read and written in RAM through the profile's symbols and layout.
                     Rule::FaintIsDead | Rule::Links | Rule::TypeClause => Capability::Enforceable,
                     Rule::LevelCap => method_capability(profile, methods.level_cap.as_ref(), rom),
@@ -131,6 +128,31 @@ impl CapabilityReport {
 
     pub fn iter(&self) -> impl Iterator<Item = (Rule, &Capability)> {
         self.rules.iter().map(|(rule, capability)| (*rule, capability))
+    }
+}
+
+/// Enforceable when the profile lists gates, every gate's `trainerbattle`
+/// holds what it expects, and the hold area is free.
+fn sync_gate_capability(profile: &GameProfile, rom: &[u8]) -> Capability {
+    let Some(gates) = profile.sync_gates.as_ref().filter(|g| !g.gates.is_empty()) else {
+        return Capability::GreyedOut {
+            reason: "this Game Profile has no Sync Gate trainers yet".into(),
+        };
+    };
+    let sites = gates.gates.iter().flat_map(|g| g.sites.iter().cloned()).collect();
+    if let Capability::GreyedOut { reason } = method_capability(profile, Some(&Method::Patch { sites }), rom) {
+        return Capability::GreyedOut { reason };
+    }
+    let start = (gates.hold - ROM_BASE) as usize;
+    let free = rom
+        .get(start..start + gates.hold_len())
+        .is_some_and(|area| area.iter().all(|b| *b == 0xFF));
+    if free {
+        Capability::Enforceable
+    } else {
+        Capability::GreyedOut {
+            reason: format!("the ROM isn't free at {:#010X}, where the hold scripts go", gates.hold),
+        }
     }
 }
 

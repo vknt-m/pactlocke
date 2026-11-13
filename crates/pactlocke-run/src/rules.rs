@@ -93,6 +93,9 @@ pub(crate) struct Rules {
     set_mode_failed_said: bool,
     /// Must nickname: Pokémon waiting for the Player to name them, with their species names.
     nickname_wanted: BTreeMap<u32, String>,
+    /// Sync Gates every Player is Ready at, and those this Player is Ready at.
+    open_gates: BTreeSet<String>,
+    ready_gates: BTreeSet<String>,
 }
 
 /// The Pokémon a Gift source gave, and when (in events taken in).
@@ -140,6 +143,8 @@ impl Rules {
             set_mode_forced_before: false,
             set_mode_failed_said: false,
             nickname_wanted: BTreeMap::new(),
+            open_gates: BTreeSet::new(),
+            ready_gates: BTreeSet::new(),
         }
     }
 
@@ -330,6 +335,16 @@ impl Rules {
         self.cap_stage
     }
 
+    /// Whether every Player was Ready at this Sync Gate, so its battle runs.
+    pub fn gate_open(&self, gate: &str) -> bool {
+        self.open_gates.contains(gate)
+    }
+
+    /// Whether this Player is Ready at this Sync Gate.
+    pub fn ready_at(&self, gate: &str) -> bool {
+        self.ready_gates.contains(gate)
+    }
+
     /// Whether this source's Encounter is used or closed here.
     pub fn source_closed(&self, source: &crate::SourceRef) -> bool {
         match source.area_id() {
@@ -350,6 +365,12 @@ impl Rules {
                 self.closed.insert(area.id);
             }
             RunEvent::PokeBallsObtained => self.had_poke_balls = true,
+            RunEvent::GateReady { gate } => {
+                self.ready_gates.insert(gate.clone());
+            }
+            RunEvent::GateOpened { gate } => {
+                self.open_gates.insert(gate.clone());
+            }
             RunEvent::SourceClosed { source, .. } | RunEvent::Skipped { source } => match source.area_id() {
                 Some(area) => {
                     self.closed.insert(area);

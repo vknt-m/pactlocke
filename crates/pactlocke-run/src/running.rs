@@ -33,6 +33,10 @@ pub enum RunCommand {
     CloseSource { source: crate::SourceRef, why: String },
     /// The Player skips this Gift, breaking its Link for everyone.
     Skip { source: crate::SourceRef },
+    /// Every Player is Ready at this Sync Gate: let it go. With
+    /// `checkpoint`, this Player's Ready completed it, so this game calls
+    /// the gate's Run Checkpoint.
+    OpenGate { gate: String, checkpoint: bool },
 }
 
 /// Where a Retry goes back to.
@@ -179,6 +183,7 @@ impl<G: PlayedGame> RunningGame<G> {
                 RunCommand::LinkDeath { pid, why } => self.engine.link_death(pid, why, &mut self.game),
                 RunCommand::CloseSource { source, why } => self.engine.close_source(source, why),
                 RunCommand::Skip { source } => self.engine.skip(source),
+                RunCommand::OpenGate { gate, checkpoint } => self.engine.open_gate(&gate, checkpoint, &mut self.game),
                 RunCommand::Retry { to } => {
                     if let Err(why) = self.retry(&to) {
                         self.engine.retry_failed(why);

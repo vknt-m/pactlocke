@@ -50,7 +50,61 @@ pub struct GameProfile {
     /// The stages a level cap rises through, in order.
     #[serde(default)]
     pub level_caps: Vec<crate::LevelCapDef>,
+    /// The battles that can be Sync Gates, and where their hold scripts go.
+    #[serde(default)]
+    pub sync_gates: Option<SyncGates>,
 }
+
+/// Sync Gates: each gate trainer's verified `trainerbattle` instructions,
+/// and free ROM (a clean ROM holds 0xFF there) for the hold scripts.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SyncGates {
+    /// Where the hold message and every gate's hold script go.
+    pub hold: u32,
+    /// Every battle that can be a Sync Gate, in the order the game reaches them.
+    pub gates: Vec<GateDef>,
+}
+
+/// One battle that can be a Sync Gate.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GateDef {
+    /// The trainer, as the ready check names the Gate: "Brock".
+    pub name: String,
+    /// Its `trainerbattle` instructions (one per starter for a Champion),
+    /// each with the 5 bytes a clean ROM holds there.
+    pub sites: Vec<PatchSite>,
+}
+
+impl SyncGates {
+    /// How many bytes of free ROM the hold message and scripts take.
+    pub fn hold_len(&self) -> usize {
+        HOLD_MESSAGE_LEN + HOLD_SCRIPT_LEN * self.gates.len()
+    }
+
+    /// Where gate `index`'s hold script goes.
+    pub fn hold_script(&self, index: usize) -> u32 {
+        self.hold + (HOLD_MESSAGE_LEN + HOLD_SCRIPT_LEN * index) as u32
+    }
+}
+
+impl GameProfile {
+    /// Every battle this profile can make a Sync Gate, by name, in order.
+    pub fn sync_gate_names(&self) -> Vec<String> {
+        self.sync_gates
+            .iter()
+            .flat_map(|gates| gates.gates.iter().map(|gate| gate.name.clone()))
+            .collect()
+    }
+}
+
+/// The hold message takes the first bytes of the hold area; each gate's
+/// hold script follows, in the profile's order.
+pub const HOLD_MESSAGE_LEN: usize = 64;
+/// One gate's hold script: `loadword 0, message`, `callstd MSGBOX_DEFAULT`,
+/// `releaseall`, `end`, rounded up.
+pub const HOLD_SCRIPT_LEN: usize = 16;
 
 impl GameProfile {
     /// The Area a region-map section counts as, by its shown name: merges

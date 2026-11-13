@@ -373,12 +373,13 @@ impl RunLog {
                                 called.parts.entry(author).or_insert(part);
                             }
                         }
-                        CheckpointReason::InGameSave | CheckpointReason::Asked => calls.push(Call {
-                            n: calls.len() as u64 + 1,
-                            by: author,
-                            parts: BTreeMap::from([(author, part)]),
-                            void: false,
-                        }),
+                        CheckpointReason::InGameSave | CheckpointReason::SyncGate | CheckpointReason::Asked => calls
+                            .push(Call {
+                                n: calls.len() as u64 + 1,
+                                by: author,
+                                parts: BTreeMap::from([(author, part)]),
+                                void: false,
+                            }),
                     }
                 }
                 LogBody::Retry { call } => {
@@ -482,6 +483,68 @@ impl RunLog {
         standing.into_iter().map(|(_, author, event)| (author, event)).collect()
     }
 
+    /// Who is Ready at this Sync Gate, in log order.
+    pub fn ready_at(&self, gate: &str) -> Vec<PlayerKey> {
+        let mut ready = Vec::new();
+        for (author, event) in self.standing_events() {
+            if matches!(&event, RunEvent::GateReady { gate: g } if g == gate) && !ready.contains(&author) {
+                ready.push(author);
+            }
+        }
+        ready
+    }
+
+    /// The Player whose Ready made every Player Ready at this Sync Gate,
+    /// once it is let go (counting only entries that stand).
+    pub fn gate_opened_by(&self, gate: &str) -> Option<PlayerKey> {
+        let roster = self.roster.as_ref()?;
+        let mut ready: Vec<PlayerKey> = Vec::new();
+        for (author, event) in self.standing_events() {
+            if matches!(&event, RunEvent::GateReady { gate: g } if g == gate) && !ready.contains(&author) {
+                ready.push(author);
+                if roster.iter().all(|p| ready.contains(p)) {
+                    return Some(author);
+                }
+            }
+        }
+        None
+    }
+
+    /// Whether every Player in the roster is Ready at this Sync Gate.
+    pub fn gate_open(&self, gate: &str) -> bool {
+        let ready = self.ready_at(gate);
+        self.roster
+            .as_ref()
+            .is_some_and(|roster| roster.iter().all(|p| ready.contains(p)))
+    }
+
+    /// The ready check: the first chosen Sync Gate someone is Ready at and
+    /// not everyone is (gyms can come in either order), or else the first
+    /// not let go yet; and each Player, by roster order, with whether they are.
+    pub fn ready_check(&self) -> Option<ReadyCheck> {
+        let locked = self.locked()?;
+        let waiting: Vec<&String> = locked
+            .ruleset
+            .sync_gates
+            .iter()
+            .filter(|g| !self.gate_open(g))
+            .collect();
+        let gate = (*waiting
+            .iter()
+            .find(|g| !self.ready_at(g).is_empty())
+            .or(waiting.first())?)
+        .clone();
+        let ready = self.ready_at(&gate);
+        Some(ReadyCheck {
+            players: locked
+                .roster
+                .iter()
+                .map(|p| (p.name.clone(), ready.contains(&p.key)))
+                .collect(),
+            gate,
+        })
+    }
+
     /// The tallies, recomputed from the events that stand.
     pub fn tallies(&self) -> Tallies {
         let mut tallies = Tallies::default();
@@ -519,6 +582,22 @@ type PlayerKey = [u8; 32];
 pub struct GamePoint {
     pub boot: u32,
     pub frame: u64,
+}
+
+/// The next Sync Gate's ready check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadyCheck {
+    /// The gate, as the Game Profile names it.
+    pub gate: String,
+    /// Each Player's name, and whether they are Ready there.
+    pub players: Vec<(String, bool)>,
+}
+
+impl ReadyCheck {
+    /// How many Players are Ready.
+    pub fn ready(&self) -> usize {
+        self.players.iter().filter(|(_, ready)| *ready).count()
+    }
 }
 
 /// A Run Checkpoint in the log.
@@ -625,6 +704,17 @@ impl LogFollower {
                         .find(|c| c.by == author && c.parts.get(&author).is_some_and(|p| p.entry == index));
                     if let Some(called) = called.filter(|c| !c.void) {
                         commands.push(crate::RunCommand::JoinCheckpoint { call: called.n });
+                    }
+                }
+                // The Ready that makes everyone Ready lets the gate go; that
+                // Player's game calls its Run Checkpoint.
+                // The Run engine lets a gate go once, however often this says so.
+                LogBody::Event(RunEvent::GateReady { gate }) => {
+                    if let Some(by) = log.gate_opened_by(&gate) {
+                        commands.push(crate::RunCommand::OpenGate {
+                            checkpoint: by == self.me,
+                            gate,
+                        });
                     }
                 }
                 LogBody::Retry { call } => {
