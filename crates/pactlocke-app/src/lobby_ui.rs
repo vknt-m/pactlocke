@@ -129,6 +129,23 @@ impl Lobbies {
         }
     }
 
+    /// How this app reaches another Player's: straight or through a relay,
+    /// with the ping; a joiner reaches the other joiners through the Host.
+    pub fn reach(&self, player: PlayerKey) -> Option<crate::player_strip::Reach> {
+        use crate::player_strip::Reach;
+        let link = match (&self.host, &self.join) {
+            (Some((node, _)), _) => node.links().into_iter().find(|(peer, _)| peer.0 == player)?.1,
+            (None, Some((node, coop))) if coop.host() == player => node.link()?,
+            (None, Some(_)) => return Some(Reach::ViaHost),
+            (None, None) => return None,
+        };
+        Some(if link.direct {
+            Reach::Direct { ping_ms: link.ping_ms }
+        } else {
+            Reach::Relayed { ping_ms: link.ping_ms }
+        })
+    }
+
     pub fn open_join_prompt(&mut self) {
         self.prompt = Some(JoinPrompt::default());
     }

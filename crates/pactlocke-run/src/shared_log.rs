@@ -483,6 +483,18 @@ impl RunLog {
         standing.into_iter().map(|(_, author, event)| (author, event)).collect()
     }
 
+    /// The speed each Player last said they play at (1x until they say).
+    pub fn speed_of(&self, player: &PlayerKey) -> u8 {
+        self.standing_events()
+            .into_iter()
+            .rev()
+            .find_map(|(author, event)| match event {
+                RunEvent::SpeedChanged { speed } if author == *player => Some(speed),
+                _ => None,
+            })
+            .unwrap_or(1)
+    }
+
     /// Who is Ready at this Sync Gate, in log order.
     pub fn ready_at(&self, gate: &str) -> Vec<PlayerKey> {
         let mut ready = Vec::new();
@@ -508,6 +520,14 @@ impl RunLog {
             }
         }
         None
+    }
+
+    /// The chosen Sync Gate this Player is Ready at that isn't let go yet, if any.
+    pub fn ready_gate_of(&self, player: &PlayerKey) -> Option<String> {
+        let gates = self.locked()?.ruleset.sync_gates;
+        gates
+            .into_iter()
+            .find(|g| !self.gate_open(g) && self.ready_at(g).contains(player))
     }
 
     /// Whether every Player in the roster is Ready at this Sync Gate.
@@ -706,9 +726,16 @@ impl LogFollower {
                         commands.push(crate::RunCommand::JoinCheckpoint { call: called.n });
                     }
                 }
+                LogBody::Event(RunEvent::SpeedChanged { speed }) if author != self.me => {
+                    let player = log
+                        .locked()
+                        .and_then(|l| l.roster.into_iter().find(|p| p.key == author))
+                        .map_or_else(|| "A Player".to_owned(), |p| p.name);
+                    commands.push(crate::RunCommand::OthersSpeed { player, speed });
+                }
                 // The Ready that makes everyone Ready lets the gate go; that
-                // Player's game calls its Run Checkpoint.
-                // The Run engine lets a gate go once, however often this says so.
+                // Player's game calls its Run Checkpoint. The Run engine lets a
+                // gate go once, however often this says so.
                 LogBody::Event(RunEvent::GateReady { gate }) => {
                     if let Some(by) = log.gate_opened_by(&gate) {
                         commands.push(crate::RunCommand::OpenGate {

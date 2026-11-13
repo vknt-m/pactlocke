@@ -23,6 +23,40 @@ pub struct RunView {
     pub run_checkpoint: bool,
     /// The Player's party, as of the last look.
     pub party: Vec<crate::SeenPokemon>,
+    /// Where the Player is and what they are doing, for the Player strip.
+    pub area: Option<String>,
+    pub doing: Doing,
+}
+
+/// What a Player is doing, as the Player strip shows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Doing {
+    #[default]
+    Exploring,
+    InBattle,
+    /// Held at a Sync Gate's hold script.
+    AtGate(String),
+}
+
+impl Doing {
+    /// From whether the Player is in battle and the Sync Gate they are held at.
+    pub fn from(in_battle: bool, at_gate: Option<String>) -> Self {
+        match (in_battle, at_gate) {
+            (true, _) => Doing::InBattle,
+            (false, Some(gate)) => Doing::AtGate(gate),
+            (false, None) => Doing::Exploring,
+        }
+    }
+}
+
+impl std::fmt::Display for Doing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Doing::Exploring => write!(f, "Exploring"),
+            Doing::InBattle => write!(f, "In battle"),
+            Doing::AtGate(gate) => write!(f, "At {gate}'s Sync Gate"),
+        }
+    }
 }
 
 /// A Pokémon left with its species name, waiting for the Player to name it.
@@ -151,6 +185,8 @@ impl FeedEntry {
             RunEvent::Checkpoint { .. } | RunEvent::Closed | RunEvent::RetryVote { .. } => return None,
             // The catch or the way it ended is in the feed already.
             RunEvent::EncounterOver { .. } => return None,
+            RunEvent::SpeedChanged { speed } => (FeedKind::Run, format!("You play at {speed}x")),
+            RunEvent::OthersSpeed { player, speed } => (FeedKind::Run, format!("{player} plays at {speed}x")),
             RunEvent::GateReady { gate } => (
                 FeedKind::Run,
                 format!("Ready at {gate}: waiting for your partners to be ready"),

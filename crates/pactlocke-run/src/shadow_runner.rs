@@ -34,6 +34,7 @@ enum Command {
     Watch(Box<dyn AudioSink>),
     Unwatch,
     BatterySaver(bool),
+    Tiled(bool),
     Stop,
 }
 
@@ -93,6 +94,11 @@ impl ShadowRunner {
         let _ = self.commands.send(Command::Unwatch);
     }
 
+    /// The partner view: publish frames (no sound) while shown as a tile.
+    pub fn tiled(&self, on: bool) {
+        let _ = self.commands.send(Command::Tiled(on));
+    }
+
     /// Battery saver: run only while watched.
     pub fn battery_saver(&self, on: bool) {
         let _ = self.commands.send(Command::BatterySaver(on));
@@ -129,6 +135,7 @@ fn run<G: PlayedGame>(
     let mut on_diverged = Some(on_diverged);
     let mut sink: Option<Box<dyn AudioSink>> = None;
     let mut saver = false;
+    let mut tiled = false;
     let mut audio = Vec::new();
     let mut last_ms = clock.now_ms();
     loop {
@@ -142,6 +149,7 @@ fn run<G: PlayedGame>(
                         Command::Watch(new) => sink = Some(new),
                         Command::Unwatch => sink = None,
                         Command::BatterySaver(on) => saver = on,
+                        Command::Tiled(on) => tiled = on,
                         Command::Stop => return,
                     }
                     next = inbox.try_recv().ok();
@@ -153,11 +161,13 @@ fn run<G: PlayedGame>(
         let slice = now - last_ms;
         last_ms = now;
         let watched = sink.is_some();
-        if (!saver || watched) && shadow.advance(now, shadow.frames_for(slice)) > 0 {
+        if (!saver || watched || tiled) && shadow.advance(now, shadow.frames_for(slice)) > 0 {
             audio.clear();
             shadow.drain_audio(&mut audio);
-            if let Some(sink) = sink.as_mut() {
+            if sink.is_some() || tiled {
                 frames.publish(shadow.frame(), shadow.video());
+            }
+            if let Some(sink) = sink.as_mut() {
                 // Fast-forwarding, its sound would play many times too fast.
                 if !shadow.catching_up(now) {
                     sink.push(&audio, shadow.audio_sample_rate());

@@ -47,7 +47,7 @@ pub use stream::{
     Added, CHUNK_FRAMES, FrameHash, HASH_EVERY, InputChunk, Mark, Outgoing, PlayerKey, StreamHub, StreamMessage,
     StreamOut, StreamStore, StreamWant,
 };
-pub use view::{FeedEntry, FeedKind, Grave, LevelCapView, NicknameWanted, RunView};
+pub use view::{Doing, FeedEntry, FeedKind, Grave, LevelCapView, NicknameWanted, RunView};
 
 use pactlocke_game::LevelCap;
 use serde::{Deserialize, Serialize};

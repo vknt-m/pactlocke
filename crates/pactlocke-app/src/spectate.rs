@@ -171,6 +171,13 @@ impl Spectate {
         }
     }
 
+    /// The partner view: every Shadow publishes its picture as a tile.
+    pub fn set_partner_view(&mut self, on: bool) {
+        for shadow in &self.shadows {
+            shadow.runner.tiled(on);
+        }
+    }
+
     /// Battery saver: the Shadows run only while one is watched.
     pub fn set_battery_saver(&mut self, on: bool) {
         self.battery_saver = on;
@@ -183,48 +190,6 @@ impl Spectate {
     pub fn watched(&self) -> Option<&Shadow> {
         self.shadows.get(self.watching?)
     }
-}
-
-/// What the Players section asks for.
-pub enum Asked {
-    Watch(usize),
-    BatterySaver(bool),
-}
-
-/// The other Players, each with a Watch button, and the battery saver.
-pub fn panel(ui: &mut eframe::egui::Ui, spectate: &Spectate) -> Option<Asked> {
-    let mut asked = None;
-    ui.strong("Players");
-    for (i, shadow) in spectate.shadows.iter().enumerate() {
-        ui.horizontal(|ui| {
-            ui.label(&shadow.name);
-            let status = shadow.status();
-            let watch = ui.add_enabled(shadow.cant_watch().is_none(), eframe::egui::Button::new("Watch"));
-            match shadow.cant_watch() {
-                Some(why) => {
-                    watch.on_disabled_hover_text(&why);
-                    ui.colored_label(ui.visuals().error_fg_color, why);
-                }
-                None if watch.clicked() => asked = Some(Asked::Watch(i)),
-                None if spectate.battery_saver && spectate.watching != Some(i) => {
-                    ui.weak("battery saver: catches up when watched");
-                }
-                None if status.catching_up => {
-                    ui.weak("catching up…");
-                }
-                None => {}
-            }
-        });
-    }
-    let mut saver = spectate.battery_saver;
-    if ui
-        .checkbox(&mut saver, "Battery saver")
-        .on_hover_text("Run the other Players' games only while you watch one; it catches up when you do")
-        .changed()
-    {
-        asked = Some(Asked::BatterySaver(saver));
-    }
-    asked
 }
 
 /// Where a watched Shadow's sound goes when there is no audio device.

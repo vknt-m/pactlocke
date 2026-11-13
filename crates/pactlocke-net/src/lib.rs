@@ -11,7 +11,7 @@ mod wire;
 
 pub use invite::{Invite, InviteError, PeerKey, RunSecret};
 pub use lobby::{Admission, HostAction, HostLobby, JoinLobby, JoinState};
-pub use node::{HostNode, JoinNode, LobbyView, Relays, load_or_create_key, new_key};
+pub use node::{HostNode, JoinNode, LobbyView, PeerLink, Relays, load_or_create_key, new_key};
 pub use wire::{
     LobbyPlayer, MAX_MESSAGE, MAX_PLAYERS, Message, PROTOCOL, Refusal, RomStatus, RunAdvert, WireError, decode, encode,
 };

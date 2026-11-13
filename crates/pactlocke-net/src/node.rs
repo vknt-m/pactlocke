@@ -79,6 +79,24 @@ pub struct LobbyView {
     pub error: Option<String>,
 }
 
+/// How a connection to another Player's app goes now: straight to them, or
+/// through a relay, and how long a message takes there and back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerLink {
+    pub direct: bool,
+    pub ping_ms: u32,
+}
+
+/// The connection's selected path, if it has one yet.
+fn link_of(connection: &Connection) -> Option<PeerLink> {
+    let paths = connection.paths();
+    let path = paths.into_iter().find(|p| p.is_selected())?;
+    Some(PeerLink {
+        direct: path.is_ip(),
+        ping_ms: u32::try_from(path.rtt().as_millis()).unwrap_or(u32::MAX),
+    })
+}
+
 /// A fresh endpoint key (a throwaway one, as in tests).
 pub fn new_key() -> [u8; 32] {
     SecretKey::generate().to_bytes()
@@ -208,6 +226,7 @@ pub struct HostNode {
     worker: Worker<HostCommand>,
     addrs: Arc<Mutex<Vec<SocketAddr>>>,
     inbox: Arc<Mutex<Vec<(PeerKey, Message)>>>,
+    peers: Arc<Mutex<BTreeMap<PeerKey, Peer>>>,
 }
 
 /// What the Host's connections share.
@@ -247,10 +266,11 @@ impl HostNode {
         let addrs = Arc::new(Mutex::new(Vec::new()));
         let (commands, receiver) = mpsc::unbounded_channel();
         let inbox = Arc::new(Mutex::new(Vec::new()));
+        let peers: Arc<Mutex<BTreeMap<PeerKey, Peer>>> = Arc::default();
         let shared = Shared {
             lobby: Arc::new(Mutex::new(lobby)),
             view: view.clone(),
-            peers: Arc::default(),
+            peers: peers.clone(),
             inbox: inbox.clone(),
             started: Instant::now(),
         };
@@ -268,7 +288,16 @@ impl HostNode {
             },
             addrs,
             inbox,
+            peers,
         }
+    }
+
+    /// How each connected Player's connection goes now.
+    pub fn links(&self) -> Vec<(PeerKey, PeerLink)> {
+        lock(&self.peers)
+            .iter()
+            .filter_map(|(key, peer)| Some((*key, link_of(&peer.connection)?)))
+            .collect()
     }
 
     /// Setup and log messages from Players since the last call, oldest first.
@@ -489,6 +518,8 @@ enum JoinCommand {
 pub struct JoinNode {
     worker: Worker<JoinCommand>,
     inbox: Arc<Mutex<Vec<Message>>>,
+    /// The connection to the Host, while there is one.
+    connection: Arc<Mutex<Option<Connection>>>,
 }
 
 impl JoinNode {
@@ -504,9 +535,11 @@ impl JoinNode {
         let inbox = Arc::new(Mutex::new(Vec::new()));
         let (commands, receiver) = mpsc::unbounded_channel();
         let (shown, received) = (view.clone(), inbox.clone());
+        let connection: Arc<Mutex<Option<Connection>>> = Arc::default();
+        let held = connection.clone();
         let thread = std::thread::Builder::new()
             .name("lobby join".into())
-            .spawn(move || runtime().block_on(join(key, lobby, relays, direct, shown, received, receiver)))
+            .spawn(move || runtime().block_on(join(key, lobby, relays, direct, shown, received, receiver, held)))
             .expect("a thread for the lobby");
         Self {
             worker: Worker {
@@ -516,7 +549,13 @@ impl JoinNode {
                 thread: Some(thread),
             },
             inbox,
+            connection,
         }
+    }
+
+    /// How the connection to the Host goes now, while there is one.
+    pub fn link(&self) -> Option<PeerLink> {
+        lock(&self.connection).as_ref().and_then(link_of)
     }
 
     /// The Host's setup and log messages since the last call, oldest first.
@@ -552,6 +591,7 @@ fn publish_join(view: &Mutex<LobbyView>, lobby: &JoinLobby) {
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn join(
     key: [u8; 32],
     mut lobby: JoinLobby,
@@ -560,6 +600,7 @@ async fn join(
     view: Arc<Mutex<LobbyView>>,
     inbox: Arc<Mutex<Vec<Message>>>,
     mut commands: mpsc::UnboundedReceiver<JoinCommand>,
+    held: Arc<Mutex<Option<Connection>>>,
 ) {
     let fail = |why: String| publish(&view, |v| v.error = Some(why));
     let endpoint = match bind(key, &relays).await {
@@ -588,6 +629,7 @@ async fn join(
     if send.write_all(&lobby.proof()).await.is_err() || write_frame(&mut send, &lobby.hello()).await.is_err() {
         return fail("The connection to the Host closed at once.".into());
     }
+    *lock(&held) = Some(connection.clone());
     loop {
         tokio::select! {
             frame = read_frame(&mut recv) => {
@@ -616,6 +658,7 @@ async fn join(
             },
         }
     }
+    *lock(&held) = None;
     connection.close(0u8.into(), b"bye");
     endpoint.close().await;
 }

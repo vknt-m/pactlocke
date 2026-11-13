@@ -210,6 +210,15 @@ fn setup_and_log_cross_iroh_and_after_the_lock_nobody_new_joins() {
     }
     assert_eq!(inbox, [Message::Log(b"entry".to_vec())]);
 
+    // On one machine the connection goes straight, never through a relay.
+    let link = blue.link().expect("Blue's link to the Host");
+    assert!(link.direct, "{link:?}");
+    let links = host.links();
+    assert!(
+        links.iter().any(|(peer, link)| *peer == blue_key && link.direct),
+        "{links:?}"
+    );
+
     host.lock_roster();
     wait_for("no invite after the lock", || host.view(), |v| v.invite_link.is_none());
 }

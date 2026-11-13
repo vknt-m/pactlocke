@@ -315,9 +315,12 @@ impl<G: PlayedGame> ShadowGame<G> {
     /// Looks at the Player's Pokémon, as their own game would show them now.
     fn look(&mut self) {
         let in_battle = self.game.battle().is_some();
-        if !in_battle && !self.game.at_safe_overworld_point() {
+        let at_gate = self.game.at_gate();
+        if !in_battle && !self.game.at_safe_overworld_point() && at_gate.is_none() {
             return;
         }
+        self.seen.area = self.game.area().map(|a| a.name);
+        self.seen.doing = crate::Doing::from(in_battle, at_gate);
         let dead_box = self.game.dead_box();
         let party = self.game.party();
         for pokemon in &party {
@@ -554,6 +557,9 @@ pub struct Seen {
     pub fainted: std::collections::BTreeSet<u32>,
     /// Their party at the last look.
     pub party: Vec<SeenPokemon>,
+    /// Their Area, and what they were doing, at the last look.
+    pub area: Option<String>,
+    pub doing: crate::Doing,
 }
 
 /// A party Pokémon as a Shadow Game last showed it.

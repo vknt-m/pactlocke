@@ -111,6 +111,8 @@ pub struct RunEngine {
     gates_held: BTreeSet<String>,
     /// The gate whose hold script was running at the last look.
     at_gate: Option<String>,
+    /// The speed the Player plays at: 1x until they say otherwise.
+    speed: u8,
     /// The newest events recorded, for a Retry to hand on without waiting for storage.
     recorded_since: VecDeque<Recorded>,
 }
@@ -428,6 +430,7 @@ impl RunEngine {
             retired: false,
             gates_held: BTreeSet::new(),
             at_gate: None,
+            speed: 1,
             recorded_since: VecDeque::new(),
         }
     }
@@ -546,6 +549,7 @@ impl RunEngine {
 
         if self.frame.is_multiple_of(PARTY_LOOK_FRAMES) {
             self.look_at_the_party(game);
+            self.look_at_the_player(game, battle.is_some());
         }
 
         if battle.is_none() && self.quiet(game) {
@@ -561,6 +565,33 @@ impl RunEngine {
         if self.clock.now_ms() - self.last_flush_ms >= FLUSH_EVERY_MS {
             self.flush();
         }
+    }
+
+    /// Where the Player is and what they are doing, for the Player strip.
+    fn look_at_the_player(&mut self, game: &mut impl LiveGame, in_battle: bool) {
+        if !in_battle && !game.at_safe_overworld_point() && self.at_gate.is_none() {
+            return;
+        }
+        let area = game.area().map(|a| a.name);
+        let doing = crate::Doing::from(in_battle, self.at_gate.clone());
+        if (area.as_ref(), &doing) != (self.view.area.as_ref(), &self.view.doing) {
+            self.view.area = area;
+            self.view.doing = doing;
+            self.view_version += 1;
+        }
+    }
+
+    /// The Player plays at this speed now (1 to 4); said when it changes.
+    pub fn speed(&mut self, speed: u8) {
+        if self.speed != speed {
+            self.speed = speed;
+            self.record(RunEvent::SpeedChanged { speed });
+        }
+    }
+
+    /// Another Player plays at this speed now, as the Run log says.
+    pub fn others_speed(&mut self, player: String, speed: u8) {
+        self.record(RunEvent::OthersSpeed { player, speed });
     }
 
     /// Brings the side panel's party up to date, on the overworld or in battle.

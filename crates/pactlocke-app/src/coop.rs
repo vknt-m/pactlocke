@@ -443,6 +443,11 @@ impl JoinCoop {
         }
     }
 
+    /// The Host's key.
+    pub fn host(&self) -> PlayerKey {
+        self.host
+    }
+
     /// This Player's copy of the Run log.
     pub fn log(&self) -> &RunLog {
         &self.log

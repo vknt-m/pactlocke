@@ -441,3 +441,15 @@ fn a_diverged_shadow_keeps_nothing_more_of_the_stream() {
     }
     assert_eq!(shadow.received(), received);
 }
+
+#[test]
+fn in_the_partner_view_a_shadow_publishes_its_picture_without_being_watched() {
+    use pactlocke_run::{ShadowGame, ShadowRunner, SystemRunClock};
+    let shadow = ShadowGame::power_on(pactlocke_game::FakeGame::default(), support::START_MS);
+    let runner = ShadowRunner::spawn(shadow, Box::new(SystemRunClock), Box::new(|_| {}));
+    runner.tiled(true);
+    for chunk in stream_of(300) {
+        runner.receive(chunk);
+    }
+    until("a tile's picture", || runner.frames().latest().is_some());
+}

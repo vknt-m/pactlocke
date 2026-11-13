@@ -13,6 +13,7 @@ mod coop;
 mod data_dir;
 mod links_panel;
 mod lobby_ui;
+mod player_strip;
 mod rom_report;
 mod run_panel;
 mod spectate;
@@ -151,6 +152,10 @@ struct Playing {
     spectate: Option<spectate::Spectate>,
     /// Whose game the screen shows: `None` for this Player's own.
     shown_source: Option<String>,
+    /// The partner view: shown, and each other Player's tile.
+    partner_view: bool,
+    /// Each tile's texture, with the frame it shows.
+    tiles: Vec<Option<(u64, egui::TextureHandle)>>,
 }
 
 /// The folder of a developer's local Game Profiles, if the developer setting names one.
@@ -256,6 +261,8 @@ struct PactlockeApp {
     smoke_frames_left: Option<u32>,
     /// Inviting friends to a Run, or joining one.
     lobbies: lobby_ui::Lobbies,
+    /// The side panel is in its own window.
+    panel_popped: bool,
 }
 
 impl PactlockeApp {
@@ -275,6 +282,7 @@ impl PactlockeApp {
             error: None,
             smoke_frames_left: smoke.then_some(SMOKE_FRAMES),
             lobbies: lobby_ui::Lobbies::new(&data_dir::identity_file()),
+            panel_popped: false,
         }
     }
 
@@ -549,6 +557,7 @@ impl PactlockeApp {
             }
             None => None,
         };
+        let _ = commands.send(RunCommand::Speed(self.speed.multiplier() as u8));
         let (emulator, audio) = self.spawn(running);
         let mut playing = Playing::new(
             Play::Run {
@@ -594,6 +603,9 @@ impl PactlockeApp {
         self.speed = speed;
         if let Some(playing) = &self.playing {
             playing.play.set_speed(speed);
+            if let Play::Run { commands, .. } = &playing.play {
+                let _ = commands.send(RunCommand::Speed(speed.multiplier() as u8));
+            }
         }
     }
 
@@ -930,6 +942,177 @@ impl PactlockeApp {
     }
 }
 
+/// What the side panel asked for this frame.
+#[derive(Default)]
+struct PanelAsks {
+    strip: Option<player_strip::Asked>,
+    vote: Option<RunEvent>,
+}
+
+/// The side panel: in a Run with other Players the Player strip, the ready
+/// check, Retries, the parties and the Links; then the Run's own panel. A
+/// command for the Run goes straight to it.
+fn side_panel(ui: &mut egui::Ui, playing: &Playing, lobbies: &lobby_ui::Lobbies, speed: u8, popped: bool) -> PanelAsks {
+    let mut asks = PanelAsks::default();
+    let Play::Run { view, commands, .. } = &playing.play else {
+        rom_report::rules_panel(ui, &playing.identity);
+        return asks;
+    };
+    let view = view.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let mut links_tab = None;
+    if let (Some(spectate), Some(log)) = (&playing.spectate, lobbies.log()) {
+        let players: Vec<(pactlocke_run::PlayerKey, String)> = log
+            .locked()
+            .map(|l| l.roster.iter().map(|p| (p.key, p.name.clone())).collect())
+            .unwrap_or_default();
+        let statuses: Vec<_> = spectate.shadows.iter().map(|s| (s.key, s.status())).collect();
+        let rows: Vec<player_strip::Row> = players
+            .iter()
+            .map(|(key, name)| {
+                let you = *key == spectate.me();
+                let shadow = spectate.shadows.iter().position(|s| s.key == *key);
+                let (area, doing) = match shadow {
+                    _ if you => (view.area.clone(), view.doing.to_string()),
+                    Some(i) => {
+                        let status = &statuses[i].1;
+                        let doing = if status.catching_up {
+                            "catching up…".to_owned()
+                        } else {
+                            status.seen.doing.to_string()
+                        };
+                        (status.seen.area.clone(), doing)
+                    }
+                    None => (None, String::new()),
+                };
+                let doing = match log.ready_gate_of(key) {
+                    Some(gate) if !doing.starts_with("At ") => format!("Ready at {gate}"),
+                    _ => doing,
+                };
+                player_strip::Row {
+                    name: name.clone(),
+                    you,
+                    area,
+                    speed: if you { speed } else { log.speed_of(key) },
+                    reach: lobbies.reach(*key),
+                    doing,
+                    watch: shadow.map(|i| (i, spectate.shadows[i].cant_watch())),
+                }
+            })
+            .collect();
+        let toggles = player_strip::Toggles {
+            battery_saver: spectate.battery_saver,
+            partner_view: playing.partner_view,
+            popped_out: popped,
+        };
+        asks.strip = player_strip::show(ui, &rows, &toggles);
+        ui.separator();
+        if let Some(check) = log.ready_check() {
+            ui.horizontal_wrapped(|ui| {
+                ui.strong(format!(
+                    "Next Sync Gate: {} · {} of {} ready",
+                    check.gate,
+                    check.ready(),
+                    check.players.len()
+                ));
+            });
+            ui.horizontal_wrapped(|ui| {
+                for (name, ready) in &check.players {
+                    let state = if *ready { "Ready" } else { "Not yet" };
+                    ui.label(format!("{name}: {state}"));
+                }
+            });
+            ui.separator();
+        }
+        asks.vote = spectate::votes(ui, log, spectate.me());
+        ui.separator();
+        let links_on = log.locked().is_some_and(|l| l.ruleset.links);
+        let links = if links_on { spectate.links(log) } else { Vec::new() };
+        let mut parties = Vec::new();
+        for (key, name) in &players {
+            let pokemon = if *key == spectate.me() {
+                &view.party[..]
+            } else {
+                statuses
+                    .iter()
+                    .find(|(k, _)| k == key)
+                    .map_or(&[][..], |(_, status)| &status.seen.party[..])
+            };
+            parties.push(links_panel::Party {
+                player: *key,
+                name,
+                pokemon,
+            });
+        }
+        links_panel::parties(ui, &parties, &links);
+        ui.separator();
+        if links_on {
+            links_tab = Some((links, players, spectate.me()));
+        }
+    } else {
+        let pop = if popped { "Dock the panel" } else { "Pop out" };
+        if ui.button(pop).clicked() {
+            asks.strip = Some(player_strip::Asked::PopOut(!popped));
+        }
+    }
+    let mut show_links = links_tab.as_ref().map(|(links, players, me)| {
+        (links.len(), move |ui: &mut egui::Ui| {
+            links_panel::tab(ui, links, players, me)
+        })
+    });
+    let tab = show_links
+        .as_mut()
+        .map(|(count, show)| (*count, show as &mut run_panel::LinksTab<'_>));
+    if let Some(command) = run_panel::show(ui, &view, playing.spectate.is_none(), tab) {
+        // The emulator thread only stops when the Run is closed.
+        let _ = commands.send(command);
+    }
+    asks
+}
+
+/// The partner view: each other Player's Shadow Game as a small tile.
+fn partner_tiles(ui: &mut egui::Ui, playing: &mut Playing) {
+    let Some(spectate) = &playing.spectate else {
+        return;
+    };
+    playing.tiles.resize_with(spectate.shadows.len(), || None);
+    ui.vertical(|ui| {
+        for (shadow, tile) in spectate.shadows.iter().zip(playing.tiles.iter_mut()) {
+            ui.vertical(|ui| {
+                ui.weak(&shadow.name);
+                let newest = shadow.frames().latest();
+                if let Some(newest) = newest.filter(|n| tile.as_ref().is_none_or(|(seq, _)| *seq != n.seq)) {
+                    let image = egui::ColorImage::from_rgba_unmultiplied(
+                        [newest.frame.width as usize, newest.frame.height as usize],
+                        &newest.frame.rgba,
+                    );
+                    match tile {
+                        Some((seq, texture)) => {
+                            texture.set(image, egui::TextureOptions::NEAREST);
+                            *seq = newest.seq;
+                        }
+                        None => {
+                            let texture = ui.ctx().load_texture(
+                                format!("tile {}", shadow.name),
+                                image,
+                                egui::TextureOptions::NEAREST,
+                            );
+                            *tile = Some((newest.seq, texture));
+                        }
+                    }
+                }
+                match tile {
+                    Some((_, texture)) => {
+                        ui.add(egui::Image::new(&*texture).fit_to_exact_size(egui::vec2(160.0, 107.0)));
+                    }
+                    None => {
+                        ui.weak("no picture yet");
+                    }
+                }
+            });
+        }
+    });
+}
+
 impl Playing {
     fn new(play: Play, audio: Option<audio::AudioOut>, name: String, identity: RomIdentity) -> Self {
         Self {
@@ -941,6 +1124,8 @@ impl Playing {
             identity,
             spectate: None,
             shown_source: None,
+            partner_view: false,
+            tiles: Vec::new(),
         }
     }
 }
@@ -961,96 +1146,53 @@ impl eframe::App for PactlockeApp {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             });
         }
-        if let Some(playing) = &mut self.playing {
-            let mut asked = None;
-            let mut votes = None;
-            egui::Panel::right("side panel")
-                .resizable(true)
-                .default_size(360.0)
-                .show(ui, |ui| match &playing.play {
-                    Play::Run { view, commands, .. } => {
-                        if let Some(spectate) = &playing.spectate {
-                            asked = spectate::panel(ui, spectate);
-                            ui.separator();
-                        }
-                        let view = view.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                        let mut links_tab = None;
-                        if let (Some(spectate), Some(log)) = (&playing.spectate, self.lobbies.log()) {
-                            if let Some(check) = log.ready_check() {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.strong(format!(
-                                        "Next Sync Gate: {} · {} of {} ready",
-                                        check.gate,
-                                        check.ready(),
-                                        check.players.len()
-                                    ));
-                                });
-                                ui.horizontal_wrapped(|ui| {
-                                    for (name, ready) in &check.players {
-                                        let state = if *ready { "Ready" } else { "Not yet" };
-                                        ui.label(format!("{name}: {state}"));
-                                    }
-                                });
-                                ui.separator();
-                            }
-                            votes = spectate::votes(ui, log, spectate.me());
-                            ui.separator();
-                            let links_on = log.locked().is_some_and(|l| l.ruleset.links);
-                            let links = if links_on { spectate.links(log) } else { Vec::new() };
-                            let players: Vec<(pactlocke_run::PlayerKey, String)> = log
-                                .locked()
-                                .map(|l| l.roster.iter().map(|p| (p.key, p.name.clone())).collect())
-                                .unwrap_or_default();
-                            let statuses: Vec<_> = spectate.shadows.iter().map(|s| (s.key, s.status())).collect();
-                            let mut parties = Vec::new();
-                            for (key, name) in &players {
-                                let pokemon = if *key == spectate.me() {
-                                    &view.party[..]
-                                } else {
-                                    statuses
-                                        .iter()
-                                        .find(|(k, _)| k == key)
-                                        .map_or(&[][..], |(_, status)| &status.seen.party[..])
-                                };
-                                parties.push(links_panel::Party {
-                                    player: *key,
-                                    name,
-                                    pokemon,
-                                });
-                            }
-                            links_panel::parties(ui, &parties, &links);
-                            ui.separator();
-                            if links_on {
-                                links_tab = Some((links, players, spectate.me()));
-                            }
-                        }
-                        let mut show_links = links_tab.as_ref().map(|(links, players, me)| {
-                            (links.len(), move |ui: &mut egui::Ui| {
-                                links_panel::tab(ui, links, players, me)
-                            })
+        if let Some(playing) = self.playing.as_mut() {
+            let lobbies = &self.lobbies;
+            let speed = self.speed.multiplier() as u8;
+            let popped = self.panel_popped;
+            let mut asks = PanelAsks::default();
+            if popped {
+                let mut closed = false;
+                ui.ctx().show_viewport_immediate(
+                    egui::ViewportId::from_hash_of("side panel window"),
+                    egui::ViewportBuilder::default()
+                        .with_title(format!("{} · Pactlocke", playing.name))
+                        .with_inner_size([400.0, 760.0]),
+                    |ui, _class| {
+                        egui::CentralPanel::default_margins().show(ui, |ui| {
+                            asks = side_panel(ui, playing, lobbies, speed, popped);
                         });
-                        let tab = show_links
-                            .as_mut()
-                            .map(|(count, show)| (*count, show as &mut run_panel::LinksTab<'_>));
-                        if let Some(command) = run_panel::show(ui, &view, playing.spectate.is_none(), tab) {
-                            // The emulator thread only stops when the Run is closed.
-                            let _ = commands.send(command);
-                        }
-                    }
-                    Play::Free(_) => rom_report::rules_panel(ui, &playing.identity),
-                });
+                        closed = ui.ctx().input(|i| i.viewport().close_requested());
+                    },
+                );
+                if closed {
+                    asks.strip = Some(player_strip::Asked::PopOut(false));
+                }
+            } else {
+                egui::Panel::right("side panel")
+                    .resizable(true)
+                    .default_size(360.0)
+                    .show(ui, |ui| asks = side_panel(ui, playing, lobbies, speed, popped));
+            }
+            if let Some(player_strip::Asked::PopOut(out)) = asks.strip {
+                self.panel_popped = out;
+            }
             if let Some(spectate) = playing.spectate.as_mut() {
-                match asked {
+                match asks.strip {
                     // Spectate pauses this Player's own game until they come back.
-                    Some(spectate::Asked::Watch(i)) => {
+                    Some(player_strip::Asked::Watch(i)) => {
                         spectate.watch(i, playing.audio_out.as_ref());
                         playing.play.set_paused(true);
                     }
-                    Some(spectate::Asked::BatterySaver(on)) => spectate.set_battery_saver(on),
-                    None => {}
+                    Some(player_strip::Asked::BatterySaver(on)) => spectate.set_battery_saver(on),
+                    Some(player_strip::Asked::PartnerView(on)) => {
+                        spectate.set_partner_view(on);
+                        playing.partner_view = on;
+                    }
+                    Some(player_strip::Asked::PopOut(_)) | None => {}
                 }
                 spectate.pump(&mut self.lobbies);
-                if let Some(vote) = votes {
+                if let Some(vote) = asks.vote {
                     self.lobbies.share(vec![vote]);
                 }
                 if let (Play::Run { commands, .. }, Some(log)) = (&playing.play, self.lobbies.log()) {
@@ -1061,6 +1203,9 @@ impl eframe::App for PactlockeApp {
                 }
                 // Streams are passed on from the UI thread: keep it awake.
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+            }
+            if playing.partner_view {
+                egui::Panel::left("partner view").show(ui, |ui| partner_tiles(ui, playing));
             }
         }
         egui::CentralPanel::default_margins().show(ui, |ui| self.game_screen(ui));

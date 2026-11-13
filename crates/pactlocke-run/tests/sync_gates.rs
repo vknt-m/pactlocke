@@ -137,7 +137,11 @@ fn a_ready_a_retry_undid_doesnt_count_and_the_gate_waits_for_it_again() {
     table.votes(0, 1, true);
     table.votes(1, 1, true);
     both_play(&mut table, 100);
-    assert_eq!(table.apps[0].log.ready_check().map(|c| c.ready()), Some(0), "Red's Ready is undone");
+    assert_eq!(
+        table.apps[0].log.ready_check().map(|c| c.ready()),
+        Some(0),
+        "Red's Ready is undone"
+    );
 
     // Blue readies up: Red isn't Ready any more, so Brock still holds.
     table.talks_to(1, "Brock");

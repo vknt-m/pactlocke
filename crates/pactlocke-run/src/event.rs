@@ -40,6 +40,10 @@ pub enum RunEvent {
     /// Links: another Player missed, skipped or lost this source's
     /// Encounter, so it is closed here too (`why` says whose).
     SourceClosed { source: SourceRef, why: String },
+    /// The Player changed their speed (1 to 4, times a GBA's).
+    SpeedChanged { speed: u8 },
+    /// Another Player changed their speed, as the Run log says.
+    OthersSpeed { player: String, speed: u8 },
     /// The Player came to this Sync Gate and is Ready there; it stays so.
     GateReady { gate: String },
     /// The Player came to this Sync Gate but can't ready up, and why.
@@ -275,6 +279,7 @@ impl RunEvent {
                 | RunEvent::EncounterOver { .. }
                 | RunEvent::Skipped { .. }
                 | RunEvent::GateReady { .. }
+                | RunEvent::SpeedChanged { .. }
         ) || self.is_run_checkpoint()
             || self.is_violation()
     }
