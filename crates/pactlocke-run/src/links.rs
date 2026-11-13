@@ -71,7 +71,8 @@ pub fn links(log: &RunLog, me: &PlayerKey, judge: &dyn Judge) -> Vec<Link> {
     let Some(locked) = log.locked() else {
         return Vec::new();
     };
-    let roster: Vec<PlayerKey> = locked.roster.iter().map(|p| p.key).collect();
+    // A Player dropped from the Run is out of every Link.
+    let roster: Vec<PlayerKey> = log.active();
     let names: BTreeMap<PlayerKey, String> = locked.roster.iter().map(|p| (p.key, p.name.clone())).collect();
     let mut order: Vec<SourceRef> = Vec::new();
     let mut parts: BTreeMap<String, BTreeMap<PlayerKey, Member>> = BTreeMap::new();

@@ -1619,3 +1619,52 @@ fn a_partner_avatar_is_drawn_in_firered_from_their_shadow_game_and_nothing_else_
     dump_screen(&a.game, "partner-avatar");
     assert!(differs, "B is on A's screen");
 }
+
+#[test]
+fn a_crashed_firered_app_takes_its_presses_back_from_the_host_and_rebuilds_its_game_exactly() {
+    let Some(rom) = firered_rom() else {
+        eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
+        return;
+    };
+    let mut d = firered_run(rom);
+    d.watched();
+    d.play(FR_STARTER);
+    d.play("w 60");
+    // The Run file as of its last flush; the stream goes on to the Host.
+    d.game.flush();
+    let crashed = d.storage.snapshot();
+    to_a_closed_route_1_battle_from_the_lab(&mut d);
+    // Up to the end of a chunk the Host has.
+    for _ in 0..pactlocke_run::CHUNK_FRAMES * 2 {
+        if d.watcher().store.received(&[1; 32]) == Some((1, d.game.engine().frames_run())) {
+            break;
+        }
+        d.frame(Keys::NONE);
+    }
+    let frames = d.game.engine().frames_run();
+    assert_eq!(d.watcher().store.received(&[1; 32]), Some((1, frames)));
+    let at_crash = ram_hash(&mut d);
+    let rom = d.rom.clone();
+    let host_has = d.watcher().store.wanted(&pactlocke_run::StreamWant {
+        player: [1; 32],
+        boot: 1,
+        from_frame: 0,
+    });
+    drop(d);
+
+    let mut engine = RunEngine::resume(Box::new(crashed.clone()), Box::new(SystemRunClock)).unwrap();
+    let BootPlan::Rebuild { from, keys, .. } = engine.boot_plan().clone() else {
+        panic!("rebuilt after a crash");
+    };
+    let flushed = from.frame + keys.len() as u64;
+    assert!(flushed < frames, "the Run file is behind: {flushed} of {frames}");
+    engine.take_back_presses(&host_has);
+    assert!(
+        matches!(engine.boot_plan(), BootPlan::Rebuild { from, keys, .. } if from.frame + keys.len() as u64 == frames),
+        "every press the Host had"
+    );
+    let mut d = booted(engine, crashed, rom);
+    assert_eq!(ram_hash(&mut d), at_crash, "the game as it was");
+    assert!(d.in_battle());
+    assert_eq!(d.read(CATCH_SITE, 4), [0x01, 0x20, 0x70, 0x47], "with its patch set");
+}

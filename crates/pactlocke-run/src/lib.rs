@@ -15,6 +15,7 @@ mod families;
 mod file;
 mod links;
 mod live;
+mod presence;
 mod rules;
 mod running;
 mod setup;
@@ -33,6 +34,7 @@ pub use event::{AreaRef, CheckpointReason, DeathCause, Recorded, ResumedFrom, Ru
 pub use file::{RunFile, RunId, RunLibrary, RunSummary};
 pub use links::{Judge, Link, LinkKeeper, Member, links};
 pub use live::{LiveGame, PlayedGame};
+pub use presence::{DROPOUT_OFFER_MS, HOST_SILENT_MS, OFFLINE_MS, Presence};
 pub use running::{RetryTo, RunCommand, RunningGame};
 pub use setup::{
     COUNTDOWN_MS, Locked, Mismatch, Preset, RosterEntry, RunSetup, SetupCheck, SetupError, SetupMessage, SetupPlayer,

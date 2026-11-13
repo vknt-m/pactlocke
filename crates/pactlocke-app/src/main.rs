@@ -950,6 +950,7 @@ impl PactlockeApp {
 struct PanelAsks {
     strip: Option<player_strip::Asked>,
     vote: Option<RunEvent>,
+    dropout: Option<spectate::DropoutAsk>,
 }
 
 /// The side panel: in a Run with other Players the Player strip, the ready
@@ -996,7 +997,11 @@ fn side_panel(ui: &mut egui::Ui, playing: &Playing, lobbies: &lobby_ui::Lobbies,
                     you,
                     area,
                     speed: if you { speed } else { log.speed_of(key) },
-                    reach: lobbies.reach(*key),
+                    reach: if !you && spectate.shows_offline(key) {
+                        Some(player_strip::Reach::Offline)
+                    } else {
+                        lobbies.reach(*key)
+                    },
                     doing,
                     watch: shadow.map(|i| (i, spectate.shadows[i].cant_watch())),
                 }
@@ -1008,6 +1013,12 @@ fn side_panel(ui: &mut egui::Ui, playing: &Playing, lobbies: &lobby_ui::Lobbies,
             popped_out: popped,
         };
         asks.strip = player_strip::show(ui, &rows, &toggles);
+        if !lobbies.online() {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                "You're offline: your game goes on and your Run is kept, and Sync Gate battles and votes wait until you're back.",
+            );
+        }
         ui.separator();
         if let Some(check) = log.ready_check() {
             ui.horizontal_wrapped(|ui| {
@@ -1026,7 +1037,8 @@ fn side_panel(ui: &mut egui::Ui, playing: &Playing, lobbies: &lobby_ui::Lobbies,
             });
             ui.separator();
         }
-        asks.vote = spectate::votes(ui, log, spectate.me());
+        asks.vote = spectate::votes(ui, log, spectate.me(), lobbies.online());
+        asks.dropout = spectate::dropouts(ui, log, spectate, lobbies.online());
         ui.separator();
         let links_on = log.locked().is_some_and(|l| l.ruleset.links);
         let links = if links_on { spectate.links(log) } else { Vec::new() };
@@ -1195,6 +1207,11 @@ impl eframe::App for PactlockeApp {
                     Some(player_strip::Asked::PopOut(_)) | None => {}
                 }
                 spectate.pump(&mut self.lobbies);
+                match asks.dropout {
+                    Some(spectate::DropoutAsk::Vote(vote)) => self.lobbies.share(vec![vote]),
+                    Some(spectate::DropoutAsk::KeepWaiting(player)) => spectate.keep_waiting(player),
+                    None => {}
+                }
                 if let Some(vote) = asks.vote {
                     self.lobbies.share(vec![vote]);
                 }

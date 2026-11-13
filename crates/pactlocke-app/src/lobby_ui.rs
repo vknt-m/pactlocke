@@ -32,7 +32,15 @@ pub struct Lobbies {
     host: Option<(HostNode, HostCoop)>,
     join: Option<(JoinNode, JoinCoop)>,
     prompt: Option<JoinPrompt>,
+    /// How a joiner reconnects to the Host after losing the connection
+    /// mid-Run: the invite and the ROM's SHA-1.
+    rejoin: Option<(Invite, Option<String>)>,
+    /// When this joiner's connection to the Host was lost, if it is.
+    lost_at: Option<i64>,
 }
+
+/// How long a joiner waits before reconnecting to the Host.
+const RECONNECT_MS: i64 = 3_000;
 
 impl Lobbies {
     /// `key_file` holds this install's key, its identity on the network.
@@ -49,6 +57,8 @@ impl Lobbies {
             host: None,
             join: None,
             prompt: None,
+            rejoin: None,
+            lost_at: None,
         }
     }
 
@@ -120,6 +130,45 @@ impl Lobbies {
         }
     }
 
+    /// Whether this app can reach the other Players now: the Host always,
+    /// a joiner while connected to the Host.
+    pub fn online(&self) -> bool {
+        match (&self.host, &self.join) {
+            (Some(_), _) => true,
+            (None, Some((_, coop))) => coop.connected(),
+            (None, None) => false,
+        }
+    }
+
+    /// A joiner in a Run that has started, whose connection to the Host was
+    /// lost, connects again a few seconds later; their Run carries on.
+    fn reconnect_if_lost(&mut self, now_ms: i64) {
+        let Some((node, coop)) = &self.join else {
+            return;
+        };
+        let lost = node.view().error.is_some() && coop.log().locked().is_some();
+        if !lost {
+            self.lost_at = None;
+            return;
+        }
+        let lost_at = *self.lost_at.get_or_insert(now_ms);
+        let (Some((invite, sha1)), Ok(key)) = (self.rejoin.clone(), self.key.clone()) else {
+            return;
+        };
+        if now_ms - lost_at < RECONNECT_MS {
+            return;
+        }
+        if let Ok(lobby) = JoinLobby::new(invite, &self.name, APP_VERSION, sha1) {
+            let fresh = JoinNode::start(key, lobby, self.relay_choice());
+            if let Some((old, _)) = self.join.as_mut() {
+                let old = std::mem::replace(old, fresh);
+                // The old network shuts down on its own thread.
+                std::thread::spawn(move || drop(old));
+            }
+            self.lost_at = None;
+        }
+    }
+
     /// The shared Run log, in a Run with other Players.
     pub fn log(&self) -> Option<&pactlocke_run::RunLog> {
         match (&self.host, &self.join) {
@@ -155,6 +204,7 @@ impl Lobbies {
     pub fn show(&mut self, ctx: &egui::Context) -> Option<CoopStart> {
         self.join_prompt(ctx);
         let now_ms = SystemRunClock.now_ms();
+        self.reconnect_if_lost(now_ms);
         let start = match (&mut self.host, &mut self.join) {
             (Some((node, coop)), _) => coop.pump(node, now_ms),
             (None, Some((node, coop))) => coop.pump(node, now_ms),
@@ -215,16 +265,18 @@ impl Lobbies {
             let picked = prompt.rom.as_ref().map(|rom| (rom.path.clone(), rom.sha1.clone()));
             let started = Invite::parse(&prompt.link)
                 .map_err(|e| format!("{e}."))
-                .and_then(|invite| JoinLobby::new(invite, &name, APP_VERSION, rom))
+                .and_then(|invite| JoinLobby::new(invite, &name, APP_VERSION, rom.clone()))
                 .and_then(|lobby| {
                     let key = key?;
                     let coop = JoinCoop::new(key, lobby.invite().host, picked);
-                    Ok((JoinNode::start(key, lobby, relays), coop))
+                    let rejoin = (lobby.invite().clone(), rom.clone());
+                    Ok((JoinNode::start(key, lobby, relays), coop, rejoin))
                 });
             match started {
-                Ok(node) => {
+                Ok((node, coop, rejoin)) => {
                     self.leave();
-                    self.join = Some(node);
+                    self.join = Some((node, coop));
+                    self.rejoin = Some(rejoin);
                     self.prompt = None;
                 }
                 Err(e) => prompt.error = Some(e),

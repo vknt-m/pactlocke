@@ -315,6 +315,36 @@ impl RunEngine {
         &self.patches
     }
 
+    /// After a crash, this Player's own presses the Run file lost (it keeps
+    /// them only every second) but the Host had from the input stream: the
+    /// rebuild goes on through them, and the Run file keeps them now too.
+    /// Takes chunks of this boot's stream that continue the rebuild.
+    pub fn take_back_presses(&mut self, chunks: &[crate::InputChunk]) {
+        let BootPlan::Rebuild { from, keys, stamped } = &mut self.boot_plan else {
+            return;
+        };
+        let rebuilt_boot = from.boot;
+        let mut end = from.frame + keys.len() as u64;
+        let mut chunks: Vec<&crate::InputChunk> = chunks.iter().collect();
+        chunks.sort_by_key(|c| c.first_frame);
+        for chunk in chunks {
+            if chunk.boot != rebuilt_boot || chunk.first_frame > end || chunk.end() <= end {
+                continue;
+            }
+            let skip = (end - chunk.first_frame) as usize;
+            let batch = InputBatch {
+                boot: rebuilt_boot,
+                first_frame: end,
+                keys: chunk.keys[skip..].to_vec(),
+                stamped: chunk.stamped.iter().filter(|s| s.frame >= end).cloned().collect(),
+            };
+            keys.extend_from_slice(&batch.keys);
+            stamped.extend(batch.stamped.iter().cloned());
+            self.storage.record_inputs(&batch);
+            end = chunk.end();
+        }
+    }
+
     /// The Run's clock now, in Unix milliseconds.
     pub fn now_ms(&self) -> i64 {
         self.clock.now_ms()
@@ -592,6 +622,11 @@ impl RunEngine {
             self.speed = speed;
             self.record(RunEvent::SpeedChanged { speed });
         }
+    }
+
+    /// The other Players dropped this Player from the Run: the feed says so.
+    pub fn dropped_out(&mut self) {
+        self.record(RunEvent::DroppedOut);
     }
 
     /// Another Player plays at this speed now, as the Run log says.

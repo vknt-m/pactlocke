@@ -198,6 +198,9 @@ impl HostCoop {
         if let Some(call) = self.log.retry_due() {
             self.submit(Some(node), &LogBody::Retry { call });
         }
+        if let Some(player) = self.log.dropout_due() {
+            self.submit(Some(node), &LogBody::Dropout { player });
+        }
         let view = self.setup.view();
         let stale = self
             .sent
@@ -410,12 +413,21 @@ pub struct JoinCoop {
     /// The Ruleset this Player said Ready to: the lock must be exactly it.
     ready_to: Option<Ruleset>,
     next_counter: u64,
-    /// This Player's entries sent to the Host and not in the log yet: counter, when sent.
-    unordered: Vec<(u64, i64)>,
+    /// This Player's entries sent to the Host and not in the log yet.
+    unordered: Vec<Unordered>,
     started: bool,
     error: Option<String>,
     /// Input stream messages from the Host, for Spectate.
     stream_inbox: Vec<Vec<u8>>,
+}
+
+/// One of this Player's entries the Host hasn't put in the log yet.
+struct Unordered {
+    counter: u64,
+    /// When it was last sent while connected.
+    sent_ms: i64,
+    /// The signed submission, to send again after a reconnect.
+    bytes: Vec<u8>,
 }
 
 impl JoinCoop {
@@ -446,6 +458,11 @@ impl JoinCoop {
     /// The Host's key.
     pub fn host(&self) -> PlayerKey {
         self.host
+    }
+
+    /// Whether the lobby is connected to the Host now.
+    pub fn connected(&self) -> bool {
+        self.connected
     }
 
     /// This Player's copy of the Run log.
@@ -481,6 +498,14 @@ impl JoinCoop {
             node.send(Message::Setup(SetupMessage::Check(self.check.clone()).to_bytes()));
             self.check_sent = Some(self.check.clone());
         }
+        // Back after a disconnect: every entry the Host hasn't ordered goes
+        // again (one it already has is refused as a repeat).
+        if connected && !self.connected {
+            for entry in &mut self.unordered {
+                node.send(Message::Log(entry.bytes.clone()));
+                entry.sent_ms = now_ms;
+            }
+        }
         self.connected = connected;
         for message in node.take_inbox() {
             match message {
@@ -495,9 +520,11 @@ impl JoinCoop {
             }
         }
         let ordered = self.log.next_counter(&self.me());
-        self.unordered.retain(|&(counter, _)| counter >= ordered);
-        if let Some(&(_, sent_ms)) = self.unordered.first()
-            && now_ms - sent_ms >= UNORDERED_MS
+        self.unordered.retain(|entry| entry.counter >= ordered);
+        // Offline, entries wait for the reconnect: nobody is leaving them out.
+        if connected
+            && let Some(entry) = self.unordered.first()
+            && now_ms - entry.sent_ms >= UNORDERED_MS
         {
             self.error = Some(format!(
                 "The Host hasn't put {} of your Run log entries in the log: the Host may be leaving them out.",
@@ -585,8 +612,13 @@ impl JoinCoop {
         for event in events {
             let counter = self.next_counter.max(self.log.next_counter(&self.me()));
             let submission = self.log.sign(&self.signer, counter, &LogBody::Event(event));
-            node.send(Message::Log(submission.to_bytes()));
-            self.unordered.push((counter, now_ms));
+            let bytes = submission.to_bytes();
+            node.send(Message::Log(bytes.clone()));
+            self.unordered.push(Unordered {
+                counter,
+                sent_ms: now_ms,
+                bytes,
+            });
             self.next_counter = counter + 1;
         }
     }

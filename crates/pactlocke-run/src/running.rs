@@ -41,6 +41,8 @@ pub enum RunCommand {
     Speed(u8),
     /// Another Player plays at this speed now, as the Run log says.
     OthersSpeed { player: String, speed: u8 },
+    /// The other Players dropped this Player from the Run.
+    DroppedOut,
 }
 
 /// Where a Retry goes back to.
@@ -194,6 +196,7 @@ impl<G: PlayedGame> RunningGame<G> {
                 RunCommand::OpenGate { gate, checkpoint } => self.engine.open_gate(&gate, checkpoint, &mut self.game),
                 RunCommand::Speed(speed) => self.engine.speed(speed),
                 RunCommand::OthersSpeed { player, speed } => self.engine.others_speed(player, speed),
+                RunCommand::DroppedOut => self.engine.dropped_out(),
                 RunCommand::Retry { to } => {
                     if let Err(why) = self.retry(&to) {
                         self.engine.retry_failed(why);

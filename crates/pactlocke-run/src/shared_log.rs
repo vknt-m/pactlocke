@@ -58,6 +58,12 @@ pub enum LogBody {
     Locked(Locked),
     /// Something that happened in its author's game.
     Event(RunEvent),
+    /// By the next Player in join order, once the Host has been silent: they
+    /// order the log from here on.
+    Takeover,
+    /// By the Host, once everyone else voted Yes: `player` leaves the Run
+    /// for good. Their Pokémon leave every Link.
+    Dropout { player: PlayerKey },
     /// By the Host, once everyone voted Yes: a Retry. Every Player goes back
     /// to their part of the `call`th Run Checkpoint, and each Player's
     /// entries after it are void.
@@ -149,6 +155,10 @@ pub enum LogError {
     /// A Retry without everyone's vote, with no Retry left, or to a Run
     /// Checkpoint that isn't the latest every Player took.
     BadRetry { seq: u64 },
+    /// A takeover by someone who isn't next in join order after the Host.
+    BadTakeover { seq: u64 },
+    /// A Dropout not everyone else voted for.
+    BadDropout { seq: u64 },
 }
 
 impl std::fmt::Display for LogError {
@@ -165,6 +175,10 @@ impl std::fmt::Display for LogError {
             LogError::Body { seq } => write!(f, "entry {seq} can't be read"),
             LogError::NoGenesis => write!(f, "the log doesn't start with the Run"),
             LogError::LockedAgain { seq } => write!(f, "entry {seq} locks the Run a second time"),
+            LogError::BadTakeover { seq } => {
+                write!(f, "entry {seq} takes over the Run log out of turn")
+            }
+            LogError::BadDropout { seq } => write!(f, "entry {seq} drops a Player nobody agreed to drop"),
             LogError::BadRetry { seq } => write!(
                 f,
                 "entry {seq} is a Retry nobody agreed to: not everyone voted Yes, no Retry is left, or it isn't the latest Run Checkpoint"
@@ -193,6 +207,8 @@ pub struct RunLog {
     entries: Vec<LogEntry>,
     roster: Option<Vec<[u8; 32]>>,
     counters: BTreeMap<[u8; 32], u64>,
+    /// Players dropped from the Run, in the order they left.
+    dropped: Vec<PlayerKey>,
 }
 
 impl RunLog {
@@ -204,7 +220,50 @@ impl RunLog {
             entries: Vec::new(),
             roster: None,
             counters: BTreeMap::new(),
+            dropped: Vec::new(),
         }
+    }
+
+    /// Who orders the log now: the Host, or whoever took over.
+    pub fn host(&self) -> [u8; 32] {
+        self.host
+    }
+
+    /// The Players still in the Run, in join order: the roster less anyone dropped.
+    pub fn active(&self) -> Vec<PlayerKey> {
+        self.roster
+            .iter()
+            .flatten()
+            .filter(|p| !self.dropped.contains(p))
+            .copied()
+            .collect()
+    }
+
+    /// Who takes over ordering the log if the Host goes silent: the next
+    /// Player still in the Run after them in join order.
+    pub fn successor(&self) -> Option<PlayerKey> {
+        // In join order from the Host on, round to the start: the Host may
+        // have been dropped, and is then skipped like anyone else dropped.
+        let roster = self.roster.as_ref()?;
+        let at = roster.iter().position(|p| *p == self.host).unwrap_or(0);
+        let active = self.active();
+        roster
+            .iter()
+            .cycle()
+            .skip(at + 1)
+            .take(roster.len())
+            .find(|p| **p != self.host && active.contains(p))
+            .copied()
+    }
+
+    /// The longest of these copies of the log that checks out from the
+    /// Run's first Host: what a Player taking over continues from.
+    pub fn longest(first_host: [u8; 32], copies: impl IntoIterator<Item = Vec<LogEntry>>) -> Option<Self> {
+        copies
+            .into_iter()
+            .filter_map(|entries| Self::verify(first_host, entries).ok())
+            // Two of the same length: the same one on every machine.
+            .max_by_key(|log| (log.entries.len(), log.entries.last().map(LogEntry::hash)))
     }
 
     /// Checks a whole log, entry by entry, as a Player who joins or resumes does.
@@ -263,11 +322,13 @@ impl RunLog {
         if entry.prev != self.head() {
             return Err(LogError::Link { seq });
         }
-        if !verifies(&self.host, &entry.hash(), &entry.host_signature) {
-            return Err(LogError::HostSignature { seq });
-        }
         let s = &entry.submission;
         let kind = body_kind(&s.body).ok_or(LogError::Body { seq })?;
+        // A takeover is countersigned by the Player taking over.
+        let host = if kind == Kind::Takeover { s.author } else { self.host };
+        if !verifies(&host, &entry.hash(), &entry.host_signature) {
+            return Err(LogError::HostSignature { seq });
+        }
         let run_id = if seq == 0 { [0; 32] } else { self.run_id };
         if !verifies(&s.author, &author_message(&run_id, s.counter, &s.body), &s.signature) {
             return Err(LogError::AuthorSignature { seq });
@@ -285,6 +346,19 @@ impl RunLog {
             Kind::Locked if s.author != self.host => return Err(LogError::NotHost { seq }),
             Kind::Locked if self.roster.is_some() => return Err(LogError::LockedAgain { seq }),
             Kind::Locked => {}
+            Kind::Takeover if self.roster.is_none() || self.successor() != Some(s.author) => {
+                return Err(LogError::BadTakeover { seq });
+            }
+            Kind::Takeover => {}
+            Kind::Dropout if s.author != self.host => return Err(LogError::NotHost { seq }),
+            Kind::Dropout => {
+                let Ok(LogBody::Dropout { player }) = serde_json::from_slice(&s.body) else {
+                    return Err(LogError::Body { seq });
+                };
+                if self.dropout_due() != Some(player) {
+                    return Err(LogError::BadDropout { seq });
+                }
+            }
             Kind::Retry if s.author != self.host => return Err(LogError::NotHost { seq }),
             Kind::Retry => {
                 let Ok(LogBody::Retry { call }) = serde_json::from_slice(&s.body) else {
@@ -295,7 +369,7 @@ impl RunLog {
                 }
             }
             Kind::Event => {
-                let in_roster = self.roster.as_ref().is_some_and(|r| r.contains(&s.author));
+                let in_roster = self.active().contains(&s.author);
                 if !in_roster {
                     return Err(LogError::NotInRoster { seq });
                 }
@@ -311,8 +385,11 @@ impl RunLog {
             return Err(LogError::Skipped { seq });
         }
         let body: LogBody = serde_json::from_slice(&s.body).map_err(|_| LogError::Body { seq })?;
-        if let LogBody::Locked(locked) = &body {
-            self.roster = Some(locked.roster.iter().map(|r| r.key).collect());
+        match &body {
+            LogBody::Locked(locked) => self.roster = Some(locked.roster.iter().map(|r| r.key).collect()),
+            LogBody::Takeover => self.host = s.author,
+            LogBody::Dropout { player } => self.dropped.push(*player),
+            _ => {}
         }
         if seq == 0 {
             self.run_id = Sha256::digest(&s.body).into();
@@ -395,11 +472,7 @@ impl RunLog {
 
     /// Whether every Player in the roster has their part of this Run Checkpoint, and it isn't void.
     fn is_complete(&self, called: &Call) -> bool {
-        !called.void
-            && self
-                .roster
-                .as_ref()
-                .is_some_and(|roster| roster.iter().all(|p| called.parts.contains_key(p)))
+        !called.void && self.roster.is_some() && self.active().iter().all(|p| called.parts.contains_key(p))
     }
 
     /// The newest Run Checkpoint every Player has their part of: the one a Retry goes back to.
@@ -445,13 +518,53 @@ impl RunLog {
         open.filter(|vote| Some(vote.call) == self.latest_complete())
     }
 
+    /// The Dropout vote open now, if any: who would leave and who said Yes.
+    /// It starts at a Yes with none open and ends at the first No, or at the Dropout.
+    pub fn dropout_vote(&self) -> Option<(PlayerKey, BTreeSet<PlayerKey>)> {
+        let mut open: Option<(PlayerKey, BTreeSet<PlayerKey>)> = None;
+        let mut gone: Vec<PlayerKey> = Vec::new();
+        for (author, body) in self.bodies() {
+            match body {
+                // The leaver has no say, and a vote on someone already gone counts for nothing.
+                LogBody::Event(RunEvent::DropoutVote { player, .. })
+                    if author == player
+                        || gone.contains(&player)
+                        || !self.roster.as_ref().is_some_and(|r| r.contains(&player)) => {}
+                LogBody::Event(RunEvent::DropoutVote { player, yes }) => match &mut open {
+                    None if yes => open = Some((player, BTreeSet::from([author]))),
+                    Some((leaving, yes_votes)) if *leaving == player && yes => {
+                        yes_votes.insert(author);
+                    }
+                    Some((leaving, _)) if *leaving == player => open = None,
+                    _ => {}
+                },
+                LogBody::Dropout { player } => {
+                    gone.push(player);
+                    open = None;
+                }
+                _ => {}
+            }
+        }
+        open
+    }
+
+    /// The Player the Host should drop now: everyone else still in the Run said Yes.
+    pub fn dropout_due(&self) -> Option<PlayerKey> {
+        let (leaving, yes) = self.dropout_vote()?;
+        self.active()
+            .iter()
+            .filter(|p| **p != leaving)
+            .all(|p| yes.contains(p))
+            .then_some(leaving)
+    }
+
     /// The Run Checkpoint a Retry should go back to now: the open vote's,
     /// once every Player said Yes and a Retry is left. The Host records it;
     /// every Player checks it.
     pub fn retry_due(&self) -> Option<u64> {
         let vote = self.vote()?;
-        let roster = self.roster.as_ref()?;
-        let everyone = roster.iter().all(|p| vote.yes.contains(p));
+        self.roster.as_ref()?;
+        let everyone = self.active().iter().all(|p| vote.yes.contains(p));
         (everyone && self.retries_left() > 0).then_some(vote.call)
     }
 
@@ -509,7 +622,8 @@ impl RunLog {
     /// The Player whose Ready made every Player Ready at this Sync Gate,
     /// once it is let go (counting only entries that stand).
     pub fn gate_opened_by(&self, gate: &str) -> Option<PlayerKey> {
-        let roster = self.roster.as_ref()?;
+        self.roster.as_ref()?;
+        let roster = self.active();
         let mut ready: Vec<PlayerKey> = Vec::new();
         for (author, event) in self.standing_events() {
             if matches!(&event, RunEvent::GateReady { gate: g } if g == gate) && !ready.contains(&author) {
@@ -533,9 +647,7 @@ impl RunLog {
     /// Whether every Player in the roster is Ready at this Sync Gate.
     pub fn gate_open(&self, gate: &str) -> bool {
         let ready = self.ready_at(gate);
-        self.roster
-            .as_ref()
-            .is_some_and(|roster| roster.iter().all(|p| ready.contains(p)))
+        self.roster.is_some() && self.active().iter().all(|p| ready.contains(p))
     }
 
     /// The ready check: the first chosen Sync Gate someone is Ready at and
@@ -555,10 +667,12 @@ impl RunLog {
             .or(waiting.first())?)
         .clone();
         let ready = self.ready_at(&gate);
+        let active = self.active();
         Some(ReadyCheck {
             players: locked
                 .roster
                 .iter()
+                .filter(|p| active.contains(&p.key))
                 .map(|p| (p.name.clone(), ready.contains(&p.key)))
                 .collect(),
             gate,
@@ -592,6 +706,8 @@ enum Kind {
     Locked,
     Event,
     Retry,
+    Takeover,
+    Dropout,
 }
 
 /// A Player's install key, as the Run log knows them.
@@ -674,6 +790,8 @@ fn body_kind(body: &[u8]) -> Option<Kind> {
         "locked" => Some(Kind::Locked),
         "event" => Some(Kind::Event),
         "retry" => Some(Kind::Retry),
+        "takeover" => Some(Kind::Takeover),
+        "dropout" => Some(Kind::Dropout),
         _ => None,
     }
 }
@@ -744,7 +862,8 @@ impl LogFollower {
                         });
                     }
                 }
-                LogBody::Retry { call } => {
+                LogBody::Dropout { player } if player == self.me => commands.push(crate::RunCommand::DroppedOut),
+                LogBody::Retry { call } if log.active().contains(&self.me) => {
                     if let Some(part) = numbered(&calls, call).and_then(|c| c.parts.get(&self.me)) {
                         commands.push(crate::RunCommand::Retry {
                             to: crate::RetryTo::Checkpoint(part.hash.clone()),

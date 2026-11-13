@@ -182,7 +182,14 @@ impl FeedEntry {
                     ),
                 },
             ),
-            RunEvent::Checkpoint { .. } | RunEvent::Closed | RunEvent::RetryVote { .. } => return None,
+            RunEvent::Checkpoint { .. }
+            | RunEvent::Closed
+            | RunEvent::RetryVote { .. }
+            | RunEvent::DropoutVote { .. } => return None,
+            RunEvent::DroppedOut => (
+                FeedKind::Problem,
+                "The other Players dropped you from the Run: it goes on without you".to_owned(),
+            ),
             // The catch or the way it ended is in the feed already.
             RunEvent::EncounterOver { .. } => return None,
             RunEvent::SpeedChanged { speed } => (FeedKind::Run, format!("You play at {speed}x")),

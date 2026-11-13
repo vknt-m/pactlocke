@@ -17,6 +17,8 @@ pub enum Reach {
     },
     /// A joiner reaches the other joiners through the Host.
     ViaHost,
+    /// Not heard from for a while: their game is frozen here until they are back.
+    Offline,
 }
 
 /// One Player's row.
@@ -72,6 +74,7 @@ pub fn show(ui: &mut egui::Ui, rows: &[Row], toggles: &Toggles) -> Option<Asked>
                     Some(Reach::Direct { ping_ms }) => ui.label(format!("direct · {ping_ms} ms")),
                     Some(Reach::Relayed { ping_ms }) => ui.label(format!("relayed · {ping_ms} ms")),
                     Some(Reach::ViaHost) => ui.label("via the Host"),
+                    Some(Reach::Offline) => ui.colored_label(ui.visuals().warn_fg_color, "offline"),
                     None => ui.weak("connecting…"),
                 };
                 ui.label(&row.doing);

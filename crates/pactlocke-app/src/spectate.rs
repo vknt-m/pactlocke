@@ -10,7 +10,7 @@ use pactlocke_emu::{CoreAdapter, FrameSlot};
 use pactlocke_game::{GameProfile, ProfileGame};
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
-    InputChunk, Judge, Link, LinkKeeper, Locked, LogFollower, PlayerKey, RunCommand, RunEvent, RunLog, Seen,
+    InputChunk, Judge, Link, LinkKeeper, Locked, LogFollower, PlayerKey, RunClock, RunCommand, RunEvent, RunLog, Seen,
     ShadowGame, ShadowRunner, ShadowState, ShadowStatus, StreamHub, StreamMessage, SystemRunClock,
 };
 
@@ -61,6 +61,10 @@ pub struct Spectate {
     /// The Shadow being watched.
     pub watching: Option<usize>,
     pub battery_saver: bool,
+    /// Who this app has heard from, and when.
+    presence: pactlocke_run::Presence,
+    /// Players this Player chose to keep waiting for, rather than vote out.
+    keep_waiting: Vec<PlayerKey>,
     /// Partner Avatars: where this Player's game reads them from.
     avatars: Option<Arc<Mutex<Vec<pactlocke_run::PartnerAvatar>>>>,
 }
@@ -106,6 +110,8 @@ impl Spectate {
             watching: None,
             battery_saver: false,
             avatars: None,
+            presence: pactlocke_run::Presence::new(SystemRunClock.now_ms()),
+            keep_waiting: Vec::new(),
         })
     }
 
@@ -140,10 +146,15 @@ impl Spectate {
                 lobbies.send_stream(out);
             }
         }
+        let now = SystemRunClock.now_ms();
         for (from, bytes) in lobbies.take_stream() {
             let Some(message) = StreamMessage::from_bytes(&bytes) else {
                 continue;
             };
+            self.presence.heard(from, now);
+            if let StreamMessage::Chunk(chunk) = &message {
+                self.presence.heard(chunk.player, now);
+            }
             let (out, new) = self.hub.receive(from, message);
             for out in out {
                 lobbies.send_stream(out);
@@ -227,13 +238,13 @@ impl pactlocke_emu::AudioSink for Silent {
 
 /// Retries in a Run with other Players: what is left of the pool, and the
 /// vote. Returns this Player's vote when they cast one.
-pub fn votes(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey) -> Option<RunEvent> {
+pub fn votes(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey, online: bool) -> Option<RunEvent> {
     let pool = log.locked().map_or(0, |l| l.ruleset.retries);
     if pool == 0 {
         return None;
     }
     let left = log.retries_left();
-    let players = log.locked().map_or(0, |l| l.roster.len());
+    let players = log.active().len();
     let mut cast = None;
     match log.vote() {
         Some(vote) => {
@@ -242,7 +253,7 @@ pub fn votes(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey) -> Option<R
                 vote.call,
                 vote.yes.len()
             ));
-            if !vote.yes.contains(&me) {
+            if !vote.yes.contains(&me) && online {
                 ui.horizontal(|ui| {
                     if ui.button("Yes").clicked() {
                         cast = Some(RunEvent::RetryVote {
@@ -262,7 +273,7 @@ pub fn votes(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey) -> Option<R
         None => {
             let latest = log.latest_complete();
             let start = ui.add_enabled(
-                left > 0 && latest.is_some(),
+                left > 0 && latest.is_some() && online,
                 eframe::egui::Button::new(format!("Start a Retry vote · {left} left")),
             );
             let start = start.on_hover_text(
@@ -291,4 +302,89 @@ impl Judge for Seeing {
             .iter()
             .any(|(p, seen)| p == player && seen.fainted.contains(&pid))
     }
+}
+
+/// What this Player chose about a Player long offline.
+pub enum DropoutAsk {
+    /// A vote to share in the Run log.
+    Vote(RunEvent),
+    /// Don't offer the vote for this Player again in this session.
+    KeepWaiting(PlayerKey),
+}
+
+impl Spectate {
+    /// Whether this Player's app has gone quiet long enough to show offline.
+    pub fn shows_offline(&self, player: &PlayerKey) -> bool {
+        self.presence.offline(player, SystemRunClock.now_ms())
+    }
+
+    /// Stop offering a Dropout vote for this Player.
+    pub fn keep_waiting(&mut self, player: PlayerKey) {
+        self.keep_waiting.push(player);
+    }
+}
+
+/// Dropouts: a vote under way, or the offer to start one for a Player
+/// offline 15 minutes (or to keep waiting).
+pub fn dropouts(ui: &mut eframe::egui::Ui, log: &RunLog, spectate: &Spectate, online: bool) -> Option<DropoutAsk> {
+    let me = spectate.me;
+    let names: Vec<(PlayerKey, String)> = log
+        .locked()
+        .map(|l| l.roster.iter().map(|p| (p.key, p.name.clone())).collect())
+        .unwrap_or_default();
+    let name = |key: &PlayerKey| {
+        names
+            .iter()
+            .find(|(k, _)| k == key)
+            .map_or("A Player", |(_, n)| n.as_str())
+            .to_owned()
+    };
+    let mut cast = None;
+    if let Some((leaving, yes)) = log.dropout_vote() {
+        let voters = log.active().len().saturating_sub(1);
+        ui.label(format!(
+            "Dropout vote: {} leaves the Run · {} of {voters} said Yes",
+            name(&leaving),
+            yes.len()
+        ));
+        if leaving != me && !yes.contains(&me) && online {
+            ui.horizontal(|ui| {
+                for (text, answer) in [("Yes", true), ("No", false)] {
+                    if ui.button(text).clicked() {
+                        cast = Some(DropoutAsk::Vote(RunEvent::DropoutVote {
+                            player: leaving,
+                            yes: answer,
+                        }));
+                    }
+                }
+            });
+        }
+        return cast;
+    }
+    let now = SystemRunClock.now_ms();
+    for player in log.active() {
+        if player == me || spectate.keep_waiting.contains(&player) || !spectate.presence.dropout_offered(&player, now) {
+            continue;
+        }
+        ui.label(format!(
+            "{} has been offline for {} minutes.",
+            name(&player),
+            pactlocke_run::DROPOUT_OFFER_MS / 60_000
+        ));
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(online, eframe::egui::Button::new("Start a Dropout vote"))
+                .on_hover_text(
+                    "Everyone else must say Yes; their Pokémon leave every Link, and the Run goes on without them",
+                )
+                .clicked()
+            {
+                cast = Some(DropoutAsk::Vote(RunEvent::DropoutVote { player, yes: true }));
+            }
+            if ui.button("Keep waiting").clicked() {
+                cast = Some(DropoutAsk::KeepWaiting(player));
+            }
+        });
+    }
+    cast
 }

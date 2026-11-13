@@ -50,6 +50,10 @@ pub struct App {
     shared: Arc<Mutex<Vec<RunEvent>>>,
     follower: LogFollower,
     links: pactlocke_run::LinkKeeper,
+    /// Who this app has heard from, and when.
+    pub presence: pactlocke_run::Presence,
+    /// This app's Run file, as storage.
+    pub storage: MemoryStorage,
     /// Partner Avatars: where this app puts them for its game to draw.
     pub partners: Option<Arc<Mutex<Vec<pactlocke_run::PartnerAvatar>>>>,
     /// Entries this app refused from the Host, and why.
@@ -111,6 +115,10 @@ pub struct Table {
     pub tamper: Tamper,
     /// The Host's log, which orders every entry.
     pub host_log: RunLog,
+    /// The Player who orders the log now.
+    pub host: usize,
+    /// Players whose apps can't reach anyone (and nobody them).
+    pub offline: std::collections::BTreeSet<usize>,
     /// Whether the Host records a Retry by itself when a vote passes.
     pub host_records_retries: bool,
 }
@@ -129,9 +137,10 @@ impl Table {
             .iter()
             .enumerate()
             .map(|(i, name)| {
+                let storage = MemoryStorage::default();
                 let engine = RunEngine::start(
                     new_solo_run(ruleset.clone()),
-                    Box::new(MemoryStorage::default()),
+                    Box::new(storage.clone()),
                     Box::new(clock.clone()),
                 )
                 .unwrap();
@@ -172,6 +181,8 @@ impl Table {
                     follower: LogFollower::new(key(i)),
                     links: pactlocke_run::LinkKeeper::new(key(i)),
                     partners: None,
+                    presence: pactlocke_run::Presence::new(START_MS),
+                    storage,
                     refused: Vec::new(),
                 }
             })
@@ -185,6 +196,8 @@ impl Table {
             tamper: Box::new(|_, _, _| {}),
             host_log: RunLog::new(host),
             host_records_retries: true,
+            host: 0,
+            offline: std::collections::BTreeSet::new(),
         };
         table.submit(
             0,
@@ -221,20 +234,100 @@ impl Table {
     pub fn submit(&mut self, i: usize, body: &LogBody) {
         let counter = self.host_log.next_counter(&key(i));
         let submission = self.apps[i].log.sign(&signer(i), counter, body);
-        match self.host_log.order(&signer(0), submission) {
+        let host = self.host;
+        match self.host_log.order(&signer(host), submission) {
             Ok(entry) => self.send_entry(&entry),
             Err(e) => self.apps[i].refused.push(e.to_string()),
         }
     }
 
-    /// An entry, as bytes, to every app, each of which checks it.
+    /// An entry, as bytes, to every app online, each of which checks it.
     pub fn send_entry(&mut self, entry: &LogEntry) {
         let bytes = entry.to_bytes();
-        for app in &mut self.apps {
+        let host = key(self.host);
+        let now = self.now();
+        for (i, app) in self.apps.iter_mut().enumerate() {
+            if self.offline.contains(&i) {
+                continue;
+            }
+            app.presence.heard(host, now);
             if let Err(e) = app.log.accept(LogEntry::from_bytes(&bytes).unwrap()) {
                 app.refused.push(e.to_string());
             }
         }
+    }
+
+    /// Player `i`'s app loses its connection: it plays on alone.
+    pub fn goes_offline(&mut self, i: usize) {
+        self.offline.insert(i);
+    }
+
+    /// Player `i`'s app is back: it gets every entry it missed, and sends
+    /// what it queued.
+    pub fn comes_back(&mut self, i: usize) {
+        self.offline.remove(&i);
+        let missed: Vec<LogEntry> = self.host_log.entries()[self.apps[i].log.entries().len()..].to_vec();
+        for entry in missed {
+            if let Err(e) = self.apps[i].log.accept(entry) {
+                self.apps[i].refused.push(e.to_string());
+            }
+        }
+    }
+
+    /// The Host's app vanishes for good.
+    pub fn host_vanishes(&mut self) {
+        let host = self.host;
+        self.goes_offline(host);
+    }
+
+    /// The next Player in join order takes over once the Host has been
+    /// silent long enough, from the longest log any app online has.
+    fn take_over_if_due(&mut self) {
+        let now = self.now();
+        let host = key(self.host);
+        if !self.offline.contains(&self.host) {
+            return;
+        }
+        let Some(next) = (0..self.apps.len())
+            .filter(|i| !self.offline.contains(i))
+            .find_map(|i| self.apps[i].log.successor())
+        else {
+            return;
+        };
+        let Some(k) = self.apps.iter().position(|a| a.key == next) else {
+            return;
+        };
+        if self.offline.contains(&k) || !self.apps[k].presence.host_gone(&host, now) {
+            return;
+        }
+        let copies: Vec<Vec<LogEntry>> = (0..self.apps.len())
+            .filter(|i| !self.offline.contains(i))
+            .map(|i| self.apps[i].log.entries().to_vec())
+            .collect();
+        self.host_log = RunLog::longest(key(0), copies).expect("a valid log");
+        self.host = k;
+        // Everyone online catches up with the longest log, then the takeover.
+        for i in 0..self.apps.len() {
+            if !self.offline.contains(&i) {
+                self.comes_back(i);
+            }
+        }
+        self.submit(k, &LogBody::Takeover);
+        for app in &mut self.apps {
+            app.hub.host_is(next);
+        }
+    }
+
+    /// Player `i` votes on dropping Player `leaving` from the Run.
+    pub fn votes_to_drop(&mut self, i: usize, leaving: usize, yes: bool) {
+        self.submit(
+            i,
+            &LogBody::Event(RunEvent::DropoutVote {
+                player: key(leaving),
+                yes,
+            }),
+        );
+        self.tick();
     }
 
     /// Player `i` votes on a Retry back to the `call`th Run Checkpoint.
@@ -301,12 +394,14 @@ impl Table {
         self.in_flight = flying;
         for message in landing {
             let to = self.index(message.to);
+            self.apps[to].presence.heard(message.from, now);
             let Some(decoded) = StreamMessage::from_bytes(&message.bytes) else {
                 continue;
             };
             let (out, new) = self.apps[to].hub.receive(message.from, decoded);
             for chunk in new {
                 let app = &mut self.apps[to];
+                app.presence.heard(chunk.player, now);
                 if let Some(shadow) = app.shadows.get_mut(&chunk.player) {
                     shadow.receive(&chunk, now);
                 }
@@ -354,16 +449,25 @@ impl Table {
     /// Each app's Run state into the log, then each app follows the log; the
     /// Host records a Retry when a vote has passed.
     fn share_the_log(&mut self) {
+        self.take_over_if_due();
         for i in 0..self.apps.len() {
+            // An app offline keeps its Run state queued until it is back.
+            if self.offline.contains(&i) {
+                continue;
+            }
             let events = std::mem::take(&mut *self.apps[i].shared.lock().unwrap());
             for event in events {
                 self.submit(i, &LogBody::Event(event));
             }
         }
+        let host = self.host;
         if self.host_records_retries
             && let Some(call) = self.host_log.retry_due()
         {
-            self.submit(0, &LogBody::Retry { call });
+            self.submit(host, &LogBody::Retry { call });
+        }
+        if let Some(player) = self.host_log.dropout_due() {
+            self.submit(host, &LogBody::Dropout { player });
         }
         for app in &mut self.apps {
             let mut commands = app.follower.follow(&app.log);
@@ -390,8 +494,17 @@ impl Table {
                     message,
                 ),
             };
+            let reachable = |key: PlayerKey| {
+                self.apps
+                    .iter()
+                    .position(|a| a.key == key)
+                    .is_some_and(|i| !self.offline.contains(&i))
+            };
+            if !reachable(from) {
+                continue;
+            }
             for to in targets {
-                if (self.lose)(from, to, &message) {
+                if !reachable(to) || (self.lose)(from, to, &message) {
                     continue;
                 }
                 (self.tamper)(from, to, &mut message);

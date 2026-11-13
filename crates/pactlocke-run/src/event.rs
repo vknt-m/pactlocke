@@ -52,6 +52,12 @@ pub enum RunEvent {
     GateOpened { gate: String },
     /// A Sync Gate couldn't be held or let go in this game.
     GateFailed { gate: String, reason: String },
+    /// A Player's vote on dropping `player` from the Run for good: the first
+    /// Yes starts the vote, everyone but `player` must say Yes, and the
+    /// first No ends it.
+    DropoutVote { player: [u8; 32], yes: bool },
+    /// This Player was dropped from the Run by the others' vote.
+    DroppedOut,
     /// A Player's vote on a Retry back to the `call`th Run Checkpoint: the
     /// first Yes starts the vote, and the first No ends it.
     RetryVote { call: u64, yes: bool },
@@ -275,6 +281,7 @@ impl RunEvent {
                 | RunEvent::Released { .. }
                 | RunEvent::Died { .. }
                 | RunEvent::RetryVote { .. }
+                | RunEvent::DropoutVote { .. }
                 | RunEvent::Retried { .. }
                 | RunEvent::EncounterOver { .. }
                 | RunEvent::Skipped { .. }

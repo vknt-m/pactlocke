@@ -698,4 +698,14 @@ impl StreamHub {
     pub fn received(&self, player: &PlayerKey) -> Option<(u32, u64)> {
         self.store.received(player)
     }
+
+    /// Another Player took over hosting: streams go through them from now on.
+    pub fn host_is(&mut self, host: PlayerKey) {
+        self.host = host;
+    }
+
+    /// The Host this hub sends through.
+    pub fn host(&self) -> PlayerKey {
+        self.host
+    }
 }
