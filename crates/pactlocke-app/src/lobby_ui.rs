@@ -346,8 +346,8 @@ fn invite_section(ui: &mut egui::Ui, view: &LobbyView, new_invite: &mut bool) {
     match &view.invite_link {
         Some(link) => {
             ui.label("Send this link to one friend. Each link lets one Player in, once.");
-            let mut shown = link.clone();
-            ui.add(egui::TextEdit::singleline(&mut shown).desired_width(420.0));
+            // Read-only, but selectable, so Ctrl+C works as well as Copy.
+            ui.add(egui::TextEdit::singleline(&mut link.as_str()).desired_width(420.0));
             ui.horizontal(|ui| {
                 if ui.button("Copy").clicked() {
                     ui.ctx().copy_text(link.clone());
