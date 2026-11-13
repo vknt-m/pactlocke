@@ -3949,12 +3949,14 @@ version = "0.1.0"
 dependencies = [
  "cpal",
  "eframe",
+ "log",
  "pactlocke-emu",
  "pactlocke-game",
  "pactlocke-mgba",
  "pactlocke-net",
  "pactlocke-run",
  "rfd",
+ "tracing",
 ]
 
 [[package]]
@@ -3994,6 +3996,7 @@ version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
  "iroh",
+ "log",
  "pactlocke-run",
  "tokio",
 ]
@@ -4003,6 +4006,7 @@ name = "pactlocke-run"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek 2.2.0",
+ "log",
  "pactlocke-emu",
  "pactlocke-game",
  "pactlocke-mgba",

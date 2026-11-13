@@ -98,6 +98,7 @@ impl Spectate {
             let name = player.name.clone();
             let (key, diverged_too) = (player.key, diverged.clone());
             let tell = Box::new(move |frame| {
+                log::warn!("The Shadow Game of {name} stopped matching at frame {frame}");
                 diverged_too
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())

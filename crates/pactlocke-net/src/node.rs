@@ -28,7 +28,7 @@ const SECRET_WITHIN: Duration = Duration::from_secs(5);
 /// Connections the Host is deciding on at once; more are refused unread.
 const HANDSHAKES_AT_ONCE: usize = 8;
 /// Messages waiting to go to one Player; a Player this far behind is closed.
-const OUTBOX: usize = 64;
+const OUTBOX: usize = 512;
 /// How long the Host waits for a relay before giving out an invite without one.
 const ONLINE_WITHIN: Duration = Duration::from_secs(15);
 /// How long a joiner tries to reach the Host.
@@ -403,12 +403,29 @@ fn carry_out(actions: Vec<HostAction>, shared: &Shared) {
                     continue;
                 }
                 HostAction::Send { to, bytes } => (to, Outgoing::Send(bytes)),
-                HostAction::Close { peer, bytes, .. } => (peer, Outgoing::SendAndFinish(bytes)),
+                HostAction::Close { peer, bytes, refusal } => {
+                    log::warn!("Host: closing {}: {refusal}", short(&peer));
+                    (peer, Outgoing::SendAndFinish(bytes))
+                }
             };
-            if let Some(peer) = peers.get(&to)
-                && peer.outbox.try_send(outgoing).is_err()
-            {
-                peer.connection.close(3u8.into(), b"too far behind");
+            let Some(peer) = peers.get(&to) else {
+                continue;
+            };
+            let input = matches!(&outgoing, Outgoing::Send(bytes) if crate::wire::is_input(bytes));
+            if peer.outbox.try_send(outgoing).is_err() {
+                // A stream chunk can be asked for again: drop it, not the Player.
+                if input {
+                    log::debug!(
+                        "Host: {} is behind; an input stream message waits for a resend",
+                        short(&to)
+                    );
+                } else {
+                    log::warn!(
+                        "Host: {} is too far behind for setup and log messages; closing",
+                        short(&to)
+                    );
+                    peer.connection.close(3u8.into(), b"too far behind");
+                }
             }
         }
     }
@@ -440,6 +457,11 @@ async fn serve_player(
         _ => None,
     };
     let admission = lock(&shared.lobby).admit(peer, proof.as_ref());
+    if let Admission::Refuse(refusal) = &admission {
+        log::info!("Host: refused {}: {refusal}", short(&peer));
+    } else {
+        log::info!("Host: {} connected", short(&peer));
+    }
     if let Admission::Refuse(refusal) = admission {
         let _ = write_frame(&mut send, &encode(&Message::Refused(refusal))).await;
         let _ = send.finish();
@@ -500,6 +522,7 @@ async fn serve_player(
         current
     };
     if current {
+        log::info!("Host: {} disconnected", short(&peer));
         let actions = lock(&shared.lobby).disconnected(peer);
         carry_out(actions, &shared);
     }
@@ -602,7 +625,10 @@ async fn join(
     mut commands: mpsc::UnboundedReceiver<JoinCommand>,
     held: Arc<Mutex<Option<Connection>>>,
 ) {
-    let fail = |why: String| publish(&view, |v| v.error = Some(why));
+    let fail = |why: String| {
+        log::warn!("Joiner: {why}");
+        publish(&view, |v| v.error = Some(why));
+    };
     let endpoint = match bind(key, &relays).await {
         Ok(endpoint) => endpoint,
         Err(e) => return fail(e),
@@ -634,6 +660,7 @@ async fn join(
         tokio::select! {
             frame = read_frame(&mut recv) => {
                 let Some(bytes) = frame else {
+                    log::warn!("Joiner: the Host's stream ended ({})", connection.close_reason().map_or_else(|| "no reason given".to_owned(), |r| r.to_string()));
                     lobby.lost("it closed");
                     publish_join(&view, &lobby);
                     break;
@@ -661,4 +688,9 @@ async fn join(
     *lock(&held) = None;
     connection.close(0u8.into(), b"bye");
     endpoint.close().await;
+}
+
+/// A Player's key, shortened for the log.
+fn short(peer: &PeerKey) -> String {
+    peer.to_string().chars().take(8).collect()
 }

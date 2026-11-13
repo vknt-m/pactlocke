@@ -577,6 +577,7 @@ impl JoinCoop {
             return;
         }
         if let Err(e) = self.log.accept(entry) {
+            log::warn!("Refused a Run log entry from the Host: {e}");
             self.error = Some(format!("The Host sent a Run log entry that doesn't check out: {e}"));
         }
     }

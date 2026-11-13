@@ -39,7 +39,7 @@ pub struct Lobbies {
     lost_at: Option<i64>,
     /// Whether the Lobby window is showing. Closing it only hides it.
     shown: bool,
-    /// The lobby as last written to the network log, to note each change once.
+    /// The lobby as last written to the app's log, to note each change once.
     noted: String,
 }
 
@@ -83,7 +83,7 @@ impl Lobbies {
         self.shown = true;
     }
 
-    /// Writes the lobby to the network log when what this app sees of it changes.
+    /// Writes the lobby to the app's log when what this app sees of it changes.
     fn note_changes(&mut self) {
         let now = match (&self.host, &self.join) {
             (Some((node, coop)), _) => {
@@ -115,7 +115,7 @@ impl Lobbies {
             (None, None) => "Not in a lobby".to_owned(),
         };
         if now != self.noted {
-            crate::netlog::note(&now);
+            log::info!("{now}");
             self.noted = now;
         }
     }
@@ -145,7 +145,7 @@ impl Lobbies {
         let lobby = HostLobby::new(run, &self.name, APP_VERSION);
         self.host = Some((HostNode::start(key, lobby, self.relay_choice()), coop));
         self.shown = true;
-        crate::netlog::note("Hosting a new lobby");
+        log::info!("Hosting a new lobby");
     }
 
     /// Run state from this Player's game, for the shared Run log.
@@ -220,7 +220,7 @@ impl Lobbies {
         if now_ms - lost_at < RECONNECT_MS {
             return;
         }
-        crate::netlog::note("Joiner: reconnecting to the Host");
+        log::info!("Joiner: reconnecting to the Host");
         if let Ok(lobby) = JoinLobby::new(invite, &self.name, APP_VERSION, sha1) {
             let fresh = JoinNode::start(key, lobby, self.relay_choice());
             if let Some((old, _)) = self.join.as_mut() {
@@ -276,7 +276,7 @@ impl Lobbies {
         self.lobby_window(ctx, now_ms);
         self.note_changes();
         if start.is_some() {
-            crate::netlog::note("The Run starts");
+            log::info!("The Run starts");
         }
         start
     }
@@ -346,7 +346,7 @@ impl Lobbies {
                     self.rejoin = Some(rejoin);
                     self.prompt = None;
                     self.shown = true;
-                    crate::netlog::note("Joining a lobby");
+                    log::info!("Joining a lobby");
                 }
                 Err(e) => prompt.error = Some(e),
             }
@@ -415,7 +415,7 @@ impl Lobbies {
             coop.rom_picked(rom.path, rom.sha1);
         }
         if leave {
-            crate::netlog::note("Left the lobby");
+            log::info!("Left the lobby");
             self.leave();
         } else if !open {
             self.shown = false;

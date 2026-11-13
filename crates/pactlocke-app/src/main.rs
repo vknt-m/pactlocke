@@ -13,7 +13,7 @@ mod coop;
 mod data_dir;
 mod links_panel;
 mod lobby_ui;
-mod netlog;
+mod logger;
 mod player_strip;
 mod rom_report;
 mod run_panel;
@@ -65,6 +65,7 @@ fn key_help() -> String {
 fn main() -> eframe::Result {
     // Before anything else, and before any other thread starts.
     pactlocke_mgba::force_utc_time_zone();
+    logger::init();
 
     let mut smoke = false;
     let mut rom = None;

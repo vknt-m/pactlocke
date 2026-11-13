@@ -19,3 +19,6 @@ pactlocke-mgba = { path = "../pactlocke-mgba" }
 pactlocke-net = { path = "../pactlocke-net" }
 pactlocke-run = { path = "../pactlocke-run" }
 rfd = "0.18.0"
+log = { version = "0.4", features = ["std"] }
+# iroh logs through tracing: with no tracing subscriber, its events reach `log`.
+tracing = { version = "0.1", features = ["log"] }

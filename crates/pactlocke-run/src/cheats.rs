@@ -210,6 +210,12 @@ impl CheatWatch {
         if flagged || !self.raised.insert((player, cheat, at.boot)) {
             return None;
         }
+        let who: String = player.iter().take(4).map(|b| format!("{b:02x}")).collect();
+        log::warn!(
+            "Cheat flag raised: {cheat:?} on {who}, boot {} frame {}",
+            at.boot,
+            at.frame
+        );
         Some(RunEvent::CheatFlag {
             player: Some(player),
             cheat,
