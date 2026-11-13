@@ -1,0 +1,7 @@
+# The one Rust version for this repo: local builds, CI (.github/workflows/ci.yml)
+# and scripts/ci-docker.sh all use it. Moving to a newer Rust is a deliberate
+# change here, checked with clippy before it lands, never a surprise in CI.
+[toolchain]
+channel = "1.100.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

@@ -2,7 +2,7 @@
 # CI's Linux job, locally, in Docker: no game files committed, the libmgba
 # pin, formatting, clippy with warnings as errors, every test, the core in
 # other time zones, the app build and a smoke launch under xvfb, on the Rust
-# version in scripts/ci-docker/Dockerfile.
+# version rust-toolchain.toml pins.
 #
 # The container has no network and reads nothing through Docker's file
 # sharing, which is very slow for many small files on Windows: crates are
@@ -11,15 +11,17 @@
 # Builds are kept in the volume pactlocke-ci-target, so later runs are quick.
 #
 #   bash scripts/ci-docker.sh            # every step
-#   bash scripts/ci-docker.sh --rebuild  # rebuild the image first (new Rust version)
+#   bash scripts/ci-docker.sh --rebuild  # rebuild the image first (new system packages)
 #   bash scripts/ci-docker.sh --clean    # start again from an empty build volume
 set -euo pipefail
 
-IMAGE=pactlocke-ci
-TARGET_VOLUME=pactlocke-ci-target
-VENDOR_VOLUME=pactlocke-ci-vendor
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
+RUST_VERSION="$(grep -oE '^channel *= *"[^"]+"' rust-toolchain.toml | grep -oE '"[^"]+"' | tr -d '"')"
+# One image per Rust version: changing the pin builds a new one.
+IMAGE="pactlocke-ci:${RUST_VERSION}"
+TARGET_VOLUME=pactlocke-ci-target
+VENDOR_VOLUME=pactlocke-ci-vendor
 export MSYS_NO_PATHCONV=1
 
 rebuild=false
@@ -71,7 +73,7 @@ echo "ready"
 
 echo "=== Image $IMAGE"
 if $rebuild || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-	docker build -t "$IMAGE" scripts/ci-docker
+	docker build --build-arg "RUST_VERSION=${RUST_VERSION}" -t "$IMAGE" scripts/ci-docker
 else
 	echo "reusing it (--rebuild to build it again)"
 fi

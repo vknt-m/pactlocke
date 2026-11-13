@@ -1,8 +1,8 @@
-# The Linux job of .github/workflows/ci.yml, as an image: the Rust that CI's
-# `stable` was on last (keep RUST_VERSION in step with it), clippy, rustfmt
-# and the packages the Linux job installs. scripts/ci-docker.sh builds it once
-# and reuses it.
-ARG RUST_VERSION=1.100.0
+# The Linux job of .github/workflows/ci.yml, as an image: the Rust version
+# rust-toolchain.toml pins (scripts/ci-docker.sh passes it in), clippy,
+# rustfmt and the packages the Linux job installs. The script builds it once
+# per Rust version and reuses it.
+ARG RUST_VERSION
 FROM rust:${RUST_VERSION}-bookworm
 
 RUN apt-get update \

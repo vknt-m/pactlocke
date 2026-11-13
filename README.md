@@ -6,7 +6,7 @@ So far the app opens a GBA ROM and plays it with keyboard input and sound at 1x 
 
 ## Build from a clean checkout
 
-You need Rust (stable), CMake 3.13 or newer, and a C compiler: Visual Studio 2022 Build Tools with the C++ workload on Windows, gcc or clang on Linux, or the Xcode command line tools on macOS. On Linux you also need the ALSA, X11 and Wayland development packages (see `.github/workflows/ci.yml` for the list).
+You need Rust through rustup, which picks up the version `rust-toolchain.toml` pins (1.100.0) by itself, plus CMake 3.13 or newer, and a C compiler: Visual Studio 2022 Build Tools with the C++ workload on Windows, gcc or clang on Linux, or the Xcode command line tools on macOS. On Linux you also need the ALSA, X11 and Wayland development packages (see `.github/workflows/ci.yml` for the list).
 
 ```bash
 git clone --recurse-submodules <repo-url>
@@ -63,7 +63,7 @@ scripts/fetch-test-rom.sh   # jsmolka's gba-tests arm.gba and thumb.gba (MIT), p
 cargo test --workspace
 ```
 
-CI's Linux job runs locally in Docker with `bash scripts/ci-docker.sh`. It runs the formatting check, clippy with warnings as errors, every test, the core in other time zones, the app build and an xvfb smoke launch. These run on the Rust version pinned in `scripts/ci-docker/Dockerfile`, which should be the version CI's `stable` is on. The container has no network and reads nothing through Docker's file sharing, which is very slow for many small files on Windows. Crates are vendored on your machine and copied into the `pactlocke-ci-vendor` Docker volume, again only when `Cargo.lock` changes. The checkout is streamed in, and builds are kept in the `pactlocke-ci-target` volume. The first run builds the image and compiles everything, which takes about 15 minutes. Later runs reuse both. Use `--rebuild` after changing the Rust version, and `--clean` for an empty build volume.
+CI's Linux job runs locally in Docker with `bash scripts/ci-docker.sh`. It runs the formatting check, clippy with warnings as errors, every test, the core in other time zones, the app build and an xvfb smoke launch. These run on the Rust version `rust-toolchain.toml` pins, the same one CI and local builds use. The container has no network and reads nothing through Docker's file sharing, which is very slow for many small files on Windows. Crates are vendored on your machine and copied into the `pactlocke-ci-vendor` Docker volume, again only when `Cargo.lock` changes. The checkout is streamed in, and builds are kept in the `pactlocke-ci-target` volume. The first run builds the image and compiles everything, which takes about 15 minutes. Later runs reuse both. Changing the pin builds a new image on the next run. Use `--rebuild` to refresh the image's system packages, and `--clean` for an empty build volume.
 
 - `pactlocke-emu` tests the emulator thread (pacing at each speed, the newest-frame slot, keys and audio) against a fake core.
 - `pactlocke-mgba` tests the libmgba adapter against a tiny ROM the test builds in memory. The tests cover the clock reading UTC in any time zone, memory, ROM patches and checkpoints. Display-only writes (sprite slots, tiles, palettes) land as every frame starts to draw, and never in work RAM. A determinism check also compares frame hashes from the test ROMs with `tests/golden/test-roms.sha256`. That hash must match on every OS and in every time zone. After a deliberate change, such as a new libmgba pin, re-bless it with `PACTLOCKE_BLESS=1`.

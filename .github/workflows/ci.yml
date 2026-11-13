@@ -43,7 +43,8 @@ jobs:
         shell: bash
         run: test "$(git -C third_party/mgba rev-parse HEAD)" = 662dada8b79070bde93829a44d583c517fc5ec2d
 
-      - uses: dtolnay/rust-toolchain@stable
+      # The version rust-toolchain.toml pins: keep the two the same.
+      - uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: clippy, rustfmt
 
