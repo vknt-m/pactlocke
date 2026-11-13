@@ -52,7 +52,13 @@ fn a_friend_with_the_invite_joins_over_iroh_and_a_stranger_is_refused() {
 
     let blue = JoinLobby::new(invite.clone(), "Blue", APP_VERSION, Some(FIRERED.into())).unwrap();
     let blue = JoinNode::start_with(key(2), blue, Relays::Off, direct.clone());
-    let joined = wait_for("Blue in the lobby", || blue.view(), |v| v.players.len() == 2);
+    // Blue shows in the lobby first, then with their ROM checked: a later
+    // update, which under load can come a moment after.
+    let joined = wait_for(
+        "Blue in the lobby with their ROM checked",
+        || blue.view(),
+        |v| v.players.len() == 2 && v.players[1].rom != RomStatus::NotYet,
+    );
     assert_eq!(joined.players[0].name, "Red");
     assert_eq!(joined.players[1].name, "Blue");
     assert_eq!(joined.players[1].rom, RomStatus::Matches);
