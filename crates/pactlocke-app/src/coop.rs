@@ -263,6 +263,11 @@ impl HostCoop {
         &self.log
     }
 
+    /// What went wrong with the shared Run log, if anything has.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
     /// The Host's own Run state, into the log.
     pub fn share(&mut self, node: &HostNode, events: Vec<RunEvent>) {
         for event in events {
@@ -468,6 +473,11 @@ impl JoinCoop {
     /// This Player's copy of the Run log.
     pub fn log(&self) -> &RunLog {
         &self.log
+    }
+
+    /// What went wrong with the shared Run log, if anything has.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 
     /// Input stream messages since the last call: all from the Host, who passes every stream on.
@@ -836,6 +846,36 @@ mod tests {
         let deaths = blue.log.tallies().deaths;
         assert_eq!(deaths.get(&host.me()), Some(&1));
         assert_eq!(deaths.get(&blue.me()), Some(&2));
+        assert!(
+            host.error.is_none() && blue.error.is_none(),
+            "{:?} {:?}",
+            host.error,
+            blue.error
+        );
+
+        // Ten seconds of play: each game streams four chunks a second, as at
+        // 1x, and the Run log grows. Blue stays connected throughout.
+        let chunk = vec![0u8; 600];
+        let started = Instant::now();
+        let mut sent = 0;
+        while started.elapsed() < Duration::from_secs(10) {
+            let now = locked.start_ms + started.elapsed().as_millis() as i64;
+            if started.elapsed().as_millis() as usize / 250 >= sent {
+                sent += 1;
+                blue_node.send(Message::Input(chunk.clone()));
+                host_node.send(None, Message::Input(chunk.clone()));
+            }
+            host.pump(&host_node, now);
+            blue.pump(&blue_node, now);
+            let _ = (host.take_stream(), blue.take_stream());
+            assert!(
+                blue_node.view().error.is_none() && blue.connected(),
+                "Blue lost the Host {:?} after {:?}",
+                blue_node.view().error,
+                started.elapsed()
+            );
+            std::thread::sleep(Duration::from_millis(16));
+        }
         assert!(
             host.error.is_none() && blue.error.is_none(),
             "{:?} {:?}",

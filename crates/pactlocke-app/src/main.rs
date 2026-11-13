@@ -13,6 +13,7 @@ mod coop;
 mod data_dir;
 mod links_panel;
 mod lobby_ui;
+mod netlog;
 mod player_strip;
 mod rom_report;
 mod run_panel;
@@ -643,6 +644,9 @@ impl PactlockeApp {
                         self.pick_rom();
                     }
                 }
+            }
+            if self.lobbies.in_lobby() && !self.lobbies.lobby_shown() && ui.button("Lobby").clicked() {
+                self.lobbies.show_lobby();
             }
             ui.separator();
             ui.label("Speed");

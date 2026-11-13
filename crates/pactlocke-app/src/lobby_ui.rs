@@ -37,6 +37,10 @@ pub struct Lobbies {
     rejoin: Option<(Invite, Option<String>)>,
     /// When this joiner's connection to the Host was lost, if it is.
     lost_at: Option<i64>,
+    /// Whether the Lobby window is showing. Closing it only hides it.
+    shown: bool,
+    /// The lobby as last written to the network log, to note each change once.
+    noted: String,
 }
 
 /// How long a joiner waits before reconnecting to the Host.
@@ -59,6 +63,60 @@ impl Lobbies {
             prompt: None,
             rejoin: None,
             lost_at: None,
+            shown: false,
+            noted: String::new(),
+        }
+    }
+
+    /// Whether this app is in a lobby, as Host or joiner.
+    pub fn in_lobby(&self) -> bool {
+        self.host.is_some() || self.join.is_some()
+    }
+
+    /// Whether the Lobby window is showing.
+    pub fn lobby_shown(&self) -> bool {
+        self.shown
+    }
+
+    /// Shows the Lobby window again after it was closed.
+    pub fn show_lobby(&mut self) {
+        self.shown = true;
+    }
+
+    /// Writes the lobby to the network log when what this app sees of it changes.
+    fn note_changes(&mut self) {
+        let now = match (&self.host, &self.join) {
+            (Some((node, coop)), _) => {
+                let view = node.view();
+                let players: Vec<String> = view.players.iter().map(|p| p.name.clone()).collect();
+                format!(
+                    "Host: players [{}]{}{}",
+                    players.join(", "),
+                    view.error.map(|e| format!(", network error: {e}")).unwrap_or_default(),
+                    coop.error().map(|e| format!(", Run log: {e}")).unwrap_or_default(),
+                )
+            }
+            (None, Some((node, coop))) => {
+                let view = node.view();
+                match view.error {
+                    Some(e) => format!("Joiner: lost the Host: {e}"),
+                    None if view.players.is_empty() => "Joiner: connecting to the Host".to_owned(),
+                    None => format!(
+                        "Joiner: connected, players [{}]{}",
+                        view.players
+                            .iter()
+                            .map(|p| p.name.clone())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        coop.error().map(|e| format!(", Run log: {e}")).unwrap_or_default(),
+                    ),
+                }
+            }
+            (None, None) => "Not in a lobby".to_owned(),
+        };
+        if now != self.noted {
+            crate::netlog::note(&now);
+            self.noted = now;
         }
     }
 
@@ -69,6 +127,8 @@ impl Lobbies {
     /// Leaves the lobby this app is in. The network shuts down on its own
     /// thread, so the window never waits for it.
     fn leave(&mut self) {
+        self.shown = false;
+        self.rejoin = None;
         let (host, join) = (self.host.take(), self.join.take());
         if host.is_some() || join.is_some() {
             std::thread::spawn(move || drop((host, join)));
@@ -84,6 +144,8 @@ impl Lobbies {
         let coop = HostCoop::new(key, &self.name, &run, rom);
         let lobby = HostLobby::new(run, &self.name, APP_VERSION);
         self.host = Some((HostNode::start(key, lobby, self.relay_choice()), coop));
+        self.shown = true;
+        crate::netlog::note("Hosting a new lobby");
     }
 
     /// Run state from this Player's game, for the shared Run log.
@@ -158,6 +220,7 @@ impl Lobbies {
         if now_ms - lost_at < RECONNECT_MS {
             return;
         }
+        crate::netlog::note("Joiner: reconnecting to the Host");
         if let Ok(lobby) = JoinLobby::new(invite, &self.name, APP_VERSION, sha1) {
             let fresh = JoinNode::start(key, lobby, self.relay_choice());
             if let Some((old, _)) = self.join.as_mut() {
@@ -211,6 +274,10 @@ impl Lobbies {
             (None, None) => None,
         };
         self.lobby_window(ctx, now_ms);
+        self.note_changes();
+        if start.is_some() {
+            crate::netlog::note("The Run starts");
+        }
         start
     }
 
@@ -278,6 +345,8 @@ impl Lobbies {
                     self.join = Some((node, coop));
                     self.rejoin = Some(rejoin);
                     self.prompt = None;
+                    self.shown = true;
+                    crate::netlog::note("Joining a lobby");
                 }
                 Err(e) => prompt.error = Some(e),
             }
@@ -292,9 +361,14 @@ impl Lobbies {
             (None, Some((join, _))) => (join.view(), false),
             (None, None) => return,
         };
+        if !self.shown {
+            return;
+        }
+        let locked = self.log().is_some_and(|log| log.locked().is_some());
         let mut open = true;
         let mut new_invite = false;
         let mut picked = None;
+        let mut leave = false;
         egui::Window::new("Lobby")
             .open(&mut open)
             .collapsible(false)
@@ -326,6 +400,12 @@ impl Lobbies {
                     (None, Some((node, coop))) => coop.show(ui, node, now_ms),
                     (None, None) => {}
                 }
+                ui.separator();
+                if locked {
+                    ui.weak("Closing this window only hides it: the Lobby button brings it back.");
+                } else {
+                    leave = ui.button("Leave the lobby").clicked();
+                }
             });
         if new_invite && let Some((host, _)) = &self.host {
             host.new_invite();
@@ -334,8 +414,11 @@ impl Lobbies {
             join.rom_picked(&rom.sha1);
             coop.rom_picked(rom.path, rom.sha1);
         }
-        if !open {
+        if leave {
+            crate::netlog::note("Left the lobby");
             self.leave();
+        } else if !open {
+            self.shown = false;
         }
         // The view comes from the network threads: look again soon.
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
