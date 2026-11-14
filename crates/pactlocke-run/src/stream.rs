@@ -534,7 +534,9 @@ pub struct StreamStore {
 #[derive(Debug, Clone, Default)]
 struct PlayerStream {
     boot: u32,
-    /// In order from frame 0, with no gap.
+    /// Where the stream starts here: 0, or a Shadow's checkpoint after a resume.
+    start: u64,
+    /// In order from `start`, with no gap.
     chunks: Vec<InputChunk>,
     /// Arrived after a gap, by first frame.
     early: BTreeMap<u64, InputChunk>,
@@ -542,7 +544,7 @@ struct PlayerStream {
 
 impl PlayerStream {
     fn end(&self) -> u64 {
-        self.chunks.last().map_or(0, InputChunk::end)
+        self.chunks.last().map_or(self.start, InputChunk::end)
     }
 
     /// The keys held at this frame, if it is still here.
@@ -628,6 +630,19 @@ impl StreamStore {
             .retain(|_, c| c.end() > new.last().map_or(0, InputChunk::end));
         stream.chunks.extend(new.iter().cloned());
         Added::New(new)
+    }
+
+    /// A Player's stream here starts at this boot and frame: a Shadow Game
+    /// restored from its checkpoint needs nothing from before it.
+    pub fn starts_at(&mut self, player: PlayerKey, boot: u32, frame: u64) {
+        self.players.insert(
+            player,
+            PlayerStream {
+                boot,
+                start: frame,
+                ..PlayerStream::default()
+            },
+        );
     }
 
     /// What a request asks for, merged into as few chunks as fit a message.
@@ -736,6 +751,12 @@ impl StreamHub {
                 }
             })
             .collect()
+    }
+
+    /// Another Player's stream here starts at this boot and frame, where
+    /// this app's Shadow Game of them was restored from its checkpoint.
+    pub fn starts_at(&mut self, player: PlayerKey, boot: u32, frame: u64) {
+        self.store.starts_at(player, boot, frame);
     }
 
     /// Chunks of this Player's own stream sent before this app started (a

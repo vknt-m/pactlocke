@@ -484,7 +484,7 @@ impl Headless {
         let shared = running.share();
         let me = self.lobbies.public_key().ok_or("no network key")?;
         let outbox = running.stream_as(me);
-        let mut spectate = Spectate::new(me, &locked, &rom, &profile, outbox, &commands)?;
+        let mut spectate = Spectate::new(me, &locked, &rom, &profile, outbox, &commands, &[])?;
         spectate.draw_partner_avatars(running.draw_partner_avatars());
         let _ = commands.send(RunCommand::Speed(self.speed));
         log::info!("The Run started: {} on {}", locked.run_name, locked.game_name);

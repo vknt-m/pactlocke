@@ -43,7 +43,8 @@ pub use setup::{
     SetupView, settle, unavailable,
 };
 pub use shadow::{
-    BUFFER_FRAMES, CATCH_UP_SPEED, PREDICT_FRAMES, Seen, SeenAvatar, SeenPokemon, ShadowGame, ShadowState,
+    BUFFER_FRAMES, CATCH_UP_SPEED, PREDICT_FRAMES, Seen, SeenAvatar, SeenPokemon, ShadowCheckpoint, ShadowGame,
+    ShadowState,
 };
 pub use shadow_runner::{ShadowRunner, ShadowStatus};
 pub use shared_log::{

@@ -288,7 +288,8 @@ impl Table {
 
     /// Player `i` closes their app (`how`), and later opens the Run again
     /// with Resume: a new app, from their Run file alone, in a newly booted
-    /// game standing where theirs stood. It keeps its Shadow Games.
+    /// game standing where theirs stood, with each Shadow Game restarted
+    /// from its checkpoint in the Run file, or from power-on.
     pub fn leaves_and_resumes(&mut self, i: usize, how: Leaving) {
         self.goes_offline(i);
         let placeholder = {
@@ -302,8 +303,28 @@ impl Table {
         };
         let old = std::mem::replace(&mut self.apps[i].running, placeholder);
         let (area, party) = (old.game_ref().area.clone(), old.game_ref().party.clone());
+        // What the fake keeps outside its core, which a Shadow's checkpoint doesn't hold.
+        let shadow_games: BTreeMap<PlayerKey, FakeGame> = self.apps[i]
+            .shadows
+            .iter_mut()
+            .map(|(k, s)| {
+                let mut game = s.game_mut().clone();
+                game.core = FakeGame::default().core;
+                (*k, game)
+            })
+            .collect();
         let storage = match how {
             Leaving::Suspends => {
+                // Leaving, the app keeps each Shadow Game's checkpoint, then suspends.
+                for (player, shadow) in &mut self.apps[i].shadows {
+                    if let Some(checkpoint) = shadow.checkpoint_now() {
+                        let command = pactlocke_run::RunCommand::KeepShadow {
+                            player: *player,
+                            checkpoint: Box::new(checkpoint),
+                        };
+                        old.commands().send(command).unwrap();
+                    }
+                }
                 old.suspend();
                 self.apps[i].storage.clone()
             }
@@ -343,11 +364,27 @@ impl Table {
         for (species, name) in [(PIDGEY, "PIDGEY"), (RATTATA, "RATTATA"), (CHARMANDER, "CHARMANDER")] {
             game.species_names.insert(species, name.into());
         }
+        let kept_shadows = engine.kept_shadows().to_vec();
         let mut running = RunningGame::boot(game, engine, self.now()).unwrap();
+        let host = key(self.host);
         let app = &mut self.apps[i];
+        app.hub = StreamHub::new(app.key, host);
+        // Each Shadow Game from its checkpoint in the Run file, or from power-on.
+        app.shadows = shadow_games
+            .into_iter()
+            .map(|(player, game)| {
+                let shadow = match kept_shadows.iter().find(|(p, _)| *p == player) {
+                    Some((_, checkpoint)) => {
+                        app.hub.starts_at(player, checkpoint.boot, checkpoint.frame);
+                        ShadowGame::from_checkpoint(game, START_MS, checkpoint).unwrap()
+                    }
+                    None => ShadowGame::power_on(game, START_MS),
+                };
+                (player, shadow)
+            })
+            .collect();
         app.outbox = running.stream_as(app.key);
         app.shared = running.share();
-        app.hub = StreamHub::new(app.key, key(self.host));
         app.hub.already_sent(running.streamed_before());
         app.follower = LogFollower::resuming(app.key, &app.log);
         app.running = running;

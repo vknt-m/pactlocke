@@ -14,7 +14,7 @@ use pactlocke_game::Change;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::storage::{InputBatch, RunInfo, RunStorage, Stamped, StorageError, StoredCheckpoint, StoredRun};
-use crate::{CheckpointReason, LogEntry, Recorded, Ruleset, Submission};
+use crate::{CheckpointReason, LogEntry, PlayerKey, Recorded, Ruleset, ShadowCheckpoint, Submission};
 
 /// Run files end in this.
 const EXTENSION: &str = "pactrun";
@@ -78,6 +78,14 @@ CREATE TABLE IF NOT EXISTS run_log (
 CREATE TABLE IF NOT EXISTS waiting (
     id INTEGER PRIMARY KEY,
     submission BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS shadow_checkpoints (
+    player BLOB PRIMARY KEY,
+    boot INTEGER NOT NULL,
+    frame INTEGER NOT NULL,
+    patches BLOB NOT NULL,
+    seen TEXT NOT NULL,
+    core BLOB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS suspend (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -255,6 +263,7 @@ enum Message {
     KeepSuspend(StoredCheckpoint),
     KeepLog(u64, Vec<LogEntry>),
     KeepWaiting(Vec<Submission>),
+    KeepShadow(PlayerKey, Box<ShadowCheckpoint>),
     Load(Sender<Result<StoredRun, StorageError>>),
     ReadCheckpoint(u64, Sender<Result<Option<StoredCheckpoint>, StorageError>>),
 }
@@ -366,6 +375,10 @@ impl RunStorage for RunFile {
         self.send(Message::KeepWaiting(waiting.to_vec()));
     }
 
+    fn keep_shadow(&mut self, player: PlayerKey, checkpoint: &ShadowCheckpoint) {
+        self.send(Message::KeepShadow(player, Box::new(checkpoint.clone())));
+    }
+
     fn load(&mut self) -> Result<StoredRun, StorageError> {
         self.ask(Message::Load)
     }
@@ -413,6 +426,7 @@ fn serve(db: &Connection, messages: &Receiver<Message>, failure: &Mutex<Option<S
             Message::ClearSuspend => db.execute("DELETE FROM suspend", []).map(drop),
             Message::KeepLog(from, entries) => keep_log(db, from, &entries),
             Message::KeepWaiting(waiting) => keep_waiting(db, &waiting),
+            Message::KeepShadow(player, checkpoint) => keep_shadow(db, &player, &checkpoint),
             Message::Load(reply) => {
                 let _ = reply.send(load(db));
                 Ok(())
@@ -653,6 +667,66 @@ fn keep_waiting(db: &Connection, waiting: &[Submission]) -> rusqlite::Result<()>
     tx.commit()
 }
 
+/// A Shadow Game's checkpoint replaces the one kept for its Player.
+fn keep_shadow(db: &Connection, player: &PlayerKey, checkpoint: &ShadowCheckpoint) -> rusqlite::Result<()> {
+    let core = zstd::encode_all(&encode_core(&checkpoint.core)[..], ZSTD_LEVEL)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let seen = serde_json::to_string(&(&checkpoint.owned, &checkpoint.fainted)).expect("PIDs serialise");
+    db.execute(
+        "INSERT OR REPLACE INTO shadow_checkpoints (player, boot, frame, patches, seen, core)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            &player[..],
+            checkpoint.boot,
+            checkpoint.frame as i64,
+            encode_patches(&checkpoint.patches),
+            seen,
+            core
+        ],
+    )
+    .map(drop)
+}
+
+/// Every Shadow Game's kept checkpoint, by Player.
+fn read_shadows(db: &Connection) -> Result<Vec<(PlayerKey, ShadowCheckpoint)>, StorageError> {
+    let rows = db
+        .prepare("SELECT player, boot, frame, patches, seen, core FROM shadow_checkpoints ORDER BY player")
+        .and_then(|mut query| {
+            query
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, u32>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Vec<u8>>(5)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .map_err(file_error)?;
+    let broken = || StorageError::File("a Shadow Game's checkpoint can't be read".into());
+    rows.into_iter()
+        .map(|(player, boot, frame, patches, seen, core)| {
+            let player: PlayerKey = player.try_into().map_err(|_| broken())?;
+            let (owned, fainted): (Vec<u32>, Vec<u32>) = serde_json::from_str(&seen).map_err(|_| broken())?;
+            let core = zstd::decode_all(&core[..]).map_err(|_| broken())?;
+            Ok((
+                player,
+                ShadowCheckpoint {
+                    boot,
+                    frame: frame as u64,
+                    core: decode_core(&core).ok_or_else(broken)?,
+                    patches: decode_patches(&patches).ok_or_else(broken)?,
+                    owned,
+                    fainted,
+                },
+            ))
+        })
+        .collect()
+}
+
 fn record_inputs(db: &Connection, batch: &InputBatch) -> rusqlite::Result<()> {
     let keys: Vec<u8> = batch.keys.iter().flat_map(|k| k.0.to_le_bytes()).collect();
     let tx = db.unchecked_transaction()?;
@@ -787,5 +861,6 @@ fn load(db: &Connection) -> Result<StoredRun, StorageError> {
         suspended: read_checkpoint(db, Slot::Suspend)?,
         log,
         waiting,
+        shadows: read_shadows(db)?,
     })
 }

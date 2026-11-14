@@ -300,6 +300,18 @@ fn a_run_with_friends_keeps_its_run_log_in_the_run_file_and_is_listed_so() {
         &LogBody::Event(pactlocke_run::RunEvent::SpeedChanged { speed: 2 }),
     );
     player.engine.keep_waiting(std::slice::from_ref(&waiting));
+    // This app's Shadow Game of another Player, as it stood when the app left.
+    let shadow = |frame: u64| pactlocke_run::ShadowCheckpoint {
+        boot: 1,
+        frame,
+        core: core_checkpoint(0x33),
+        patches: vec![(0x0800_1000, vec![1, 2, 3])],
+        owned: vec![0xB1, 0xB2],
+        fainted: vec![0xB2],
+    };
+    let blue = [2; 32];
+    player.engine.keep_shadow(blue, &shadow(100));
+    player.engine.keep_shadow(blue, &shadow(200));
     drop(player);
 
     let runs = library.list();
@@ -310,5 +322,10 @@ fn a_run_with_friends_keeps_its_run_log_in_the_run_file_and_is_listed_so() {
     let stored = library.open_run(&together.id).unwrap().load().unwrap();
     assert_eq!(stored.log, other.entries());
     assert_eq!(stored.waiting, [waiting]);
+    assert_eq!(
+        stored.shadows,
+        [(blue, shadow(200))],
+        "the newest, in place of the one before"
+    );
     assert!(library.open_run(&alone.id).unwrap().load().unwrap().log.is_empty());
 }

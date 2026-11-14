@@ -49,6 +49,12 @@ pub enum RunCommand {
     /// In a Run with friends: keep this Player's entries waiting for a Host
     /// in the Run file, in place of those kept before.
     KeepWaiting(Vec<crate::Submission>),
+    /// In a Run with friends: keep this checkpoint of the Shadow Game of
+    /// `player` in the Run file, in place of theirs before.
+    KeepShadow {
+        player: PlayerKey,
+        checkpoint: Box<crate::ShadowCheckpoint>,
+    },
     /// A cheat flag in the Run log, for the feed.
     Flagged {
         player: String,
@@ -118,8 +124,10 @@ impl<G: PlayedGame> RunningGame<G> {
         Ok(Self::new(game, engine))
     }
 
-    /// Suspend and quit: the Run's suspend slot holds exactly where the game is.
+    /// Suspend and quit: the Run's suspend slot holds exactly where the game
+    /// is. What was asked of the Run before is carried out first.
     pub fn suspend(mut self) {
+        self.take_commands();
         self.check_save_memory();
         let checkpoint = self.core().checkpoint();
         self.engine.suspend(checkpoint);
@@ -213,6 +221,7 @@ impl<G: PlayedGame> RunningGame<G> {
                 RunCommand::DroppedOut => self.engine.dropped_out(),
                 RunCommand::KeepLog { from, entries } => self.engine.keep_log(from, &entries),
                 RunCommand::KeepWaiting(waiting) => self.engine.keep_waiting(&waiting),
+                RunCommand::KeepShadow { player, checkpoint } => self.engine.keep_shadow(player, &checkpoint),
                 RunCommand::Flagged {
                     player,
                     cheat,

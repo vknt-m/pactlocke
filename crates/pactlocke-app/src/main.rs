@@ -827,7 +827,8 @@ impl PactlockeApp {
                     .public_key()
                     .ok_or("This install has no network key, so the Run can't be shared.")?;
                 let outbox = running.stream_as(me);
-                let mut spectate = spectate::Spectate::new(me, locked, &rom, &profile, outbox, &commands)?;
+                let kept = running.engine().kept_shadows().to_vec();
+                let mut spectate = spectate::Spectate::new(me, locked, &rom, &profile, outbox, &commands, &kept)?;
                 if let Some(log) = resumed {
                     spectate.resumed(log, running.streamed_before());
                 }
@@ -863,7 +864,8 @@ impl PactlockeApp {
         let Some(playing) = self.playing.take() else {
             return;
         };
-        if let (Play::Run { emulator, .. }, true) = (playing.play, playing.spectate.is_some()) {
+        if let (Play::Run { emulator, .. }, Some(spectate)) = (playing.play, &playing.spectate) {
+            spectate.keep_checkpoints(true);
             emulator.stop().suspend();
         }
         self.refresh_runs();

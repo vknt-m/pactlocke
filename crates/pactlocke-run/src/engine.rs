@@ -128,8 +128,10 @@ pub struct RunEngine {
     /// In a Run with friends, this Player's copy of the Run log as the Run
     /// file kept it when the Run was opened again.
     kept_log: Vec<crate::LogEntry>,
-    /// And this Player's entries that were waiting for a Host then.
+    /// And this Player's entries that were waiting for a Host then, and the
+    /// newest checkpoint of each of this app's Shadow Games.
     kept_waiting: Vec<crate::Submission>,
+    kept_shadows: Vec<(crate::PlayerKey, crate::ShadowCheckpoint)>,
     /// This boot's input stream from before this session: a Run with friends
     /// resumes by going on with the boot it left, so the others' Shadow
     /// Games carry on.
@@ -182,6 +184,7 @@ impl RunEngine {
         engine.with_friends = !stored.log.is_empty();
         engine.kept_log = stored.log.clone();
         engine.kept_waiting = stored.waiting.clone();
+        engine.kept_shadows = stored.shadows.clone();
         if engine.with_friends {
             engine.go_on_with_the_boot(&plan, &stored);
         }
@@ -230,6 +233,17 @@ impl RunEngine {
     /// Host when the Run was left, as the Run file kept them.
     pub fn kept_waiting(&self) -> &[crate::Submission] {
         &self.kept_waiting
+    }
+
+    /// In a Run with friends, the newest checkpoint of this app's Shadow
+    /// Game of each other Player, as the Run file kept them.
+    pub fn kept_shadows(&self) -> &[(crate::PlayerKey, crate::ShadowCheckpoint)] {
+        &self.kept_shadows
+    }
+
+    /// Keeps this checkpoint of the Shadow Game of `player` in the Run file.
+    pub fn keep_shadow(&mut self, player: crate::PlayerKey, checkpoint: &crate::ShadowCheckpoint) {
+        self.storage.keep_shadow(player, checkpoint);
     }
 
     /// Keeps this Player's entries waiting for a Host in the Run file.
@@ -587,6 +601,7 @@ impl RunEngine {
             with_friends: false,
             kept_log: Vec::new(),
             kept_waiting: Vec::new(),
+            kept_shadows: Vec::new(),
             suspend_slot_due: false,
             suspend_slot_kept_ms: now,
             earlier: Vec::new(),
@@ -1311,6 +1326,7 @@ impl RunStorage for Retired {
     fn keep_suspend(&mut self, _checkpoint: &StoredCheckpoint) {}
     fn keep_log(&mut self, _from: u64, _entries: &[crate::LogEntry]) {}
     fn keep_waiting(&mut self, _waiting: &[crate::Submission]) {}
+    fn keep_shadow(&mut self, _player: crate::PlayerKey, _checkpoint: &crate::ShadowCheckpoint) {}
     fn load(&mut self) -> Result<crate::storage::StoredRun, StorageError> {
         Err(StorageError::NoRun)
     }

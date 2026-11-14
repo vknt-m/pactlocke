@@ -115,3 +115,29 @@ fn in_a_run_with_friends_the_suspend_slot_is_kept_up_to_date_and_a_crash_goes_on
     table.waits(2_000);
     assert_eq!(table.apps[0].shadow_of(key(1)).state(), ShadowState::Matched);
 }
+
+#[test]
+fn a_resumed_app_restarts_each_shadow_game_from_its_checkpoint_in_the_run_file() {
+    let mut table = Table::start(&["Red", "Blue", "Green"], first_encounter());
+    everyone_plays(&mut table, 600);
+    table.waits(1_000);
+    let kept_at = table.apps[0].shadow_of(key(1)).confirmed();
+
+    table.leaves_and_resumes(0, Leaving::Suspends);
+    for other in [1, 2] {
+        let shadow = table.apps[0].shadow_of(key(other));
+        assert!(
+            shadow.confirmed() >= kept_at.min(500),
+            "{other}: from its checkpoint, not from power-on: {}",
+            shadow.confirmed()
+        );
+    }
+    everyone_plays(&mut table, 600);
+    table.waits(2_000);
+    for other in [1, 2] {
+        let shadow = table.apps[0].shadow_of(key(other));
+        assert_eq!(shadow.state(), ShadowState::Matched, "{other}");
+        assert!(shadow.confirmed() > kept_at + 400, "{other}");
+    }
+    assert_eq!(table.apps[0].log.flags(), []);
+}

@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use pactlocke_emu::{Checkpoint, CoreAdapter, Frame, Keys};
+use pactlocke_emu::{Checkpoint, CoreAdapter, CoreError, Frame, Keys};
 use pactlocke_game::Change;
 
 use crate::PlayedGame;
@@ -125,6 +125,58 @@ impl<G: PlayedGame> ShadowGame<G> {
             matched: 0,
             seen: Seen::default(),
         }
+    }
+
+    /// A Shadow restored from its own checkpoint, kept in the Run file when
+    /// this app last left the Run: it goes on from there, with what it had
+    /// seen of the Player's Pokémon. `game` has the same ROM loaded and has
+    /// run nothing; its clock is set to `clock_ms` as at power-on.
+    pub fn from_checkpoint(game: G, clock_ms: i64, from: &ShadowCheckpoint) -> Result<Self, CoreError> {
+        let mut shadow = Self::power_on(game, clock_ms);
+        shadow.game.core_mut().restore(&from.core)?;
+        for (addr, bytes) in &from.patches {
+            let mut original = vec![0; bytes.len()];
+            shadow.game.core_mut().read(*addr, &mut original);
+            shadow.originals.insert(*addr, original);
+            shadow.game.core_mut().patch_rom(*addr, bytes);
+            shadow.patches.insert(*addr, bytes.clone());
+        }
+        shadow.boot = from.boot;
+        shadow.confirmed = from.frame;
+        shadow.received = from.frame;
+        shadow.seen.owned = from.owned.iter().copied().collect();
+        shadow.seen.fainted = from.fainted.iter().copied().collect();
+        shadow.checkpoints.push_back(Kept {
+            boot: from.boot,
+            frame: from.frame,
+            core: from.core.clone(),
+            patches: shadow.patches.clone(),
+        });
+        shadow.look();
+        Ok(shadow)
+    }
+
+    /// Its own checkpoint of the Player's game at the newest real frame it
+    /// has run (any guesses past it are dropped first), for the Run file:
+    /// `None` while it doesn't match or is between boots.
+    pub fn checkpoint_now(&mut self) -> Option<ShadowCheckpoint> {
+        if self.state != ShadowState::Matched || self.next_boot.is_some() {
+            return None;
+        }
+        if !self.guessed.is_empty() {
+            self.drop_guesses();
+            if self.state != ShadowState::Matched {
+                return None;
+            }
+        }
+        Some(ShadowCheckpoint {
+            boot: self.boot,
+            frame: self.confirmed,
+            core: self.game.core_mut().checkpoint(),
+            patches: self.patches.iter().map(|(a, b)| (*a, b.clone())).collect(),
+            owned: self.seen.owned.iter().copied().collect(),
+            fainted: self.seen.fainted.iter().copied().collect(),
+        })
     }
 
     /// Takes in the next chunk of the Player's stream, which must follow on
@@ -547,6 +599,21 @@ enum Item {
     Change(Change),
     /// A Run Checkpoint: the Shadow takes its own here.
     Checkpoint,
+}
+
+/// A Shadow Game's own checkpoint of its Player's game, as the Run file
+/// keeps it, so a resume restarts the Shadow there instead of from power-on:
+/// the core's savestate and save memory, the ROM patches active, and which
+/// of the Player's Pokémon it had seen owned and fainted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShadowCheckpoint {
+    pub boot: u32,
+    /// The frame boundary it was taken at: frames of that boot run before it.
+    pub frame: u64,
+    pub core: Checkpoint,
+    pub patches: Vec<(u32, Vec<u8>)>,
+    pub owned: Vec<u32>,
+    pub fainted: Vec<u32>,
 }
 
 /// A Shadow's own Run Checkpoint of the Player's game.

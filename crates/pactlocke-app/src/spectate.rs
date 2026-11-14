@@ -11,8 +11,8 @@ use pactlocke_game::{GameProfile, ProfileGame};
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
     CheatWatch, GamePoint, InputChunk, Judge, Link, LinkKeeper, Locked, LogFollower, PlayerKey, RunClock, RunCommand,
-    RunEvent, RunLog, Seen, ShadowGame, ShadowRunner, ShadowState, ShadowStatus, StreamHub, StreamMessage,
-    SystemRunClock,
+    RunEvent, RunLog, Seen, ShadowCheckpoint, ShadowGame, ShadowRunner, ShadowState, ShadowStatus, StreamHub,
+    StreamMessage, SystemRunClock,
 };
 
 use crate::audio::AudioOut;
@@ -58,6 +58,8 @@ pub struct Spectate {
     keeper: LinkKeeper,
     hub: StreamHub,
     outbox: Arc<Mutex<Vec<InputChunk>>>,
+    /// This Player's Run, for keeping the Shadow Games' checkpoints in its file.
+    commands: Sender<RunCommand>,
     pub shadows: Vec<Shadow>,
     /// The Shadow being watched.
     pub watching: Option<usize>,
@@ -80,7 +82,8 @@ pub struct Spectate {
 
 impl Spectate {
     /// A Shadow Game of every other Player in the lock's roster, each on
-    /// this Player's own copy of the ROM, booted as the Run started.
+    /// this Player's own copy of the ROM, booted as the Run started, or
+    /// from its checkpoint in the Run file (`kept`) on a resume.
     /// `outbox` is this Player's own stream; `commands` reach their Run.
     pub fn new(
         me: PlayerKey,
@@ -89,15 +92,24 @@ impl Spectate {
         profile: &Arc<GameProfile>,
         outbox: Arc<Mutex<Vec<InputChunk>>>,
         commands: &Sender<RunCommand>,
+        kept: &[(PlayerKey, ShadowCheckpoint)],
     ) -> Result<Self, String> {
         let host = locked.roster.first().map_or(me, |p| p.key);
+        let mut hub = StreamHub::new(me, host);
         let mut shadows = Vec::new();
         let diverged: Arc<Mutex<Vec<(PlayerKey, u64)>>> = Arc::default();
         for player in locked.roster.iter().filter(|p| p.key != me) {
             let mut core = MgbaCore::new();
             core.load_rom(rom).map_err(|e| e.to_string())?;
             let game = ProfileGame::new(profile.clone(), rom.clone(), core);
-            let shadow = ShadowGame::power_on(game, locked.start_ms);
+            let shadow = match kept.iter().find(|(p, _)| *p == player.key) {
+                Some((_, checkpoint)) => {
+                    hub.starts_at(player.key, checkpoint.boot, checkpoint.frame);
+                    ShadowGame::from_checkpoint(game, locked.start_ms, checkpoint)
+                        .map_err(|e| format!("The Shadow Game of {} couldn't be restored: {e}", player.name))?
+                }
+                None => ShadowGame::power_on(game, locked.start_ms),
+            };
             let commands = commands.clone();
             let name = player.name.clone();
             let (key, diverged_too) = (player.key, diverged.clone());
@@ -120,8 +132,9 @@ impl Spectate {
             me,
             follower: LogFollower::new(me),
             keeper: LinkKeeper::new(me),
-            hub: StreamHub::new(me, host),
+            hub,
             outbox,
+            commands: commands.clone(),
             shadows,
             watching: None,
             battery_saver: false,
@@ -133,6 +146,25 @@ impl Spectate {
             fed: 0,
             diverged,
         })
+    }
+
+    /// Keeps each Shadow Game's checkpoint in the Run file: those taken
+    /// since the last call, or, as this app leaves the Run, one of each now.
+    pub fn keep_checkpoints(&self, now: bool) {
+        for shadow in &self.shadows {
+            let checkpoint = if now {
+                shadow.runner.checkpoint_now()
+            } else {
+                shadow.runner.take_checkpoint()
+            };
+            if let Some(checkpoint) = checkpoint {
+                // The Run is closed when nobody is listening.
+                let _ = self.commands.send(RunCommand::KeepShadow {
+                    player: shadow.key,
+                    checkpoint: Box::new(checkpoint),
+                });
+            }
+        }
     }
 
     /// The Run was resumed from its Run file: the log as kept there was
@@ -175,6 +207,7 @@ impl Spectate {
         {
             self.hub.host_is(host);
         }
+        self.keep_checkpoints(false);
         let own = std::mem::take(&mut *self.outbox.lock().unwrap_or_else(|e| e.into_inner()));
         for chunk in own {
             for out in self.hub.own(chunk) {

@@ -11,7 +11,7 @@ use std::time::Duration;
 use pactlocke_emu::{AudioSink, FrameSlot};
 
 use crate::stream::InputChunk;
-use crate::{PlayedGame, RunClock, Seen, ShadowGame, ShadowState};
+use crate::{PlayedGame, RunClock, SUSPEND_SLOT_EVERY_MS, Seen, ShadowCheckpoint, ShadowGame, ShadowState};
 
 /// How long the thread sleeps between slices when there's nothing to do.
 const TICK: Duration = Duration::from_millis(8);
@@ -37,14 +37,20 @@ enum Command {
     Unwatch,
     BatterySaver(bool),
     Tiled(bool),
+    Checkpoint(Sender<Option<ShadowCheckpoint>>),
     Stop,
 }
+
+/// How long leaving the Run waits for a Shadow Game's checkpoint.
+const CHECKPOINT_WAIT: Duration = Duration::from_secs(2);
 
 /// A Shadow Game running on its own thread. Dropping it stops the thread.
 pub struct ShadowRunner {
     commands: Sender<Command>,
     frames: Arc<FrameSlot>,
     status: Arc<Mutex<ShadowStatus>>,
+    /// Its newest checkpoint for the Run file, taken every couple of minutes.
+    kept: Arc<Mutex<Option<ShadowCheckpoint>>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -66,20 +72,36 @@ impl ShadowRunner {
             boot: shadow.boot(),
             seen: Seen::default(),
         }));
+        let kept = Arc::new(Mutex::new(None));
         let thread = {
             let frames = frames.clone();
             let status = status.clone();
+            let kept = kept.clone();
             std::thread::Builder::new()
                 .name("shadow game".into())
-                .spawn(move || run(shadow, clock, on_diverged, &inbox, &frames, &status))
+                .spawn(move || run(shadow, clock, on_diverged, &inbox, &frames, &status, &kept))
                 .expect("a thread for a Shadow Game")
         };
         Self {
             commands,
             frames,
             status,
+            kept,
             thread: Some(thread),
         }
+    }
+
+    /// Its checkpoint taken since the last call, every couple of minutes, for the Run file.
+    pub fn take_checkpoint(&self) -> Option<ShadowCheckpoint> {
+        self.kept.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    /// Its checkpoint now, at the newest real frame it has run, for the Run
+    /// file as this app leaves the Run; `None` if it doesn't match.
+    pub fn checkpoint_now(&self) -> Option<ShadowCheckpoint> {
+        let (reply, answer) = channel();
+        let _ = self.commands.send(Command::Checkpoint(reply));
+        answer.recv_timeout(CHECKPOINT_WAIT).ok().flatten()
     }
 
     /// The next chunk of the Player's stream, in order.
@@ -134,8 +156,10 @@ fn run<G: PlayedGame>(
     inbox: &Receiver<Command>,
     frames: &FrameSlot,
     status: &Mutex<ShadowStatus>,
+    kept: &Mutex<Option<ShadowCheckpoint>>,
 ) {
     let mut on_diverged = Some(on_diverged);
+    let mut kept_ms = clock.now_ms();
     let mut sink: Option<Box<dyn AudioSink>> = None;
     let mut saver = false;
     let mut tiled = false;
@@ -153,6 +177,9 @@ fn run<G: PlayedGame>(
                         Command::Unwatch => sink = None,
                         Command::BatterySaver(on) => saver = on,
                         Command::Tiled(on) => tiled = on,
+                        Command::Checkpoint(reply) => {
+                            let _ = reply.send(shadow.checkpoint_now());
+                        }
                         Command::Stop => return,
                     }
                     next = inbox.try_recv().ok();
@@ -181,6 +208,12 @@ fn run<G: PlayedGame>(
             && let Some(tell) = on_diverged.take()
         {
             tell(frame);
+        }
+        if now - kept_ms >= SUSPEND_SLOT_EVERY_MS {
+            kept_ms = now;
+            if let Some(checkpoint) = shadow.checkpoint_now() {
+                *kept.lock().unwrap_or_else(|e| e.into_inner()) = Some(checkpoint);
+            }
         }
         *status.lock().unwrap_or_else(|e| e.into_inner()) = ShadowStatus {
             state: shadow.state(),

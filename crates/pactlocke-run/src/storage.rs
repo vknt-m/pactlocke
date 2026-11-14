@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use pactlocke_emu::{Checkpoint, Keys};
 use pactlocke_game::Change;
 
-use crate::{CheckpointReason, LogEntry, Recorded, Ruleset, Submission};
+use crate::{CheckpointReason, LogEntry, PlayerKey, Recorded, Ruleset, ShadowCheckpoint, Submission};
 
 /// What a Run is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +77,9 @@ pub struct StoredRun {
     /// In a Run with friends, this Player's entries not in the Run log yet,
     /// waiting for a Host, oldest first.
     pub waiting: Vec<Submission>,
+    /// In a Run with friends, the newest checkpoint of this app's Shadow
+    /// Game of each other Player.
+    pub shadows: Vec<(PlayerKey, ShadowCheckpoint)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +122,8 @@ pub trait RunStorage: Send {
     fn keep_log(&mut self, from: u64, entries: &[LogEntry]);
     /// Keeps this Player's entries waiting for a Host, in place of those kept before.
     fn keep_waiting(&mut self, waiting: &[Submission]);
+    /// Keeps this checkpoint of the Shadow Game of `player`, in place of theirs before.
+    fn keep_shadow(&mut self, player: PlayerKey, checkpoint: &ShadowCheckpoint);
     fn load(&mut self) -> Result<StoredRun, StorageError>;
     /// Why a write failed, if one has since the Run was opened.
     fn write_failure(&mut self) -> Option<String>;
@@ -205,6 +210,7 @@ impl RunStorage for MemoryStorage {
             suspended: None,
             log: Vec::new(),
             waiting: Vec::new(),
+            shadows: Vec::new(),
         });
         Ok(())
     }
@@ -256,6 +262,13 @@ impl RunStorage for MemoryStorage {
 
     fn keep_waiting(&mut self, waiting: &[Submission]) {
         self.with(|run| run.waiting = waiting.to_vec());
+    }
+
+    fn keep_shadow(&mut self, player: PlayerKey, checkpoint: &ShadowCheckpoint) {
+        self.with(|run| {
+            run.shadows.retain(|(p, _)| *p != player);
+            run.shadows.push((player, checkpoint.clone()));
+        });
     }
 
     fn load(&mut self) -> Result<StoredRun, StorageError> {
