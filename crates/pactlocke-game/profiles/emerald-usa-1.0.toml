@@ -476,6 +476,27 @@ name = "Sudowoodo at the Battle Frontier"
 kind = "static"
 at = [0x08242D28]
 
+# Partner Avatars (Followers are off for now). The Player's tile (two s16) and map (group,
+# number) in save block 1, as in FireRed; their own 16x32 sprite's top-left on
+# screen; and what the overworld leaves free, read from the game's own
+# bookkeeping on a dozen maps (local): OAM entries 64-127
+# (gOamLimit = 64) and the last 80 OBJ tiles (the game allocates fewer than
+# 180). No palette slot is ever the game's alone: 0-11 hold the map's people
+# and 12-14 the effects it loads. 15, 9 and 7 were never seen in use; 11 and 6
+# only on the busiest map. Party icons (for Followers, when they return) from
+# gMonIconTable, gMonIconPaletteIndices and gMonIconPaletteTable.
+[avatars]
+position = 0x00
+location = 0x04
+anchor_x = 112
+anchor_y = 56
+first_oam = 64
+first_tile = 944
+palettes = [15, 9, 7, 11, 6]
+icon_table = 0x0857BCA8
+icon_palette_indices = 0x0857C388
+icon_palette_table = 0x0857C540
+
 # Sync Gates: every gym leader, Elite Four member and the Champion, each by its
 # first battle's trainerbattle instruction, found by `cargo dev scan` and
 # checked against the ROM. The gym leaders' rematch scripts (trainerbattle

@@ -309,3 +309,22 @@ fn every_sync_gate_is_its_trainers_first_battle_in_the_real_rom() {
         }
     }
 }
+
+#[test]
+fn party_icons_read_from_the_real_rom_are_each_species_own_32x32_picture() {
+    let rom = rom_or_skip!();
+    let profile = profiled(&rom);
+    let size = pactlocke_game::ICON_SIZE;
+    // Treecko, Torchic, Mudkip.
+    let icons: Vec<Vec<u8>> = [277u16, 280, 283]
+        .into_iter()
+        .map(|species| pactlocke_game::party_icon_rgba(&profile, &rom, species).expect("an icon"))
+        .collect();
+    for (icon, species) in icons.iter().zip([277, 280, 283]) {
+        assert_eq!(icon.len(), size * size * 4);
+        assert_eq!(icon[3], 0, "{species}: the corner is transparent");
+        let opaque = icon.as_chunks::<4>().0.iter().filter(|px| px[3] == 255).count();
+        assert!((100..900).contains(&opaque), "{species}: {opaque} pixels drawn");
+    }
+    assert_ne!(icons[0], icons[1], "each species its own");
+}

@@ -154,6 +154,12 @@ name = "Rayquaza at the Sky Pillar"
 kind = "static"
 at = [0x0815F2A8]
 
+# Ruby's, with Sapphire's party icon tables.
+[avatars]
+icon_table = 0x083BBD78
+icon_palette_indices = 0x083BC458
+icon_palette_table = 0x083BC610
+
 # Ruby's Sync Gates, at Sapphire's addresses.
 [sync_gates]
 hold = 0x08F00000
