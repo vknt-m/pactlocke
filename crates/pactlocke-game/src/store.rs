@@ -77,24 +77,43 @@ pub enum RomIdentity {
     Unprofiled { sha1: String, verdict: Unprofiled },
 }
 
-/// What an unknown ROM can still be played as.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Why a ROM with no Game Profile can't be played. (One laid out like a
+/// supported game is played as Untested, on a profile made from that game's:
+/// see [`ProfileStore::identify`].)
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unprofiled {
-    /// Its header names a supported game (likely a Romhack of it): playable as
-    /// Untested, with detection, penalties and red Violations.
-    Untested,
-    /// Not a game Pactlocke knows.
+    /// A tested Romhack whose Game Profile comes in a later update.
+    ProfileComing(TestedRomhack),
+    /// Not a game Pactlocke knows, or a Romhack that moved the game's tables.
     NotSupported,
 }
 
-/// Header game codes of the supported original games.
-const KNOWN_GAME_CODES: [&[u8; 4]; 5] = [b"BPRE", b"BPGE", b"BPEE", b"AXVE", b"AXPE"];
+/// A Romhack Pactlocke was tested on, as the tested list shows it. Pactlocke
+/// hosts and links to nothing: a Player brings the patched ROM, matched by SHA-1.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TestedRomhack {
+    pub name: String,
+    pub version: String,
+    pub author: String,
+    /// The Game Profile of the game it patches.
+    pub base: String,
+    /// The patched ROM's SHA-1, lowercase hex.
+    pub sha1: String,
+}
+
+/// The tested Romhacks, bundled with the app.
+const BUNDLED_ROMHACKS: &str = include_str!("../romhacks.toml");
+
+/// Ids of the profiles made for Untested Romhacks start with this.
+pub const UNTESTED_PREFIX: &str = "untested-";
 
 #[derive(Debug, Clone, Default)]
 pub struct ProfileStore {
     profiles: Vec<Arc<GameProfile>>,
     /// The ids of the developer's local, unbundled profiles: solo Runs only.
     local: Vec<String>,
+    romhacks: Vec<TestedRomhack>,
 }
 
 /// Draft profiles (from the developer scanner) have ids that start with
@@ -108,7 +127,8 @@ impl ProfileStore {
     /// The profiles bundled with this build.
     pub fn bundled() -> Result<Self, ProfileError> {
         let none: [(&str, &str); 0] = [];
-        Self::from_sources_with_local(BUNDLED.iter().map(|(file, text)| (*file, *text)), none)
+        Self::from_sources_with_local(BUNDLED.iter().map(|(file, text)| (*file, *text)), none)?
+            .with_tested_romhacks(BUNDLED_ROMHACKS)
     }
 
     /// The bundled profiles and a developer's local ones, from every `.toml`
@@ -126,7 +146,49 @@ impl ProfileStore {
                 local.push((path.display().to_string(), text));
             }
         }
-        Self::from_sources_with_local(BUNDLED.iter().map(|(file, text)| (*file, *text)), local)
+        Self::from_sources_with_local(BUNDLED.iter().map(|(file, text)| (*file, *text)), local)?
+            .with_tested_romhacks(BUNDLED_ROMHACKS)
+    }
+
+    /// The same store with this tested-Romhacks list (TOML, `[[romhacks]]`).
+    /// Each must patch a game this store has a profile for.
+    pub fn with_tested_romhacks(mut self, text: &str) -> Result<Self, ProfileError> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct List {
+            romhacks: Vec<TestedRomhack>,
+        }
+        let file = "romhacks.toml".to_owned();
+        let list: List = toml::from_str(text).map_err(|e| ProfileError::Format {
+            file: file.clone(),
+            message: e.message().to_owned(),
+        })?;
+        for hack in &list.romhacks {
+            if self.by_id(&hack.base).is_none() {
+                return Err(ProfileError::UnknownParent {
+                    file,
+                    parent: hack.base.clone(),
+                });
+            }
+            if !is_sha1(&hack.sha1) {
+                return Err(ProfileError::Invalid {
+                    file,
+                    message: format!("{}: sha1 {:?} is not 40 lowercase hex digits", hack.name, hack.sha1),
+                });
+            }
+        }
+        self.romhacks = list.romhacks;
+        Ok(self)
+    }
+
+    /// The tested Romhacks, for the list the app shows.
+    pub fn tested_romhacks(&self) -> &[TestedRomhack] {
+        &self.romhacks
+    }
+
+    /// The tested Romhack this patched ROM is, by its SHA-1.
+    pub fn tested_romhack(&self, sha1: &str) -> Option<&TestedRomhack> {
+        self.romhacks.iter().find(|hack| hack.sha1 == sha1)
     }
 
     /// The bundled profiles, and with the developer setting
@@ -261,7 +323,7 @@ impl ProfileStore {
         }
         Ok(Self {
             profiles,
-            local: Vec::new(),
+            ..Self::default()
         })
     }
 
@@ -280,27 +342,79 @@ impl ProfileStore {
         self.profiles.iter().find(|p| p.sha1 == sha1)
     }
 
-    /// Identifies a ROM by its SHA-1.
+    /// Identifies a ROM: by its SHA-1, a profiled game or a tested Romhack;
+    /// otherwise, a Romhack laid out like the game its header names is
+    /// played as Untested on a profile made from that game's.
     pub fn identify(&self, rom: &[u8]) -> RomIdentity {
         let sha1 = sha1_hex(rom);
+        let profiled = |profile: Arc<GameProfile>| RomIdentity::Profiled {
+            capabilities: CapabilityReport::check(&profile, rom),
+            profile,
+        };
         if let Some(profile) = self.find(&sha1) {
-            return RomIdentity::Profiled {
-                capabilities: CapabilityReport::check(profile, rom),
-                profile: profile.clone(),
+            return profiled(profile.clone());
+        }
+        if let Some(hack) = self.tested_romhack(&sha1) {
+            return RomIdentity::Unprofiled {
+                verdict: Unprofiled::ProfileComing(hack.clone()),
+                sha1,
             };
         }
-        let known = rom
-            .get(0xAC..0xB0)
-            .is_some_and(|code| KNOWN_GAME_CODES.iter().any(|known| code == known.as_slice()));
-        RomIdentity::Unprofiled {
-            sha1,
-            verdict: if known {
-                Unprofiled::Untested
-            } else {
-                Unprofiled::NotSupported
+        match self.untested_profile(rom, &sha1) {
+            Some(profile) => profiled(Arc::new(profile)),
+            None => RomIdentity::Unprofiled {
+                sha1,
+                verdict: Unprofiled::NotSupported,
             },
         }
     }
+
+    /// An Untested Romhack's profile: the bundled profile of the game its
+    /// header names, if the hack keeps that game's species and item names
+    /// where the profile has them, under the hack's own SHA-1. It has no
+    /// catalogue (Gifts are only seen after the fact) and no Partner Avatars;
+    /// every rule whose patch sites the hack changed is greyed out by its
+    /// capability report.
+    fn untested_profile(&self, rom: &[u8], sha1: &str) -> Option<GameProfile> {
+        let code = rom.get(0xAC..0xB0)?;
+        let base = self
+            .profiles
+            .iter()
+            .find(|p| p.game_code.as_bytes() == code && !self.is_local(&p.id))?;
+        if !laid_out_like(base, rom) {
+            return None;
+        }
+        let mut profile = (**base).clone();
+        profile.id = format!("{UNTESTED_PREFIX}{}", &sha1[..8]);
+        profile.name = format!("Romhack of {}", base.name);
+        profile.sha1 = sha1.to_owned();
+        profile.status = crate::SupportStatus::Untested;
+        profile.parent = Some(base.id.clone());
+        profile.sources.clear();
+        profile.avatars = None;
+        Some(profile)
+    }
+}
+
+/// Whether a ROM keeps a profile's tables where it has them: Bulbasaur and
+/// Ivysaur first in its species names, and the Master Ball first in its items.
+fn laid_out_like(profile: &GameProfile, rom: &[u8]) -> bool {
+    let name_at = |addr: u32, len: usize| {
+        let start = addr.checked_sub(crate::ROM_BASE)? as usize;
+        Some(crate::text::decode(rom.get(start..start + len)?))
+    };
+    let species = |id: u32| {
+        let len = profile.layout.species_name_length;
+        name_at(profile.symbols.species_names + id * len, len as usize)
+    };
+    let item = name_at(profile.symbols.items + profile.layout.item_size, 14);
+    species(1).as_deref() == Some("BULBASAUR")
+        && species(2).as_deref() == Some("IVYSAUR")
+        && item.as_deref() == Some("MASTER BALL")
+}
+
+fn is_sha1(text: &str) -> bool {
+    text.len() == 40 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// A profile's `id`, if its TOML has one.
@@ -332,7 +446,7 @@ fn merge(parent: &mut toml::Table, child: &toml::Table) {
 
 /// Checks that a resolved profile doesn't contradict itself.
 fn check(profile: &GameProfile) -> Result<(), String> {
-    if profile.sha1.len() != 40 || !profile.sha1.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+    if !is_sha1(&profile.sha1) {
         return Err(format!("sha1 {:?} is not 40 lowercase hex digits", profile.sha1));
     }
     if profile.game_code.len() != 4 {

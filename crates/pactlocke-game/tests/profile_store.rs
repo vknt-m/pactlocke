@@ -3,8 +3,8 @@
 
 mod support;
 
-use pactlocke_game::{Method, ProfileError, ProfileStore, RomIdentity, SupportStatus, Unprofiled};
-use support::{TEST_ROM_SHA1, profile_toml, test_rom_bytes};
+use pactlocke_game::{Capability, Method, ProfileError, ProfileStore, RomIdentity, Rule, SupportStatus, Unprofiled};
+use support::{CAP_SITE, SPECIES_NAMES, TEST_ROM_SHA1, profile_toml, test_rom_bytes};
 
 #[test]
 fn a_rom_is_found_by_its_sha1() {
@@ -141,26 +141,147 @@ fn merged_sections_count_as_one_area() {
     assert_eq!(profile.area(0x99), None, "not a listed section");
 }
 
-#[test]
-fn an_unknown_rom_of_a_supported_game_is_untested_and_anything_else_is_not_supported() {
-    let store = ProfileStore::from_sources([("test.toml", profile_toml("test-game", TEST_ROM_SHA1))]).unwrap();
+/// A store whose one profile is FireRed's game code, as the bundled FireRed's is.
+fn store_with_a_firered_base() -> ProfileStore {
+    let base = profile_toml("test-game", TEST_ROM_SHA1).replace("game_code = \"TEST\"", "game_code = \"BPRE\"");
+    ProfileStore::from_sources([("test.toml", base)]).unwrap()
+}
 
-    let hack = support::patchable_rom(b"BPRE");
+/// A hack of that game laid out like it: its species and item names where
+/// the base profile keeps them, and every patch site as a clean ROM has it.
+fn vanilla_layout_hack() -> Vec<u8> {
+    let mut rom = support::patchable_rom(b"BPRE");
+    let name = |text: &str, len| pactlocke_game::encode_text(text, len).unwrap();
+    support::put(&mut rom, SPECIES_NAMES + 11, &name("BULBASAUR", 11));
+    support::put(&mut rom, SPECIES_NAMES + 22, &name("IVYSAUR", 11));
+    support::put(&mut rom, 0x0800_1000 + 44, &name("MASTER BALL", 14));
+    // Not the test profile's own ROM.
+    support::put(&mut rom, 0x0800_F000, b"A HACK");
+    rom
+}
+
+#[test]
+fn an_unknown_hack_laid_out_like_its_game_is_untested_on_that_games_profile() {
+    let store = store_with_a_firered_base();
+    let hack = vanilla_layout_hack();
+    let RomIdentity::Profiled { profile, capabilities } = store.identify(&hack) else {
+        panic!("a vanilla-layout hack can be played as Untested");
+    };
+    assert_eq!(profile.status, SupportStatus::Untested);
+    assert_eq!(
+        profile.sha1,
+        pactlocke_game::sha1_hex(&hack),
+        "the hack's own SHA-1, so every Player brings it"
+    );
+    assert!(profile.id.starts_with("untested-"), "{}", profile.id);
+    assert!(profile.name.starts_with("Romhack of "), "{}", profile.name);
+    assert!(
+        profile.sources.is_empty(),
+        "no catalogue: Gifts are only seen after the fact"
+    );
+    assert_eq!(profile.avatars, None, "no Partner Avatars on Romhacks");
+    assert_eq!(
+        capabilities.get(Rule::FirstEncounter),
+        &Capability::Enforceable,
+        "its catch sites are the game's"
+    );
+    assert!(matches!(capabilities.get(Rule::Gifts), Capability::GreyedOut { .. }));
+    assert_eq!(
+        store.identify(&hack),
+        RomIdentity::Profiled { profile, capabilities },
+        "the same every time"
+    );
+}
+
+#[test]
+fn an_untested_hacks_rules_whose_checks_fail_are_off() {
+    let store = store_with_a_firered_base();
+    let mut hack = vanilla_layout_hack();
+    // The hack changed the code the level cap patches.
+    support::put(&mut hack, CAP_SITE, &[0xFF, 0x28]);
+    let RomIdentity::Profiled { capabilities, .. } = store.identify(&hack) else {
+        panic!("still Untested");
+    };
+    assert!(matches!(capabilities.get(Rule::LevelCap), Capability::GreyedOut { .. }));
+    assert_eq!(capabilities.get(Rule::FirstEncounter), &Capability::Enforceable);
+}
+
+#[test]
+fn a_hack_that_moved_its_tables_and_anything_else_is_not_supported() {
+    let store = store_with_a_firered_base();
+    let mut moved = vanilla_layout_hack();
+    support::put(&mut moved, SPECIES_NAMES + 11, &[0; 11]);
+    let homebrew = support::patchable_rom(b"ZPAC");
+    for rom in [moved, homebrew] {
+        assert!(matches!(
+            store.identify(&rom),
+            RomIdentity::Unprofiled {
+                verdict: Unprofiled::NotSupported,
+                ..
+            }
+        ));
+    }
+}
+
+#[test]
+fn a_tested_romhack_is_named_and_waits_for_its_game_profile() {
+    let hack = vanilla_layout_hack();
+    let sha1 = pactlocke_game::sha1_hex(&hack);
+    let list = format!(
+        "[[romhacks]]
+name = \"Test Hack\"
+version = \"1.0\"
+author = \"Someone\"
+base = \"test-game\"
+sha1 = \"{sha1}\"
+"
+    );
+    let store = store_with_a_firered_base().with_tested_romhacks(&list).unwrap();
+    let listed = store.tested_romhack(&sha1).expect("on the list").clone();
     assert_eq!(
         store.identify(&hack),
         RomIdentity::Unprofiled {
-            sha1: pactlocke_game::sha1_hex(&hack),
-            verdict: Unprofiled::Untested
-        }
+            sha1: sha1.clone(),
+            verdict: Unprofiled::ProfileComing(listed.clone())
+        },
+        "listed, so not Untested: its Game Profile comes in an update"
     );
-    let homebrew = support::patchable_rom(b"ZPAC");
-    assert!(matches!(
-        store.identify(&homebrew),
-        RomIdentity::Unprofiled {
-            verdict: Unprofiled::NotSupported,
-            ..
-        }
-    ));
+    assert_eq!(
+        (listed.name.as_str(), listed.version.as_str(), listed.author.as_str()),
+        ("Test Hack", "1.0", "Someone")
+    );
+    assert_eq!(store.tested_romhacks().len(), 1);
+}
+
+#[test]
+fn a_tested_romhack_list_naming_an_unknown_base_game_is_refused() {
+    let list = format!(
+        "[[romhacks]]
+name = \"x\"
+version = \"1\"
+author = \"y\"
+base = \"no-such-game\"
+sha1 = \"{}\"
+",
+        "ab".repeat(20)
+    );
+    assert!(store_with_a_firered_base().with_tested_romhacks(&list).is_err());
+}
+
+#[test]
+fn the_bundled_tested_romhacks_are_the_six_launch_hacks_each_on_a_bundled_game() {
+    let store = ProfileStore::bundled().unwrap();
+    let hacks = store.tested_romhacks();
+    let mut names: Vec<&str> = hacks.iter().map(|h| h.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        ["Gaia", "Glazed", "Heart and Soul", "R.O.W.E.", "Radical Red", "Unbound"]
+    );
+    for hack in hacks {
+        assert!(store.by_id(&hack.base).is_some(), "{}: base {}", hack.name, hack.base);
+        assert!(!hack.version.is_empty() && !hack.author.is_empty());
+    }
 }
 
 #[test]

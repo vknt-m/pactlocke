@@ -29,7 +29,10 @@ pub use profile::{
 };
 pub use profile_game::ProfileGame;
 pub use source::{Source, SourceDef, SourceKind};
-pub use store::{DEV_PROFILES_VAR, DRAFT_PREFIX, ProfileError, ProfileStore, RomIdentity, Unprofiled, sha1_hex};
+pub use store::{
+    DEV_PROFILES_VAR, DRAFT_PREFIX, ProfileError, ProfileStore, RomIdentity, TestedRomhack, UNTESTED_PREFIX,
+    Unprofiled, sha1_hex,
+};
 pub use text::{decode as decode_text, encode as encode_text};
 
 /// A place that counts as one encounter location: a region-map section, after

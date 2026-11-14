@@ -1,6 +1,6 @@
 //! The app's settings: the Player's name, controls, sound, video, network,
 //! logging and the developer setting, plus a few things the app remembers
-//! (the side panel's width, recent ROMs). They are kept as `settings.json`
+//! (the side panel's width; the ROMs opened are in the ROM library). They are kept as `settings.json`
 //! beside the Runs folder, and read again at every start. A file that can't
 //! be read gives the defaults; a value that can't be read gives its default.
 
@@ -24,8 +24,6 @@ pub const BUTTONS: [(Keys, &str); 10] = [
     (Keys::RIGHT, "Right"),
 ];
 
-/// How many recent ROMs File ▸ Recent ROMs keeps.
-const RECENT_KEPT: usize = 8;
 /// The narrowest and widest the side panel can be dragged, in points.
 pub const PANEL_WIDTHS: (f32, f32) = (280.0, 720.0);
 /// The longest name a Player can give.
@@ -84,7 +82,9 @@ pub struct Settings {
     pub dev_profiles: Option<PathBuf>,
     /// The side panel's width in points, as last dragged.
     pub panel_width: f32,
-    /// ROMs opened, newest first.
+    /// The Recent ROMs list kept before the ROM library: read once into the
+    /// library, never written again.
+    #[serde(skip_serializing)]
     pub recent_roms: Vec<PathBuf>,
 }
 
@@ -200,14 +200,6 @@ impl Settings {
             RelayChoice::Own => pactlocke_net::Relays::parse(&self.own_relays),
             RelayChoice::Off => pactlocke_net::Relays::Off,
         }
-    }
-
-    /// A ROM was opened: it goes to the top of the recent list.
-    pub fn opened(&mut self, rom: &std::path::Path) {
-        self.recent_roms.retain(|p| p != rom);
-        self.recent_roms.insert(0, rom.to_path_buf());
-        self.recent_roms.truncate(RECENT_KEPT);
-        self.save();
     }
 
     /// The name other Players see, or a stand-in before the first launch.

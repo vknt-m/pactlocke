@@ -1,29 +1,46 @@
 //! What a loaded ROM is, and which rules its Game Profile can enforce.
 
 use eframe::egui;
-use pactlocke_game::{Capability, RomIdentity, SupportStatus, Unprofiled};
+use pactlocke_game::{Capability, GameProfile, RomIdentity, SupportStatus, UNTESTED_PREFIX, Unprofiled};
 
-/// "Pokémon FireRed (USA) 1.0: Supported", for the toolbar.
-pub fn status_label(ui: &mut egui::Ui, identity: &RomIdentity) {
+/// Whether this profile was made for an Untested Romhack, from its game's.
+pub fn untested_romhack(profile: &GameProfile) -> bool {
+    profile.id.starts_with(UNTESTED_PREFIX)
+}
+
+/// "Pokémon FireRed (USA) 1.0: Supported", or the ROM's other status, in a few words.
+pub fn status_text(identity: &RomIdentity) -> String {
     match identity {
         RomIdentity::Profiled { profile, .. } => {
             let status = match profile.status {
                 SupportStatus::Supported => "Supported",
                 SupportStatus::Untested => "Untested",
             };
-            ui.label(format!("{}: {status}", profile.name));
+            format!("{}: {status}", profile.name)
         }
         RomIdentity::Unprofiled {
-            verdict: Unprofiled::Untested,
+            verdict: Unprofiled::ProfileComing(hack),
             ..
-        } => {
-            ui.label("No Game Profile: Untested");
-        }
+        } => format!("{} {}: Game Profile coming", hack.name, hack.version),
+        RomIdentity::Unprofiled {
+            verdict: Unprofiled::NotSupported,
+            ..
+        } => "Not supported".to_owned(),
+    }
+}
+
+/// The ROM's status, for the toolbar.
+pub fn status_label(ui: &mut egui::Ui, identity: &RomIdentity) {
+    let text = status_text(identity);
+    match identity {
         RomIdentity::Unprofiled {
             verdict: Unprofiled::NotSupported,
             ..
         } => {
-            ui.colored_label(ui.visuals().warn_fg_color, "Not supported");
+            ui.colored_label(ui.visuals().warn_fg_color, text);
+        }
+        _ => {
+            ui.label(text);
         }
     }
 }
@@ -33,15 +50,29 @@ pub fn rules_panel(ui: &mut egui::Ui, identity: &RomIdentity) {
     ui.heading("Rules on this ROM");
     ui.add_space(4.0);
     let capabilities = match identity {
-        RomIdentity::Profiled { capabilities, .. } => capabilities,
+        RomIdentity::Profiled { capabilities, profile } => {
+            if untested_romhack(profile) {
+                let base = profile.parent.as_deref().unwrap_or("its game");
+                ui.label(format!(
+                    "No Game Profile matches this exact ROM, but it keeps the layout of the game it patches \
+                     ({base}), so it plays as an Untested Romhack on that game's profile. Rules its changes \
+                     broke are off, Gifts are only seen once they arrive, and nothing here was tested on \
+                     this Romhack."
+                ));
+                ui.add_space(8.0);
+            }
+            capabilities
+        }
         RomIdentity::Unprofiled { sha1, verdict } => {
             let text = match verdict {
-                Unprofiled::Untested => {
-                    "This looks like a supported game, but no Game Profile matches this exact ROM. \
-                     A Run on it would be Untested: rules are detected and penalised where possible, \
-                     and anything the app can't stop is shown as a Violation."
-                }
-                Unprofiled::NotSupported => "Pactlocke doesn't know this game, so no rules can be applied to it.",
+                Unprofiled::ProfileComing(hack) => format!(
+                    "{} {} by {} is a tested Romhack. Its Game Profile comes in a later update: until then \
+                     it can be played, but not in a Run.",
+                    hack.name, hack.version, hack.author
+                ),
+                Unprofiled::NotSupported => "Pactlocke doesn't know this game, or this Romhack moved the \
+                                             game's tables, so no rules can be applied to it."
+                    .to_owned(),
             };
             ui.label(text);
             ui.add_space(8.0);

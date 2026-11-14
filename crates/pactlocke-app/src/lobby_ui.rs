@@ -40,6 +40,11 @@ pub struct Lobbies {
     prompt: Option<JoinPrompt>,
     /// The SHA-1 of this Player's ROM, told to a Host on every reconnect.
     rom_sha1: Option<String>,
+    /// The app's ROM library, to find a Run's ROM in without asking: none in
+    /// the test rig's headless app.
+    pub roms: Option<std::rc::Rc<std::cell::RefCell<crate::rom_library::RomLibrary>>>,
+    /// The Run SHA-1 the library was last searched for, so it is searched once.
+    rom_looked_for: Option<String>,
     /// A relay to try a Host on beside finding them by key: the custom
     /// relay the Run's first Host gave in their invite, if any.
     relay: Option<String>,
@@ -91,6 +96,8 @@ impl Lobbies {
             left: Replaced::none(),
             prompt: None,
             rom_sha1: None,
+            roms: None,
+            rom_looked_for: None,
             relay: None,
             direct: Vec::new(),
             lost_at: None,
@@ -153,6 +160,7 @@ impl Lobbies {
     /// thread, so the window never waits for it.
     fn leave(&mut self) {
         self.left = self.take_nodes().in_background();
+        self.rom_looked_for = None;
     }
 
     /// Takes this app's network nodes out of the lobby, with any it left
@@ -810,6 +818,27 @@ impl Lobbies {
         {
             picked = pick_rom().and_then(Result::ok);
         }
+        // The Run's ROM, from the library, if this Player has opened it before.
+        if !hosting
+            && view.rom_matches != Some(true)
+            && let Some(run) = &view.run
+            && self.rom_looked_for.as_deref() != Some(run.game_sha1.as_str())
+        {
+            self.rom_looked_for = Some(run.game_sha1.clone());
+            let found = self.roms.as_ref().and_then(|roms| {
+                roms.borrow_mut()
+                    .locate(&run.game_sha1, |path| std::fs::read(path).ok())
+            });
+            if let Some((path, rom)) = found {
+                log::info!("The Run's ROM is in the library: {}", path.display());
+                picked = Some(PickedRom::new(path, &rom));
+            }
+        }
+        if let (Some(rom), Some(run), Some(roms)) = (&picked, &view.run, &self.roms)
+            && rom.sha1 == run.game_sha1
+        {
+            roms.borrow_mut().remember(&rom.path, &rom.sha1, &run.game_name, true);
+        }
         ui.separator();
         match (&mut self.host, &mut self.join) {
             (Some((node, coop)), _) => coop.show(ui, node, now_ms),
@@ -884,6 +913,19 @@ struct PickedRom {
     sha1: String,
 }
 
+impl PickedRom {
+    fn new(path: PathBuf, rom: &[u8]) -> Self {
+        Self {
+            name: path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            sha1: sha1_hex(rom),
+            path,
+        }
+    }
+}
+
 /// Asks for the ROM to play the Run on; `None` if the Player cancels.
 fn pick_rom() -> Option<Result<PickedRom, String>> {
     let path = rfd::FileDialog::new()
@@ -892,14 +934,7 @@ fn pick_rom() -> Option<Result<PickedRom, String>> {
         .pick_file()?;
     Some(
         std::fs::read(&path)
-            .map(|rom| PickedRom {
-                name: path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                path: path.clone(),
-                sha1: sha1_hex(&rom),
-            })
+            .map(|rom| PickedRom::new(path.clone(), &rom))
             .map_err(|e| format!("Couldn't read {}: {e}", path.display())),
     )
 }

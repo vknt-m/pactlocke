@@ -1,0 +1,48 @@
+# The Romhacks Pactlocke is tested on, as the app's tested list shows them:
+# name, version and author, the game each patches (its Game Profile), and the
+# patched ROM's SHA-1. Pactlocke hosts and links to nothing: a Player brings
+# the patched ROM, and it is matched by SHA-1. A Romhack listed here plays once
+# its own Game Profile is bundled; until then the app names
+# it and says its profile is coming.
+
+[[romhacks]]
+name = "Radical Red"
+version = "4.1"
+author = "soupercell"
+base = "firered-usa-1.0"
+sha1 = "964f951a0fdaf209e4ea1344883ef0d557bb3a80"
+
+[[romhacks]]
+name = "Unbound"
+version = "2.1.1.1"
+author = "Skeli"
+base = "firered-usa-1.0"
+sha1 = "b4776b82a4c7915d0fadeaa27e013523f99dfd94"
+
+[[romhacks]]
+name = "Gaia"
+version = "3.2"
+author = "Spherical Ice"
+base = "firered-usa-1.0"
+sha1 = "d5b1e77975fcda831e0e9a7b527906bf3f40ecd0"
+
+[[romhacks]]
+name = "Glazed"
+version = "9.2.0"
+author = "Gamer2020"
+base = "emerald-usa-1.0"
+sha1 = "e10105d8544469c6a11ca2cf510289981df3c3b0"
+
+[[romhacks]]
+name = "Heart and Soul"
+version = "2.0.6"
+author = "Pokémon HnS Development"
+base = "emerald-usa-1.0"
+sha1 = "79ee6df0869c1773c8c6a5f764afc1f8d833d8bb"
+
+[[romhacks]]
+name = "R.O.W.E."
+version = "2.1.9.1"
+author = "Rioluwott"
+base = "emerald-usa-1.0"
+sha1 = "81bd0f4bfa1c04ab2c6faab1bddd10e8a390ea77"

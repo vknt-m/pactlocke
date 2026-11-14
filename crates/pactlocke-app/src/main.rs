@@ -22,6 +22,7 @@ mod lobby_ui;
 mod logger;
 mod player_strip;
 mod resume;
+mod rom_library;
 mod rom_report;
 mod rules_text;
 mod run_panel;
@@ -47,11 +48,14 @@ use pactlocke_run::{
     Locked, NewRun, Preset, Ruleset, RunClock, RunCommand, RunEngine, RunEvent, RunLibrary, RunLog, RunSummary,
     RunView, RunningGame, SystemRunClock,
 };
+use rom_library::RomLibrary;
 use settings::Settings;
 use settings_ui::{Category, SettingsDialog};
 
 /// Frames the smoke launch draws before it closes itself.
 const SMOKE_FRAMES: u32 = 30;
+/// How many ROMs File ▸ Recent ROMs shows.
+const RECENT_SHOWN: usize = 8;
 /// Frames `--shot` waits for the window to settle before saving it.
 const SHOT_FRAMES: u32 = 120;
 
@@ -301,6 +305,10 @@ struct PactlockeApp {
     /// The bundled Game Profiles; an error here is a broken build.
     profiles: Result<ProfileStore, String>,
     library: Result<RunLibrary, String>,
+    /// Every ROM opened, by path and SHA-1: the right one is offered for a Run.
+    roms: std::rc::Rc<std::cell::RefCell<RomLibrary>>,
+    /// New Run's game chooser is open.
+    choosing_game: bool,
     /// The Runs are in the user data folder because the app's folder isn't writable.
     library_fallback: bool,
     runs: Vec<RunSummary>,
@@ -358,6 +366,8 @@ impl PactlockeApp {
             playing: None,
             profiles: load_profiles(settings.dev_profiles.as_deref()),
             library,
+            roms: std::rc::Rc::new(std::cell::RefCell::new(RomLibrary::open(rom_library::path()))),
+            choosing_game: false,
             library_fallback,
             runs,
             new_run: None,
@@ -387,7 +397,20 @@ impl PactlockeApp {
             settings,
         };
         app.apply_settings();
+        app.lobbies.roms = Some(app.roms.clone());
+        app.adopt_recent_roms();
         app
+    }
+
+    /// The first time the ROM library is kept, the old Recent ROMs list joins it.
+    fn adopt_recent_roms(&mut self) {
+        if self.roms.borrow().is_kept() {
+            return;
+        }
+        for path in std::mem::take(&mut self.settings.recent_roms).iter().rev() {
+            // Read only to be remembered; one that is gone is left out.
+            let _ = self.read_rom(path);
+        }
     }
 
     /// The Run library, or why there is none.
@@ -411,7 +434,6 @@ impl PactlockeApp {
     /// Plays a ROM on its own, outside any Run.
     fn open_rom(&mut self, path: &Path) {
         self.close_run();
-        self.settings.opened(path);
         let result = self.read_rom(path).and_then(|(rom, identity)| {
             let core = self.boot(&rom).map_err(|e| format!("{}: {e}", path.display()))?;
             let (emulator, audio) = self.spawn(core);
@@ -420,10 +442,17 @@ impl PactlockeApp {
         self.show_result(result);
     }
 
+    /// Reads a ROM and says what it is; the ROM library remembers it.
     fn read_rom(&self, path: &Path) -> Result<(Vec<u8>, RomIdentity), String> {
         // The ROM is read into memory only; it is never copied anywhere.
         let rom = std::fs::read(path).map_err(|e| format!("Couldn't read {}: {e}", path.display()))?;
         let identity = self.profiles.as_ref().map_err(Clone::clone)?.identify(&rom);
+        self.roms.borrow_mut().remember(
+            path,
+            &sha1_hex(&rom),
+            &rom_report::status_text(&identity),
+            matches!(identity, RomIdentity::Profiled { .. }),
+        );
         Ok((rom, identity))
     }
 
@@ -465,11 +494,25 @@ impl PactlockeApp {
     /// Picks a ROM for a New Run: a game whose Game Profile can enforce the
     /// first-Encounter rule.
     fn begin_new_run(&mut self) {
+        if !self.roms.borrow().roms().iter().any(|rom| rom.runs) {
+            self.browse_for_new_run();
+        } else {
+            self.choosing_game = true;
+        }
+    }
+
+    /// New Run on a ROM the Player browses for.
+    fn browse_for_new_run(&mut self) {
         let Some(path) = Self::pick_rom_file("Choose the ROM for the new Run") else {
             return;
         };
-        self.settings.opened(&path);
-        match self.draft_for(&path) {
+        self.new_run_on(&path);
+    }
+
+    /// New Run on this ROM.
+    fn new_run_on(&mut self, path: &Path) {
+        self.choosing_game = false;
+        match self.draft_for(path) {
             Ok(draft) => {
                 self.error = None;
                 self.new_run = Some(draft);
@@ -523,8 +566,25 @@ impl PactlockeApp {
     fn draft_for(&self, path: &Path) -> Result<NewRunDraft, String> {
         let path = path.to_path_buf();
         self.read_rom(&path).and_then(|(rom, identity)| {
-            let RomIdentity::Profiled { profile, capabilities } = &identity else {
-                return Err("A Run needs a game Pactlocke has a Game Profile for, and this ROM has none.".to_owned());
+            let (profile, capabilities) = match &identity {
+                RomIdentity::Profiled { profile, capabilities } => (profile, capabilities),
+                RomIdentity::Unprofiled {
+                    verdict: pactlocke_game::Unprofiled::ProfileComing(hack),
+                    ..
+                } => {
+                    return Err(format!(
+                        "{} {} is a tested Romhack, but its Game Profile comes in a later update, so it can't be \
+                         played in a Run yet.",
+                        hack.name, hack.version
+                    ));
+                }
+                RomIdentity::Unprofiled { .. } => {
+                    return Err(
+                        "A Run needs a game Pactlocke has a Game Profile for, or a Romhack laid out like one, \
+                         and this ROM is neither."
+                            .to_owned(),
+                    );
+                }
             };
             let unavailable: BTreeMap<Rule, String> = [
                 Rule::FirstEncounter,
@@ -729,6 +789,15 @@ impl PactlockeApp {
             && sha1_hex(&rom) == summary.game_sha1
         {
             return Ok((rom, identity, PathBuf::from(path)));
+        }
+        let known = self
+            .roms
+            .borrow_mut()
+            .locate(&summary.game_sha1, |path| std::fs::read(path).ok());
+        if let Some((path, _)) = known
+            && let Ok((rom, identity)) = self.read_rom(&path)
+        {
+            return Ok((rom, identity, path));
         }
         let title = format!("Find the ROM for {} ({})", summary.name, summary.game_name);
         let path = Self::pick_rom_file(&title).ok_or("The Run's ROM wasn't found, so it can't be resumed.")?;
@@ -1093,16 +1162,17 @@ impl PactlockeApp {
                     act = Some(Menu::OpenRom);
                 }
                 ui.menu_button("Recent ROMs", |ui| {
-                    if self.settings.recent_roms.is_empty() {
+                    let roms = self.roms.borrow();
+                    if roms.roms().is_empty() {
                         ui.weak("None yet");
                     }
-                    for path in &self.settings.recent_roms {
+                    for rom in roms.roms().iter().take(RECENT_SHOWN) {
                         if ui
-                            .button(file_stem(path))
-                            .on_hover_text(path.display().to_string())
+                            .button(file_stem(&rom.path))
+                            .on_hover_text(format!("{}\n{}", rom.game, rom.path.display()))
                             .clicked()
                         {
-                            act = Some(Menu::OpenRecent(path.clone()));
+                            act = Some(Menu::OpenRecent(rom.path.clone()));
                             ui.close();
                         }
                     }
@@ -1436,10 +1506,93 @@ impl PactlockeApp {
                             ui.end_row();
                         }
                     });
+                ui.add_space(16.0);
+                self.known_games(ui);
             });
         });
         if let Some(summary) = resume {
             self.resume_run(&summary);
+        }
+    }
+
+    /// The home screen's lists of the Player's games (from the ROM library)
+    /// and of the Romhacks Pactlocke is tested on.
+    fn known_games(&mut self, ui: &mut egui::Ui) {
+        let mut open = None;
+        egui::CollapsingHeader::new("Your games")
+            .default_open(true)
+            .show(ui, |ui| {
+                let roms = self.roms.borrow();
+                if roms.roms().is_empty() {
+                    ui.weak("None yet: every ROM you open is remembered here (where it is, never a copy).");
+                }
+                for rom in roms.roms() {
+                    ui.horizontal(|ui| {
+                        if ui.button("Play").on_hover_text("Just play, no Run").clicked() {
+                            open = Some(rom.path.clone());
+                        }
+                        ui.label(&rom.game);
+                        ui.weak(rom.path.display().to_string());
+                    });
+                }
+            });
+        if let Some(path) = open {
+            self.open_rom(&path);
+        }
+        if let Ok(store) = &self.profiles {
+            egui::CollapsingHeader::new("Tested Romhacks").show(ui, |ui| {
+                ui.weak(
+                    "Bring the patched ROM of one of these: Pactlocke hosts and links to nothing, and \
+                     checks the ROM by SHA-1.",
+                );
+                for hack in store.tested_romhacks() {
+                    let base = store.by_id(&hack.base).map_or(hack.base.as_str(), |p| p.name.as_str());
+                    let playable = store.find(&hack.sha1).is_some();
+                    ui.horizontal(|ui| {
+                        ui.strong(format!("{} {}", hack.name, hack.version));
+                        ui.label(format!("by {}, on {base}", hack.author));
+                        if !playable {
+                            ui.weak("(Game Profile coming)");
+                        }
+                    });
+                }
+            });
+        }
+    }
+
+    /// New Run's game chooser: the Player's games, newest first, or another ROM.
+    fn game_chooser(&mut self, ctx: &egui::Context) {
+        if !self.choosing_game {
+            return;
+        }
+        let mut open = self.choosing_game;
+        let mut chosen = None;
+        let mut browse = false;
+        egui::Window::new("New Run: choose the game")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    for rom in self.roms.borrow().roms().iter().filter(|rom| rom.runs) {
+                        if ui
+                            .button(&rom.game)
+                            .on_hover_text(rom.path.display().to_string())
+                            .clicked()
+                        {
+                            chosen = Some(rom.path.clone());
+                        }
+                    }
+                });
+                ui.separator();
+                browse = ui.button("Another ROM…").clicked();
+            });
+        self.choosing_game = open;
+        if let Some(path) = chosen {
+            self.new_run_on(&path);
+        } else if browse {
+            self.choosing_game = false;
+            self.browse_for_new_run();
         }
     }
 
@@ -2140,6 +2293,7 @@ impl eframe::App for PactlockeApp {
         self.new_run_prompt(&ctx);
         self.delete_prompt(&ctx);
         self.lost_summary(&ctx);
+        self.game_chooser(&ctx);
         self.solo_copy_prompt(&ctx);
         self.settings_window(&ctx);
         self.about(&ctx);
