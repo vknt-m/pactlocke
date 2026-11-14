@@ -178,6 +178,14 @@ impl HostCoop {
         }
     }
 
+    /// The Host's own entries that were waiting when they left the Run,
+    /// as their Run file kept them: ordered now, unless the log has them.
+    pub fn order_waiting(&mut self, waiting: Vec<Submission>) {
+        for submission in waiting {
+            self.order(None, submission);
+        }
+    }
+
     /// The Host hands over to a Player who took over hosting: the Run log
     /// as it is here, and where the Host's ROM is.
     pub fn into_log(self) -> (RunLog, PathBuf) {
@@ -621,6 +629,29 @@ impl JoinCoop {
         coop.ready_to = locked.map(|l| l.ruleset);
         coop.started = true;
         coop
+    }
+
+    /// This Player's entries the Host hasn't put in the log yet, oldest first.
+    pub fn waiting(&self) -> Vec<Submission> {
+        self.unordered
+            .iter()
+            .filter_map(|entry| Submission::from_bytes(&entry.bytes))
+            .collect()
+    }
+
+    /// This Player's entries that were waiting for a Host when they left
+    /// the Run, as their Run file kept them: sent again as they were signed,
+    /// once connected, so one the Host already has is refused as a repeat.
+    pub fn queue_again(&mut self, waiting: Vec<Submission>) {
+        let me = self.me();
+        for submission in waiting.into_iter().filter(|s| s.author == me) {
+            self.next_counter = self.next_counter.max(submission.counter + 1);
+            self.unordered.push(Unordered {
+                counter: submission.counter,
+                sent_ms: 0,
+                bytes: submission.to_bytes(),
+            });
+        }
     }
 
     /// The Host this joiner's network goes through, which streams come from.

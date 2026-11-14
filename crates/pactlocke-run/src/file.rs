@@ -14,7 +14,7 @@ use pactlocke_game::Change;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::storage::{InputBatch, RunInfo, RunStorage, Stamped, StorageError, StoredCheckpoint, StoredRun};
-use crate::{CheckpointReason, LogEntry, Recorded, Ruleset};
+use crate::{CheckpointReason, LogEntry, Recorded, Ruleset, Submission};
 
 /// Run files end in this.
 const EXTENSION: &str = "pactrun";
@@ -74,6 +74,10 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 CREATE TABLE IF NOT EXISTS run_log (
     seq INTEGER PRIMARY KEY,
     entry BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS waiting (
+    id INTEGER PRIMARY KEY,
+    submission BLOB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS suspend (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -250,6 +254,7 @@ enum Message {
     ClearSuspend,
     KeepSuspend(StoredCheckpoint),
     KeepLog(u64, Vec<LogEntry>),
+    KeepWaiting(Vec<Submission>),
     Load(Sender<Result<StoredRun, StorageError>>),
     ReadCheckpoint(u64, Sender<Result<Option<StoredCheckpoint>, StorageError>>),
 }
@@ -357,6 +362,10 @@ impl RunStorage for RunFile {
         self.send(Message::KeepLog(from, entries.to_vec()));
     }
 
+    fn keep_waiting(&mut self, waiting: &[Submission]) {
+        self.send(Message::KeepWaiting(waiting.to_vec()));
+    }
+
     fn load(&mut self) -> Result<StoredRun, StorageError> {
         self.ask(Message::Load)
     }
@@ -403,6 +412,7 @@ fn serve(db: &Connection, messages: &Receiver<Message>, failure: &Mutex<Option<S
             Message::KeepSuspend(checkpoint) => store_checkpoint(db, None, &checkpoint, Slot::Suspend),
             Message::ClearSuspend => db.execute("DELETE FROM suspend", []).map(drop),
             Message::KeepLog(from, entries) => keep_log(db, from, &entries),
+            Message::KeepWaiting(waiting) => keep_waiting(db, &waiting),
             Message::Load(reply) => {
                 let _ = reply.send(load(db));
                 Ok(())
@@ -633,6 +643,16 @@ fn keep_log(db: &Connection, from: u64, entries: &[LogEntry]) -> rusqlite::Resul
     tx.commit()
 }
 
+/// The entries waiting for a Host replace those kept before, in one transaction.
+fn keep_waiting(db: &Connection, waiting: &[Submission]) -> rusqlite::Result<()> {
+    let tx = db.unchecked_transaction()?;
+    tx.execute("DELETE FROM waiting", [])?;
+    for submission in waiting {
+        tx.execute("INSERT INTO waiting (submission) VALUES (?1)", [submission.to_bytes()])?;
+    }
+    tx.commit()
+}
+
 fn record_inputs(db: &Connection, batch: &InputBatch) -> rusqlite::Result<()> {
     let keys: Vec<u8> = batch.keys.iter().flat_map(|k| k.0.to_le_bytes()).collect();
     let tx = db.unchecked_transaction()?;
@@ -740,6 +760,20 @@ fn load(db: &Connection) -> Result<StoredRun, StorageError> {
             LogEntry::from_bytes(bytes).ok_or_else(|| StorageError::File("a Run log entry can't be read".into()))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let waiting = db
+        .prepare("SELECT submission FROM waiting ORDER BY id")
+        .and_then(|mut query| {
+            query
+                .query_map([], |row| row.get::<_, Vec<u8>>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .map_err(file_error)?
+        .iter()
+        .map(|bytes| {
+            Submission::from_bytes(bytes)
+                .ok_or_else(|| StorageError::File("a waiting Run log entry can't be read".into()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let save_memory = db
         .query_row("SELECT bytes FROM save_memory WHERE id = 1", [], |row| row.get(0))
         .optional()
@@ -752,5 +786,6 @@ fn load(db: &Connection) -> Result<StoredRun, StorageError> {
         latest_checkpoint: read_checkpoint(db, Slot::Checkpoints)?,
         suspended: read_checkpoint(db, Slot::Suspend)?,
         log,
+        waiting,
     })
 }

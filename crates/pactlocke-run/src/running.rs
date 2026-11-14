@@ -46,6 +46,9 @@ pub enum RunCommand {
     /// In a Run with friends: keep this Player's copy of the Run log in the
     /// Run file, these entries replacing any from the one numbered `from` on.
     KeepLog { from: u64, entries: Vec<crate::LogEntry> },
+    /// In a Run with friends: keep this Player's entries waiting for a Host
+    /// in the Run file, in place of those kept before.
+    KeepWaiting(Vec<crate::Submission>),
     /// A cheat flag in the Run log, for the feed.
     Flagged {
         player: String,
@@ -209,6 +212,7 @@ impl<G: PlayedGame> RunningGame<G> {
                 RunCommand::OthersSpeed { player, speed } => self.engine.others_speed(player, speed),
                 RunCommand::DroppedOut => self.engine.dropped_out(),
                 RunCommand::KeepLog { from, entries } => self.engine.keep_log(from, &entries),
+                RunCommand::KeepWaiting(waiting) => self.engine.keep_waiting(&waiting),
                 RunCommand::Flagged {
                     player,
                     cheat,

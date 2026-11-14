@@ -340,6 +340,8 @@ struct PactlockeApp {
     devices: Vec<String>,
     /// This app was in a Lobby last frame.
     was_in_lobby: bool,
+    /// This Player's entries waiting for a Host, as last kept in the Run file.
+    waiting_kept: Vec<pactlocke_run::Submission>,
     /// A Run with friends being resumed, waiting to boot until its Host has
     /// given back the presses a crash lost.
     resuming: Option<Resuming>,
@@ -380,6 +382,7 @@ impl PactlockeApp {
             devices: audio::output_devices(),
             was_in_lobby: false,
             resuming: None,
+            waiting_kept: Vec::new(),
             shot: None,
             shot_saved: Arc::default(),
             settings,
@@ -672,7 +675,7 @@ impl PactlockeApp {
             let locked = log
                 .locked()
                 .ok_or("This Run's log has no lock, so it can't be resumed.")?;
-            self.lobbies.resume(log.clone(), path)?;
+            self.lobbies.resume(log.clone(), engine.kept_waiting().to_vec(), path)?;
             self.panel_shown = true;
             self.panel_tab = side_panel::Tab::Lobby;
             Ok(Resuming {
@@ -864,6 +867,25 @@ impl PactlockeApp {
             emulator.stop().suspend();
         }
         self.refresh_runs();
+    }
+
+    /// In a Run with friends, keeps this Player's entries waiting for a Host
+    /// in the Run file whenever they change, so leaving loses none of them.
+    fn keep_waiting(&mut self) {
+        let Some(Playing {
+            play: Play::Run { commands, .. },
+            spectate: Some(_),
+            ..
+        }) = &self.playing
+        else {
+            return;
+        };
+        let waiting = self.lobbies.waiting();
+        if waiting != self.waiting_kept {
+            // The emulator thread only stops when the Run is closed.
+            let _ = commands.send(RunCommand::KeepWaiting(waiting.clone()));
+            self.waiting_kept = waiting;
+        }
     }
 
     /// Close Run: the game stops, and a Run with friends is left as a lost
@@ -2038,6 +2060,7 @@ impl eframe::App for PactlockeApp {
                 self.lobbies.share(events);
             }
         }
+        self.keep_waiting();
         let joined = self.lobbies.in_lobby();
         if let Some(start) = self.lobbies.show(&ctx) {
             self.start_coop_run(start);

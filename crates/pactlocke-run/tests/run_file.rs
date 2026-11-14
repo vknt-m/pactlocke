@@ -293,6 +293,13 @@ fn a_run_with_friends_keeps_its_run_log_in_the_run_file_and_is_listed_so() {
     // Another copy of the log, alike for three entries, wins from there on.
     host_logs_speed(&mut other, &host, 1);
     player.engine.keep_log(3, &other.entries()[3..]);
+    // An entry of this Player's waiting for a Host, signed but not in the log.
+    let waiting = other.sign(
+        &host,
+        other.next_counter(&host.public()),
+        &LogBody::Event(pactlocke_run::RunEvent::SpeedChanged { speed: 2 }),
+    );
+    player.engine.keep_waiting(std::slice::from_ref(&waiting));
     drop(player);
 
     let runs = library.list();
@@ -302,5 +309,6 @@ fn a_run_with_friends_keeps_its_run_log_in_the_run_file_and_is_listed_so() {
     assert!(!alone.with_friends);
     let stored = library.open_run(&together.id).unwrap().load().unwrap();
     assert_eq!(stored.log, other.entries());
+    assert_eq!(stored.waiting, [waiting]);
     assert!(library.open_run(&alone.id).unwrap().load().unwrap().log.is_empty());
 }

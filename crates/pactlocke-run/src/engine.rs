@@ -128,6 +128,8 @@ pub struct RunEngine {
     /// In a Run with friends, this Player's copy of the Run log as the Run
     /// file kept it when the Run was opened again.
     kept_log: Vec<crate::LogEntry>,
+    /// And this Player's entries that were waiting for a Host then.
+    kept_waiting: Vec<crate::Submission>,
     /// This boot's input stream from before this session: a Run with friends
     /// resumes by going on with the boot it left, so the others' Shadow
     /// Games carry on.
@@ -179,6 +181,7 @@ impl RunEngine {
         let (plan, from) = crate::boot::plan(&stored);
         engine.with_friends = !stored.log.is_empty();
         engine.kept_log = stored.log.clone();
+        engine.kept_waiting = stored.waiting.clone();
         if engine.with_friends {
             engine.go_on_with_the_boot(&plan, &stored);
         }
@@ -221,6 +224,17 @@ impl RunEngine {
     /// file kept it, to go on with on resume; empty alone.
     pub fn kept_log(&self) -> &[crate::LogEntry] {
         &self.kept_log
+    }
+
+    /// In a Run with friends, this Player's entries that were waiting for a
+    /// Host when the Run was left, as the Run file kept them.
+    pub fn kept_waiting(&self) -> &[crate::Submission] {
+        &self.kept_waiting
+    }
+
+    /// Keeps this Player's entries waiting for a Host in the Run file.
+    pub fn keep_waiting(&mut self, waiting: &[crate::Submission]) {
+        self.storage.keep_waiting(waiting);
     }
 
     /// This boot's input stream from before this session, as the Run file
@@ -572,6 +586,7 @@ impl RunEngine {
             recorded_since: VecDeque::new(),
             with_friends: false,
             kept_log: Vec::new(),
+            kept_waiting: Vec::new(),
             suspend_slot_due: false,
             suspend_slot_kept_ms: now,
             earlier: Vec::new(),
@@ -1295,6 +1310,7 @@ impl RunStorage for Retired {
     fn clear_suspend(&mut self) {}
     fn keep_suspend(&mut self, _checkpoint: &StoredCheckpoint) {}
     fn keep_log(&mut self, _from: u64, _entries: &[crate::LogEntry]) {}
+    fn keep_waiting(&mut self, _waiting: &[crate::Submission]) {}
     fn load(&mut self) -> Result<crate::storage::StoredRun, StorageError> {
         Err(StorageError::NoRun)
     }

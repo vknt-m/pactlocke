@@ -177,10 +177,16 @@ impl Lobbies {
     }
 
     /// Opens a Run with friends again with Resume, from this Player's copy
-    /// of its Run log (`log`) and their ROM: with no invite, by the key of
-    /// the Player the log names as Host. If that is this Player, the Run's
-    /// Lobby opens here and the others come to it.
-    pub fn resume(&mut self, log: pactlocke_run::RunLog, rom: PathBuf) -> Result<(), String> {
+    /// of its Run log (`log`), their entries that were waiting for a Host,
+    /// and their ROM: with no invite, by the key of the Player the log names
+    /// as Host. If that is this Player, the Run's Lobby opens here and the
+    /// others come to it.
+    pub fn resume(
+        &mut self,
+        log: pactlocke_run::RunLog,
+        waiting: Vec<pactlocke_run::Submission>,
+        rom: PathBuf,
+    ) -> Result<(), String> {
         let key = self.key.clone()?;
         let me = self.public_key().ok_or("This install has no network key.")?;
         let locked = log
@@ -213,11 +219,13 @@ impl Lobbies {
                 game_sha1: locked.game_sha1.clone(),
             };
             let lobby = HostLobby::taken_over(run, &self.name, APP_VERSION, roster);
-            let coop = HostCoop::back(key, log, rom);
+            let mut coop = HostCoop::back(key, log, rom);
+            coop.order_waiting(waiting);
             self.host = Some((HostNode::start(key, lobby, self.relay_choice()), coop));
             log::info!("Resuming the Run as its Host");
         } else {
-            let coop = JoinCoop::stepped_down(key, log, host, rom, now);
+            let mut coop = JoinCoop::stepped_down(key, log, host, rom, now);
+            coop.queue_again(waiting);
             self.join = Some((self.dial(key, host), coop));
             self.dialled_at = now;
             log::info!("Resuming the Run: connecting to its Host");
@@ -494,6 +502,12 @@ impl Lobbies {
         {
             self.addresses_written = true;
         }
+    }
+
+    /// This Player's entries waiting for a Host to put them in the Run log,
+    /// oldest first: none while hosting.
+    pub fn waiting(&self) -> Vec<pactlocke_run::Submission> {
+        self.join.as_ref().map(|(_, coop)| coop.waiting()).unwrap_or_default()
     }
 
     /// The shared Run log, in a Run with other Players.
@@ -1075,32 +1089,51 @@ mod tests {
         // Blue closes the app, and opens the Run again: no invite, the Host by key.
         let kept = apps[1].log().unwrap().clone();
         apps[1] = app(&dir, "Blue");
-        apps[1].resume(kept, rom_file.clone()).unwrap();
+        apps[1].resume(kept, Vec::new(), rom_file.clone()).unwrap();
         apps[1].share(vec![died(0xB2)]);
         until(&mut apps, &[], 30, "Blue back with Red", |apps| {
             apps[1].online() && same_log(apps) && deaths(apps[0].log().unwrap()) == [0xB1, 0xB2]
         });
         assert_eq!(apps[1].host_key(), Some(red));
 
-        // Red, the Host, closes the app. Blue, back first, keeps the Run going.
+        // Red, the Host, closes the app; Blue dies meanwhile, and closes the
+        // app too before any Host has the death. Red is back first, then
+        // Blue, whose death waited in their Run file.
+        let red_kept = apps[0].log().unwrap().clone();
+        apps[0] = app(&dir, "Red");
+        apps[1].share(vec![died(0xB3)]);
+        until(&mut apps, &[0], 30, "Blue's death waits", |apps| {
+            apps[1].waiting().len() == 1
+        });
+        let (blue_kept, blue_waiting) = (apps[1].log().unwrap().clone(), apps[1].waiting());
+        apps[1] = app(&dir, "Blue");
+        apps[0].resume(red_kept, Vec::new(), rom_file.clone()).unwrap();
+        until(&mut apps, &[1], 30, "Red hosts again", |apps| apps[0].addresses_written);
+        apps[1].resume(blue_kept, blue_waiting, rom_file.clone()).unwrap();
+        until(&mut apps, &[], 30, "both back, Blue's death in", |apps| {
+            same_log(apps) && deaths(apps[0].log().unwrap()) == [0xB1, 0xB2, 0xB3] && apps[1].waiting().is_empty()
+        });
+        assert_eq!(apps[1].host_key(), Some(red));
+
+        // Red closes the app again. Blue, back first, keeps the Run going.
         let red_kept = apps[0].log().unwrap().clone();
         let blue_kept = apps[1].log().unwrap().clone();
         apps[0] = app(&dir, "Red");
         apps[1] = app(&dir, "Blue");
-        apps[1].resume(blue_kept, rom_file.clone()).unwrap();
-        apps[1].share(vec![died(0xB3)]);
+        apps[1].resume(blue_kept, Vec::new(), rom_file.clone()).unwrap();
+        apps[1].share(vec![died(0xB4)]);
         until(&mut apps, &[0], 60, "Blue takes over", |apps| {
-            apps[1].host.is_some() && deaths(apps[1].log().unwrap()) == [0xB1, 0xB2, 0xB3]
+            apps[1].host.is_some() && deaths(apps[1].log().unwrap()) == [0xB1, 0xB2, 0xB3, 0xB4]
         });
 
         // Red comes back, and joins Blue as a Player; Red's death is in.
-        apps[0].resume(red_kept, rom_file.clone()).unwrap();
+        apps[0].resume(red_kept, Vec::new(), rom_file.clone()).unwrap();
         apps[0].share(vec![died(0xA1)]);
         until(&mut apps, &[], 90, "Red joins Blue as a Player", |apps| {
             apps[0].join.is_some() && same_log(apps) && deaths(apps[1].log().unwrap()).contains(&0xA1)
         });
         assert_eq!(apps[0].host_key(), Some(blue));
-        assert_eq!(deaths(apps[0].log().unwrap()), [0xB1, 0xB2, 0xB3, 0xA1]);
+        assert_eq!(deaths(apps[0].log().unwrap()), [0xB1, 0xB2, 0xB3, 0xB4, 0xA1]);
         for (i, app) in apps.iter().enumerate() {
             assert_eq!(app.error(), None, "{i}");
         }
