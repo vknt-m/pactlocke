@@ -103,6 +103,11 @@ fn apply<C: CoreAdapter>(core: &mut C, change: &Change, patches: &mut BTreeMap<u
 /// that ended suspended resumes from the suspend slot; one that ended in a
 /// crash is rebuilt from its last checkpoint; otherwise the game boots from
 /// its last in-game save.
+///
+/// A Run with friends never boots from an in-game save while it has a
+/// checkpoint of its last boot: the others' Shadow Games would see a
+/// savestate load. It goes on from the newest of the suspend slot and its
+/// last checkpoint, rebuilt through the presses recorded after it.
 pub(crate) fn plan(stored: &StoredRun) -> (BootPlan, ResumedFrom) {
     let from_save = || match &stored.save_memory {
         Some(save) => (BootPlan::FromSave(save.clone()), ResumedFrom::Save),
@@ -121,6 +126,17 @@ pub(crate) fn plan(stored: &StoredRun) -> (BootPlan, ResumedFrom) {
         .rev()
         .find(|e| e.boot == last_boot)
         .map(|e| &e.event);
+    let with_friends = !stored.log.is_empty();
+    if with_friends && !matches!(ended, Some(RunEvent::Suspended)) {
+        let newest = [&stored.suspended, &stored.latest_checkpoint]
+            .into_iter()
+            .flatten()
+            .filter(|from| from.boot == last_boot)
+            .max_by_key(|from| from.frame);
+        if let Some(plan) = newest.and_then(|from| rebuild(from, stored, last_boot)) {
+            return plan;
+        }
+    }
     match ended {
         Some(RunEvent::Suspended) => match &stored.suspended {
             Some(from) => (BootPlan::Suspended(from.clone()), ResumedFrom::Suspend),

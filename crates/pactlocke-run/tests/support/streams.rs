@@ -125,6 +125,15 @@ pub struct Table {
     pub host_records_retries: bool,
 }
 
+/// How a Player leaves a Run with friends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Leaving {
+    /// Close Run, the window's close button or Exit: the game is suspended.
+    Suspends,
+    /// A crash or a power cut: nothing more is written.
+    Crashes,
+}
+
 /// From, to, the message: whether it is lost.
 pub type Lose = Box<dyn FnMut(PlayerKey, PlayerKey, &StreamMessage) -> bool>;
 /// From, to, the message to change.
@@ -275,6 +284,75 @@ impl Table {
                 self.apps[i].refused.push(e.to_string());
             }
         }
+    }
+
+    /// Player `i` closes their app (`how`), and later opens the Run again
+    /// with Resume: a new app, from their Run file alone, in a newly booted
+    /// game standing where theirs stood. It keeps its Shadow Games.
+    pub fn leaves_and_resumes(&mut self, i: usize, how: Leaving) {
+        self.goes_offline(i);
+        let placeholder = {
+            let engine = RunEngine::start(
+                new_solo_run(Ruleset::default()),
+                Box::new(MemoryStorage::default()),
+                Box::new(self.clock.clone()),
+            )
+            .unwrap();
+            RunningGame::new(FakeGame::default(), engine)
+        };
+        let old = std::mem::replace(&mut self.apps[i].running, placeholder);
+        let (area, party) = (old.game_ref().area.clone(), old.game_ref().party.clone());
+        let storage = match how {
+            Leaving::Suspends => {
+                old.suspend();
+                self.apps[i].storage.clone()
+            }
+            Leaving::Crashes => {
+                // The Run file as found after the power went out: nothing written after this.
+                let found = self.apps[i].storage.snapshot();
+                drop(old);
+                found
+            }
+        };
+        let mut engine = RunEngine::resume(Box::new(storage.clone()), Box::new(self.clock.clone())).unwrap();
+        // Rebuilt after a crash: the presses the Run file lost, from the Host, before the game boots.
+        if let pactlocke_run::BootPlan::Rebuild { from, keys, .. } = engine.boot_plan().clone()
+            && i != self.host
+        {
+            let want = pactlocke_run::StreamWant {
+                player: key(i),
+                boot: from.boot,
+                from_frame: from.frame + keys.len() as u64,
+            };
+            let out = self.apps[self.host].hub.receive(key(i), StreamMessage::Want(want)).send;
+            let chunks: Vec<InputChunk> = out
+                .into_iter()
+                .filter_map(|o| match o {
+                    Outgoing::To(_, StreamMessage::Chunk(chunk)) => Some(chunk),
+                    _ => None,
+                })
+                .collect();
+            engine.take_back_presses(&chunks);
+        }
+        let mut game = FakeGame {
+            area,
+            party,
+            sync_gates: gate_names(),
+            ..FakeGame::default()
+        };
+        for (species, name) in [(PIDGEY, "PIDGEY"), (RATTATA, "RATTATA"), (CHARMANDER, "CHARMANDER")] {
+            game.species_names.insert(species, name.into());
+        }
+        let mut running = RunningGame::boot(game, engine, self.now()).unwrap();
+        let app = &mut self.apps[i];
+        app.outbox = running.stream_as(app.key);
+        app.shared = running.share();
+        app.hub = StreamHub::new(app.key, key(self.host));
+        app.hub.already_sent(running.streamed_before());
+        app.follower = LogFollower::resuming(app.key, &app.log);
+        app.running = running;
+        app.storage = storage;
+        self.comes_back(i);
     }
 
     /// The Host's app vanishes for good.

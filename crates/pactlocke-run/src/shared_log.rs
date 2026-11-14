@@ -955,6 +955,18 @@ impl LogFollower {
         }
     }
 
+    /// For the Player with this key, resuming a Run with friends whose log,
+    /// as its Run file keeps it, is `log`: what is in it was followed and
+    /// kept before.
+    pub fn resuming(me: PlayerKey, log: &RunLog) -> Self {
+        Self {
+            me,
+            seen: log.entries().len(),
+            kept: log.entries().iter().map(LogEntry::hash).collect(),
+            flagged: Vec::new(),
+        }
+    }
+
     /// The command that keeps the log in the Run file, if it has changed
     /// since: grown, or replaced from some entry on by another copy.
     fn keep(&mut self, log: &RunLog) -> Option<crate::RunCommand> {

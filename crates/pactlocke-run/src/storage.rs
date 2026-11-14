@@ -108,6 +108,9 @@ pub trait RunStorage: Send {
     fn store_suspend(&mut self, event: &Recorded, checkpoint: &StoredCheckpoint);
     /// Empties the suspend slot: it is used up on resume.
     fn clear_suspend(&mut self);
+    /// Fills the suspend slot with no event: a Run with friends keeps it up
+    /// to date as it goes, so leaving in any way resumes where the Player stopped.
+    fn keep_suspend(&mut self, checkpoint: &StoredCheckpoint);
     /// Keeps this Player's copy of the Run log: these entries replace any
     /// kept from the one numbered `from` on.
     fn keep_log(&mut self, from: u64, entries: &[LogEntry]);
@@ -232,6 +235,10 @@ impl RunStorage for MemoryStorage {
 
     fn clear_suspend(&mut self) {
         self.with(|run| run.suspended = None);
+    }
+
+    fn keep_suspend(&mut self, checkpoint: &StoredCheckpoint) {
+        self.with(|run| run.suspended = Some(checkpoint.clone()));
     }
 
     fn keep_log(&mut self, from: u64, entries: &[LogEntry]) {

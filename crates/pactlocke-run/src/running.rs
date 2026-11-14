@@ -13,7 +13,7 @@ use pactlocke_emu::{Checkpoint, CoreAdapter, CoreError, Frame, Keys};
 use pactlocke_game::Change;
 
 use crate::stream::{FrameHash, HASH_EVERY, InputChunk, PlayerKey, StreamOut};
-use crate::{PlayedGame, RunEngine, RunEvent, RunView, boot_core};
+use crate::{PlayedGame, RunEngine, RunEvent, RunView, Stamped, boot_core};
 
 /// What the side panel asks of the Run, carried out at the next frame boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +123,10 @@ impl<G: PlayedGame> RunningGame<G> {
     }
 
     fn checkpoint_if_wanted(&mut self) {
+        if self.engine.suspend_slot_wanted() {
+            let checkpoint = self.core().checkpoint();
+            self.engine.keep_suspend_slot(checkpoint);
+        }
         if self.engine.checkpoint_wanted() {
             let checkpoint = self.core().checkpoint();
             let run_checkpoint = self.engine.take_checkpoint(checkpoint);
@@ -227,16 +231,40 @@ impl<G: PlayedGame> RunningGame<G> {
     }
 
     /// In a Run with other Players: this Player's input stream, as `player`,
-    /// from this boot's first frame. Its chunks collect here, oldest first,
-    /// for the app to send to every other Player.
+    /// from this boot's first frame, or from where a resumed game went on
+    /// with its boot. Its chunks collect here, oldest first, for the app to
+    /// send to every other Player.
     pub fn stream_as(&mut self, player: PlayerKey) -> Arc<Mutex<Vec<InputChunk>>> {
         let outbox: Arc<Mutex<Vec<InputChunk>>> = Arc::default();
-        let mut out = StreamOut::new(player, self.engine.boot());
-        let closed = out.stamp(self.engine.stamped());
+        let start = self.engine.frames_run();
+        let mut out = StreamOut::from_frame(player, self.engine.boot(), start);
+        let now: Vec<Stamped> = self
+            .engine
+            .stamped()
+            .iter()
+            .filter(|s| s.frame >= start)
+            .cloned()
+            .collect();
+        let closed = out.stamp(&now);
         debug_assert!(closed.is_none(), "nothing to close before the first frame");
         self.streamed = self.engine.stamped().len();
         self.stream = Some((out, outbox.clone()));
         outbox
+    }
+
+    /// In a Run with friends resumed where the Player left it: this boot's
+    /// stream from before, from the Run file, as chunks, so the app can
+    /// answer the others asking for what they missed.
+    pub fn streamed_before(&self) -> Vec<InputChunk> {
+        match &self.stream {
+            Some((out, _)) => StreamOut::chunks_of(out.player(), self.engine.earlier_presses()),
+            None => Vec::new(),
+        }
+    }
+
+    /// The game being played.
+    pub fn game_ref(&self) -> &G {
+        &self.game
     }
 
     /// Draws every other Player's Partner Avatar walking around in this

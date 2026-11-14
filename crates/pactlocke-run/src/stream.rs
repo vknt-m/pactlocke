@@ -354,6 +354,38 @@ impl StreamOut {
         }
     }
 
+    /// `player`'s stream for this boot of their game, going on from frame
+    /// `frame`: a Run with friends resumed where the Player left it.
+    pub fn from_frame(player: PlayerKey, boot: u32, frame: u64) -> Self {
+        let mut out = Self::new(player, boot);
+        out.open.first_frame = frame;
+        out
+    }
+
+    /// The chunks a stretch of a boot's stream, as the Run file keeps it,
+    /// would have been sent in (without the hashes, which it doesn't keep).
+    /// Changes stamped at the boundary after its last frame are left for
+    /// the stream that goes on from there.
+    pub fn chunks_of(player: PlayerKey, batches: &[crate::InputBatch]) -> Vec<InputChunk> {
+        let Some(first) = batches.first() else {
+            return Vec::new();
+        };
+        let mut out = Self::from_frame(player, first.boot, first.first_frame);
+        let mut chunks = Vec::new();
+        for batch in batches {
+            for (n, &keys) in batch.keys.iter().enumerate() {
+                let boundary = batch.first_frame + n as u64;
+                let stamped: Vec<Stamped> = batch.stamped.iter().filter(|s| s.frame == boundary).cloned().collect();
+                chunks.extend(out.stamp(&stamped));
+                chunks.extend(out.frame(keys, &[]));
+            }
+        }
+        if !out.open.keys.is_empty() {
+            chunks.push(out.close());
+        }
+        chunks
+    }
+
     /// A boot after a Retry, from the Player's Run Checkpoint taken at this boot and frame.
     pub fn after_retry(player: PlayerKey, boot: u32, from: (u32, u64)) -> Self {
         let mut out = Self::new(player, boot);
@@ -704,6 +736,14 @@ impl StreamHub {
                 }
             })
             .collect()
+    }
+
+    /// Chunks of this Player's own stream sent before this app started (a
+    /// Run with friends resumed): kept to answer requests, not sent again.
+    pub fn already_sent(&mut self, chunks: Vec<InputChunk>) {
+        for chunk in chunks {
+            let _ = self.store.add(chunk);
+        }
     }
 
     /// A stream message from `from`. The Host takes a Player's stream only

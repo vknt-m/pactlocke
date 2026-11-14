@@ -31,7 +31,7 @@ pub use avatars::{Painter, PartnerAvatar};
 pub use boot::{BootPlan, Booted, boot_core};
 pub use cheats::{Cheat, CheatWatch, FAST_BURST_FRAMES, Flag};
 pub use clock::{RunClock, SystemRunClock};
-pub use engine::RunEngine;
+pub use engine::{RunEngine, SUSPEND_SLOT_EVERY_MS};
 pub use event::{AreaRef, CheckpointReason, DeathCause, Recorded, ResumedFrom, RunEvent, SourceRef};
 pub use file::{RunFile, RunId, RunLibrary, RunSummary};
 pub use links::{Judge, Link, LinkKeeper, Member, links};

@@ -17,6 +17,10 @@ use crate::storage::{InputBatch, RunInfo, RunStorage, Stamped, StorageError, Sto
 use crate::view::{FeedEntry, FeedKind, Grave, LevelCapView, NicknameWanted, RunView};
 use crate::{LiveGame, NewRun, Recorded, RunClock, RunEvent};
 
+/// How often a Run with friends fills its suspend slot as it goes, besides
+/// at every big event, so a crash loses at most about this much.
+pub const SUSPEND_SLOT_EVERY_MS: i64 = 2 * 60 * 1000;
+
 /// How often the input stream is flushed to storage, so a crash loses at most this much.
 const FLUSH_EVERY_MS: i64 = 1000;
 
@@ -115,6 +119,16 @@ pub struct RunEngine {
     speed: u8,
     /// The newest events recorded, for a Retry to hand on without waiting for storage.
     recorded_since: VecDeque<Recorded>,
+    /// Whether this is a Run with friends: its Run log is kept in the Run file.
+    with_friends: bool,
+    /// In a Run with friends: the suspend slot should be filled at this
+    /// frame boundary (a big event happened), and when it last was.
+    suspend_slot_due: bool,
+    suspend_slot_kept_ms: i64,
+    /// This boot's input stream from before this session: a Run with friends
+    /// resumes by going on with the boot it left, so the others' Shadow
+    /// Games carry on.
+    earlier: Vec<InputBatch>,
 }
 
 /// A battle in progress, as the engine saw it begin.
@@ -160,9 +174,49 @@ impl RunEngine {
         let stored = storage.load()?;
         let mut engine = Self::reopened(&stored, storage, clock);
         let (plan, from) = crate::boot::plan(&stored);
+        engine.with_friends = !stored.log.is_empty();
+        if engine.with_friends {
+            engine.go_on_with_the_boot(&plan, &stored);
+        }
         engine.boot_plan = plan;
         engine.record(RunEvent::Resumed { from });
         Ok(engine)
+    }
+
+    /// In a Run with friends, a game back from its suspend slot or rebuilt
+    /// after a crash goes on with the boot it left, from the frame it reached.
+    fn go_on_with_the_boot(&mut self, plan: &BootPlan, stored: &crate::storage::StoredRun) {
+        let (from, rebuilt) = match plan {
+            BootPlan::Suspended(from) => (from, 0),
+            BootPlan::Rebuild { from, keys, .. } => (from, keys.len() as u64),
+            BootPlan::PowerOn | BootPlan::FromSave(_) | BootPlan::Retry(_) => return,
+        };
+        let frame = from.frame + rebuilt;
+        self.earlier = stored
+            .inputs
+            .iter()
+            .filter(|b| b.boot == from.boot && b.first_frame < frame)
+            .cloned()
+            .collect();
+        let mut stamped: Vec<Stamped> = self.earlier.iter().flat_map(|b| b.stamped.iter().cloned()).collect();
+        if rebuilt == 0 {
+            stamped.truncate(from.stamped_before);
+        }
+        self.boot = from.boot;
+        self.frame = frame;
+        self.stamped = stamped;
+        self.pending = InputBatch {
+            boot: from.boot,
+            first_frame: frame,
+            keys: Vec::new(),
+            stamped: Vec::new(),
+        };
+    }
+
+    /// This boot's input stream from before this session, as the Run file
+    /// has it: in a Run with friends, what a resumed game went on from.
+    pub fn earlier_presses(&self) -> &[InputBatch] {
+        &self.earlier
     }
 
     /// The Run as stored, for a new boot: every event that isn't void taken in.
@@ -355,6 +409,12 @@ impl RunEngine {
             keys.extend_from_slice(&batch.keys);
             stamped.extend(batch.stamped.iter().cloned());
             self.storage.record_inputs(&batch);
+            if self.with_friends && self.boot == rebuilt_boot {
+                self.stamped.extend(batch.stamped.iter().cloned());
+                self.earlier.push(batch);
+                self.frame = chunk.end();
+                self.pending.first_frame = self.frame;
+            }
             end = chunk.end();
         }
     }
@@ -393,6 +453,25 @@ impl RunEngine {
     /// The newest Run Checkpoints kept in RAM, newest last (for Retries).
     pub fn recent_checkpoints(&self) -> &VecDeque<StoredCheckpoint> {
         &self.recent_checkpoints
+    }
+
+    /// In a Run with friends: whether the suspend slot should be filled at
+    /// this frame boundary, after a big event (an Encounter's end, a Death,
+    /// a Run Checkpoint) or every [`SUSPEND_SLOT_EVERY_MS`].
+    pub fn suspend_slot_wanted(&self) -> bool {
+        self.with_friends
+            && self.game_running
+            && (self.suspend_slot_due || self.clock.now_ms() - self.suspend_slot_kept_ms >= SUSPEND_SLOT_EVERY_MS)
+    }
+
+    /// Fills the suspend slot with the game as it is at this frame boundary,
+    /// with no event: the game goes on. The input stream up to here is written first.
+    pub fn keep_suspend_slot(&mut self, core: Checkpoint) {
+        let checkpoint = self.run_checkpoint(CheckpointReason::Asked, core);
+        self.flush_inputs();
+        self.storage.keep_suspend(&checkpoint);
+        self.suspend_slot_due = false;
+        self.suspend_slot_kept_ms = self.clock.now_ms();
     }
 
     /// Suspend and quit: the one suspend slot holds exactly where the game is.
@@ -481,6 +560,10 @@ impl RunEngine {
             at_gate: None,
             speed: 1,
             recorded_since: VecDeque::new(),
+            with_friends: false,
+            suspend_slot_due: false,
+            suspend_slot_kept_ms: now,
+            earlier: Vec::new(),
         }
     }
 
@@ -650,6 +733,7 @@ impl RunEngine {
 
     /// Keeps this Player's copy of the Run log in the Run file, from entry `from` on.
     pub fn keep_log(&mut self, from: u64, entries: &[crate::LogEntry]) {
+        self.with_friends = true;
         self.storage.keep_log(from, entries);
     }
 
@@ -1079,6 +1163,11 @@ impl RunEngine {
         if recorded.event.is_run_state() {
             self.shared.push(recorded.event.clone());
         }
+        if matches!(recorded.event, RunEvent::EncounterOver { .. } | RunEvent::Died { .. })
+            || recorded.event.is_run_checkpoint()
+        {
+            self.suspend_slot_due = true;
+        }
         self.recorded_since.push_back(recorded.clone());
         if self.recorded_since.len() > 16 {
             self.recorded_since.pop_front();
@@ -1193,6 +1282,7 @@ impl RunStorage for Retired {
     fn append_with_checkpoint(&mut self, _event: &Recorded, _checkpoint: &StoredCheckpoint) {}
     fn store_suspend(&mut self, _event: &Recorded, _checkpoint: &StoredCheckpoint) {}
     fn clear_suspend(&mut self) {}
+    fn keep_suspend(&mut self, _checkpoint: &StoredCheckpoint) {}
     fn keep_log(&mut self, _from: u64, _entries: &[crate::LogEntry]) {}
     fn load(&mut self) -> Result<crate::storage::StoredRun, StorageError> {
         Err(StorageError::NoRun)

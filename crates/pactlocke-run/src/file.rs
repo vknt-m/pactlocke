@@ -248,6 +248,7 @@ enum Message {
     Checkpoint(Recorded, StoredCheckpoint),
     Suspend(Recorded, StoredCheckpoint),
     ClearSuspend,
+    KeepSuspend(StoredCheckpoint),
     KeepLog(u64, Vec<LogEntry>),
     Load(Sender<Result<StoredRun, StorageError>>),
     ReadCheckpoint(u64, Sender<Result<Option<StoredCheckpoint>, StorageError>>),
@@ -348,6 +349,10 @@ impl RunStorage for RunFile {
         self.send(Message::ClearSuspend);
     }
 
+    fn keep_suspend(&mut self, checkpoint: &StoredCheckpoint) {
+        self.send(Message::KeepSuspend(checkpoint.clone()));
+    }
+
     fn keep_log(&mut self, from: u64, entries: &[LogEntry]) {
         self.send(Message::KeepLog(from, entries.to_vec()));
     }
@@ -391,8 +396,11 @@ fn serve(db: &Connection, messages: &Receiver<Message>, failure: &Mutex<Option<S
                     params![save],
                 )
                 .map(drop),
-            Message::Checkpoint(event, checkpoint) => store_checkpoint(db, &event, &checkpoint, Slot::Checkpoints),
-            Message::Suspend(event, checkpoint) => store_checkpoint(db, &event, &checkpoint, Slot::Suspend),
+            Message::Checkpoint(event, checkpoint) => {
+                store_checkpoint(db, Some(&event), &checkpoint, Slot::Checkpoints)
+            }
+            Message::Suspend(event, checkpoint) => store_checkpoint(db, Some(&event), &checkpoint, Slot::Suspend),
+            Message::KeepSuspend(checkpoint) => store_checkpoint(db, None, &checkpoint, Slot::Suspend),
             Message::ClearSuspend => db.execute("DELETE FROM suspend", []).map(drop),
             Message::KeepLog(from, entries) => keep_log(db, from, &entries),
             Message::Load(reply) => {
@@ -471,17 +479,19 @@ impl Slot {
     }
 }
 
-/// The event and its checkpoint, in one transaction. The suspend slot has one
-/// row; the checkpoints table keeps the newest boot checkpoint and the newest
-/// few Run Checkpoints.
+/// The event, if there is one, and its checkpoint, in one transaction. The
+/// suspend slot has one row; the checkpoints table keeps the newest boot
+/// checkpoint and the newest few Run Checkpoints.
 fn store_checkpoint(
     db: &Connection,
-    event: &Recorded,
+    event: Option<&Recorded>,
     checkpoint: &StoredCheckpoint,
     slot: Slot,
 ) -> rusqlite::Result<()> {
     let tx = db.unchecked_transaction()?;
-    insert_event(&tx, event)?;
+    if let Some(event) = event {
+        insert_event(&tx, event)?;
+    }
     let core = zstd::encode_all(&encode_core(&checkpoint.core)[..], ZSTD_LEVEL)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     let reason = serde_json::to_string(&checkpoint.reason).expect("a reason serialises");
@@ -498,7 +508,7 @@ fn store_checkpoint(
         params![
             id,
             reason,
-            event.seq as i64,
+            event.map_or(0, |e| e.seq as i64),
             checkpoint.boot,
             checkpoint.frame as i64,
             checkpoint.stamped_before as i64,
