@@ -3,7 +3,7 @@
 //! it writes loads as a local profile extending FireRed's, never as trusted.
 
 use pactlocke_dev::scan;
-use pactlocke_game::{ProfileStore, SupportStatus, encode_text};
+use pactlocke_game::{ProfileStore, SourceKind, SupportStatus, encode_text};
 
 const ROM_BASE: u32 = 0x0800_0000;
 const MOVED_SPECIES_NAMES: u32 = 0x0830_0000;
@@ -12,6 +12,13 @@ const PARTIES: u32 = 0x0850_0000;
 const BROCK: u16 = 414;
 const BROCKS_BATTLE: u32 = 0x0817_0000;
 const NEW_GIFT: u32 = 0x0816_5000;
+/// Far from FireRed's catalogue, where a Romhack puts its own scripts.
+const FAR_GIFT: u32 = 0x08F8_0000;
+const FAR_STATIC: u32 = 0x08F8_1000;
+/// Bytes that pass a setwildbattle's operand checks but aren't a script.
+const NOT_A_SCRIPT: u32 = 0x08F8_2000;
+/// `compare VAR_RESULT, 0`, as follows a real `givemon`.
+const COMPARE_RESULT: [u8; 5] = [0x21, 0x0D, 0x80, 0x00, 0x00];
 /// The FireRed catalogue's first Celadon Game Corner prize.
 const PRIZE: u32 = 0x0816_CCD4;
 
@@ -63,7 +70,24 @@ fn hack_rom() -> Vec<u8> {
 
     // givemon EEVEE lv 10, no item, at a new place; and the prize where FireRed has it.
     put(&mut rom, NEW_GIFT, &[0x79, 133, 0, 10, 0, 0]);
+    put(&mut rom, NEW_GIFT + 15, &COMPARE_RESULT);
     put(&mut rom, PRIZE, &[0x79, 0x01, 0x40, 9, 0, 0]);
+    // goto, as the prize scripts do.
+    put(&mut rom, PRIZE + 15, &[0x05]);
+    put(&mut rom, PRIZE + 16, &0x0816_CD52u32.to_le_bytes());
+    // A Romhack's own scripts, far from FireRed's: givemon IVYSAUR lv 20, then
+    // setwildbattle BULBASAUR lv 30 and playmoncry BULBASAUR.
+    put(&mut rom, FAR_GIFT, &[0x79, 2, 0, 20, 0, 0]);
+    put(&mut rom, FAR_GIFT + 15, &COMPARE_RESULT);
+    put(&mut rom, FAR_STATIC, &[0xB6, 1, 0, 30, 0, 0, 0xA1, 1, 0, 2, 0]);
+    // The same operands with nothing a script would do next.
+    put(&mut rom, NOT_A_SCRIPT, &[0xB6, 1, 0, 30, 0, 0, 0xEE, 0xEE, 0xEE]);
+    // And one naming a species with no name: data, not a script.
+    put(
+        &mut rom,
+        NOT_A_SCRIPT + 0x100,
+        &[0xB6, 0x20, 0x08, 9, 0, 0, 0xA1, 1, 0, 2, 0],
+    );
 
     // One level-100 check where FireRed has it: movs r1, #0x38; …; cmp r0, #100.
     put(&mut rom, 0x0802_1CF4, &[0x38, 0x21, 0x00, 0xF0, 0x00, 0xF8, 0x64, 0x28]);
@@ -106,6 +130,62 @@ fn gifts_are_listed_new_or_catalogued() {
     assert_eq!(eevee.catalogued, None);
     let prize = at(PRIZE).expect("FireRed's prize");
     assert!(prize.catalogued.is_some(), "{prize:?}");
+}
+
+#[test]
+fn gifts_and_statics_far_from_the_catalogue_are_found_and_data_is_not() {
+    let findings = scan(&hack_rom(), &firered());
+    let at = |addr: u32| findings.sources.iter().find(|s| s.at == addr);
+    let ivysaur = at(FAR_GIFT).expect("a Romhack's givemon, far from FireRed's scripts");
+    assert_eq!(
+        (ivysaur.species.to_string(), ivysaur.level),
+        ("IVYSAUR".to_owned(), Some(20))
+    );
+    let bulbasaur = at(FAR_STATIC).expect("its setwildbattle");
+    assert_eq!(bulbasaur.kind, SourceKind::Static);
+    assert_eq!(bulbasaur.species.to_string(), "BULBASAUR");
+    assert_eq!(at(NOT_A_SCRIPT), None, "no script command follows");
+    assert_eq!(at(NOT_A_SCRIPT + 0x100), None, "species 0x820 has no name");
+}
+
+#[test]
+fn a_starter_given_from_code_after_its_special_is_found() {
+    // An Emerald Romhack: Birch's bag script moved, its special unchanged.
+    let emerald = ProfileStore::bundled()
+        .unwrap()
+        .by_id("emerald-usa-1.0")
+        .unwrap()
+        .clone();
+    let base_starter = emerald.sources.iter().find(|s| s.key == "starter").unwrap().at[0];
+    let mut rom = vec![0u8; 0x100_0000];
+    rom[0xAC..0xB0].copy_from_slice(b"BPEE");
+    // special ChooseStarter, waitstate: where Emerald has it, and moved.
+    put(&mut rom, base_starter, &[0x25, 0x9F, 0x00, 0x27]);
+    put(&mut rom, 0x08F9_0000, &[0x25, 0x9F, 0x00, 0x27]);
+    // Another special, followed by waitstate too, isn't the starter.
+    put(&mut rom, 0x08F9_1000, &[0x25, 0x9E, 0x00, 0x27]);
+    let findings = scan(&rom, &emerald);
+    let starters: Vec<u32> = findings
+        .sources
+        .iter()
+        .filter(|s| s.kind == SourceKind::Starter)
+        .map(|s| s.at)
+        .collect();
+    assert_eq!(starters, [base_starter, 0x08F9_0000]);
+    let catalogued = findings.sources.iter().find(|s| s.at == base_starter).unwrap();
+    assert_eq!(catalogued.catalogued.as_deref(), Some("starter"));
+}
+
+#[test]
+fn patch_sites_are_labelled_by_their_patch() {
+    let draft = scan(&hack_rom(), &firered()).draft();
+    assert!(draft.contains("#   Catch block at 0x08040F6C"), "{draft}");
+    assert!(draft.contains("#   Level caps at 0x08021CFA"), "{draft}");
+    assert!(
+        draft.contains("#   No items in trainer battles at 0x08014414"),
+        "{draft}"
+    );
+    assert!(!draft.contains("First Encounter at"), "{draft}");
 }
 
 #[test]

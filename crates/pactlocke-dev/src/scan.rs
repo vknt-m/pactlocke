@@ -4,14 +4,15 @@
 use std::fmt::Write as _;
 
 use pactlocke_game::{
-    DRAFT_PREFIX, GameProfile, MAX_LEVEL, Method, ROM_BASE, Rule, SourceKind, decode_text, encode_text,
-    level_cap_sites, sha1_hex,
+    DRAFT_PREFIX, GameProfile, MAX_LEVEL, Method, ROM_BASE, SourceKind, decode_text, encode_text, level_cap_sites,
+    sha1_hex,
 };
 
 /// Script variables (`VAR_0x4000` on) can stand for a species in `givemon`.
 const SCRIPT_VARS: std::ops::RangeInclusive<u16> = 0x4000..=0x40FF;
-/// How far from the base profile's catalogue the script candidates are looked for.
-const SCRIPT_MARGIN: u32 = 0x4_0000;
+/// `special` and `waitstate`: a starter given from code follows these.
+const SPECIAL: u8 = 0x25;
+const WAITSTATE: u8 = 0x27;
 /// A Romhack may expand the species list well past the original 412.
 const EXPANDED_SPECIES: u16 = 0x1000;
 /// A trainer table has at least this many plausible entries in a row.
@@ -80,8 +81,8 @@ impl TableFinding {
 /// One of the base profile's patch sites, checked in this ROM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SiteFinding {
-    /// The rule the site enforces.
-    pub rule: Rule,
+    /// The patch it belongs to, as the draft names it: "Catch block".
+    pub patch: &'static str,
     /// Its address in the base profile.
     pub at: u32,
     /// The ROM holds the expected bytes at the same address.
@@ -118,6 +119,8 @@ pub enum ScriptSpecies {
     },
     /// The script variable holding the species.
     Variable(u16),
+    /// The Player's pick, which the game gives from code after a `special`.
+    Chosen,
 }
 
 impl std::fmt::Display for ScriptSpecies {
@@ -126,6 +129,7 @@ impl std::fmt::Display for ScriptSpecies {
             ScriptSpecies::Species { name: Some(name), .. } => f.write_str(name),
             ScriptSpecies::Species { id, name: None } => write!(f, "species {id}"),
             ScriptSpecies::Variable(var) => write!(f, "VAR {var:#06X}"),
+            ScriptSpecies::Chosen => f.write_str("the Player's pick"),
         }
     }
 }
@@ -287,7 +291,7 @@ impl Findings {
             } else {
                 format!("MOVED; its bytes are at {}", addresses(&site.candidates))
             };
-            let _ = writeln!(out, "#   {} at {:#010X}: {state}", site.rule.name(), site.at);
+            let _ = writeln!(out, "#   {} at {:#010X}: {state}", site.patch, site.at);
         }
         let _ = writeln!(
             out,
@@ -304,12 +308,14 @@ impl Findings {
                 Some(key) => format!("catalogued in {} as {key}", self.base_id),
                 None => "new".to_owned(),
             };
+            let instruction = match source.species {
+                ScriptSpecies::Chosen => "special (the starter, given from code)",
+                _ => source.kind.instruction(),
+            };
             let _ = writeln!(
                 out,
-                "#   {:#010X} {} {}{level}: {listed}",
-                source.at,
-                source.kind.instruction(),
-                source.species
+                "#   {:#010X} {instruction} {}{level}: {listed}",
+                source.at, source.species
             );
         }
     }
@@ -379,8 +385,16 @@ fn find_name_table(rom: &[u8], first: &str, second: &str, index: u32, length: u3
         .collect()
 }
 
+/// Species names: BULBASAUR then IVYSAUR, or as some Romhacks write them,
+/// Bulbasaur then Ivysaur.
 fn find_species_names(rom: &[u8], base: &GameProfile) -> Vec<u32> {
-    find_name_table(rom, "BULBASAUR", "IVYSAUR", 1, base.layout.species_name_length)
+    let length = base.layout.species_name_length;
+    let upper = find_name_table(rom, "BULBASAUR", "IVYSAUR", 1, length);
+    if upper.is_empty() {
+        find_name_table(rom, "Bulbasaur", "Ivysaur", 1, length)
+    } else {
+        upper
+    }
 }
 
 /// Type names are padded with spaces, then the terminator: NORMAL, then FIGHT.
@@ -461,12 +475,12 @@ fn find_trainers(rom: &[u8], base: &GameProfile) -> Option<TrainerTable> {
 fn check_patch_sites(rom: &[u8], base: &GameProfile) -> Vec<SiteFinding> {
     let rules = &base.rules;
     let named = [
-        (Rule::FirstEncounter, &rules.catch_block),
-        (Rule::LevelCap, &rules.level_cap),
-        (Rule::NoItems, &rules.no_items_trainer),
+        ("Catch block", &rules.catch_block),
+        ("Level caps", &rules.level_cap),
+        ("No items in trainer battles", &rules.no_items_trainer),
     ];
     let mut found = Vec::new();
-    for (rule, method) in named {
+    for (patch, method) in named {
         let Some(Method::Patch { sites }) = method else {
             continue;
         };
@@ -479,7 +493,7 @@ fn check_patch_sites(rom: &[u8], base: &GameProfile) -> Vec<SiteFinding> {
                 find_all(rom, expect, 2).into_iter().take(CANDIDATES_SHOWN).collect()
             };
             found.push(SiteFinding {
-                rule,
+                patch,
                 at: site.at,
                 unchanged,
                 candidates,
@@ -489,84 +503,214 @@ fn check_patch_sites(rom: &[u8], base: &GameProfile) -> Vec<SiteFinding> {
     found
 }
 
-/// `givemon`, `giveegg` and `setwildbattle` near where the base profile's
-/// catalogue is, with operands a real instruction would have.
+/// `givemon`, `giveegg` and `setwildbattle` anywhere in the ROM, as a
+/// Romhack may have moved or rewritten its scripts: each with operands a real
+/// instruction would have (a species the ROM names), and followed by a script
+/// command a real script does next. And the starter where the base game gives
+/// it from code after a `special`: that special anywhere it is, by its number
+/// in this ROM.
 fn find_sources(rom: &[u8], base: &GameProfile, species_names: Option<u32>) -> Vec<SourceCandidate> {
     let catalogue: Vec<(u32, &str)> = base
         .sources
         .iter()
         .flat_map(|s| s.at.iter().map(move |&at| (at, s.key.as_str())))
         .collect();
-    let (Some(low), Some(high)) = (
-        catalogue.iter().map(|(at, _)| *at).min(),
-        catalogue.iter().map(|(at, _)| *at).max(),
-    ) else {
-        return Vec::new();
+    let catalogued = |addr: u32| {
+        catalogue
+            .iter()
+            .find(|(at, _)| *at == addr)
+            .map(|(_, key)| (*key).to_owned())
     };
-    let species_count = base.layout.species_count;
-    let name_length = base.layout.species_name_length;
-    let species_of = |id: u16| -> ScriptSpecies {
-        if SCRIPT_VARS.contains(&id) {
-            return ScriptSpecies::Variable(id);
-        }
-        let name = species_names
-            .filter(|_| id < species_count)
-            .and_then(|table| rom_at(rom, table + u32::from(id) * name_length, name_length as usize))
-            .map(decode_text);
-        ScriptSpecies::Species { id, name }
-    };
-    let from = low.saturating_sub(SCRIPT_MARGIN).max(ROM_BASE);
-    let to = (high + SCRIPT_MARGIN).min(ROM_BASE + rom.len() as u32);
+    let species = Species::new(rom, base, species_names);
+    let item_count = base.layout.item_count;
     let levels = 1..=MAX_LEVEL;
+    let starter_special = starter_special(rom, base);
     let mut found = Vec::new();
-    for addr in from..to {
-        let Some(op) = rom_at(rom, addr, 1).map(|b| b[0]) else {
+    for at in 0..rom.len() as u32 {
+        let addr = ROM_BASE + at;
+        let op = rom[at as usize];
+        if let Some(special) = starter_special
+            && rom_at(rom, addr, 4) == Some(&special[..])
+        {
+            found.push(SourceCandidate {
+                kind: SourceKind::Starter,
+                at: addr,
+                species: ScriptSpecies::Chosen,
+                level: None,
+                catalogued: catalogued(addr),
+            });
             continue;
-        };
+        }
         let Some(kind) = [SourceKind::Gift, SourceKind::Egg, SourceKind::Static]
             .into_iter()
             .find(|kind| kind.opcode() == op)
         else {
             continue;
         };
-        let Some(species) = u16_at(rom, addr + 1) else {
+        let Some(id) = u16_at(rom, addr + 1) else {
             continue;
         };
-        let a_species = (1..species_count).contains(&species);
         let level = rom_at(rom, addr + 3, 1).map(|b| b[0]);
-        let item = u16_at(rom, addr + 4).unwrap_or(u16::MAX);
-        let an_item = u32::from(item) < base.layout.item_count;
-        let plausible = match kind {
-            // givemon SPECIES LEVEL ITEM, then eight unused zero bytes.
-            SourceKind::Gift => {
-                (a_species || SCRIPT_VARS.contains(&species))
-                    && level.is_some_and(|l| levels.contains(&l))
+        let a_level = level.is_some_and(|l| levels.contains(&l));
+        let an_item = u16_at(rom, addr + 4).is_some_and(|item| u32::from(item) < item_count);
+        // Each instruction's length, and whether its operands could be real.
+        let (length, plausible) = match kind {
+            // givemon SPECIES LEVEL ITEM, then nine unused bytes (eight zero).
+            SourceKind::Gift => (
+                15,
+                (species.named(id) || SCRIPT_VARS.contains(&id))
+                    && a_level
                     && an_item
-                    && rom_at(rom, addr + 6, 8).is_some_and(|b| b.iter().all(|&x| x == 0))
-            }
-            SourceKind::Egg => a_species,
-            _ => a_species && level.is_some_and(|l| levels.contains(&l)) && an_item,
+                    && rom_at(rom, addr + 6, 8).is_some_and(|b| b.iter().all(|&x| x == 0)),
+            ),
+            SourceKind::Egg => (3, species.named(id)),
+            _ => (6, species.named(id) && a_level && an_item),
         };
-        if !plausible {
-            continue;
-        }
-        let catalogued = catalogue
-            .iter()
-            .find(|(at, _)| *at == addr)
-            .map(|(_, key)| (*key).to_owned());
-        // An egg is only worth listing where the catalogue has one; the opcode is common.
-        if kind == SourceKind::Egg && catalogued.is_none() {
+        let next = addr + length;
+        // An egg is common data: only what follows a real giveegg will do.
+        let follows = match kind {
+            SourceKind::Egg => egg_follow_up_at(rom, next, &species),
+            _ => script_command_at(rom, next, &species),
+        };
+        if !plausible || !follows {
             continue;
         }
         found.push(SourceCandidate {
             kind,
             at: addr,
-            species: species_of(species),
+            species: species.of(id),
             level: (kind != SourceKind::Egg).then_some(level).flatten(),
-            catalogued,
+            catalogued: catalogued(addr),
         });
     }
     found
+}
+
+/// The species a ROM names, read from its species names table where the
+/// scanner found it.
+struct Species<'a> {
+    rom: &'a [u8],
+    names: Option<u32>,
+    name_length: u32,
+    /// Without the names table: the base game's count.
+    count: u16,
+}
+
+impl<'a> Species<'a> {
+    fn new(rom: &'a [u8], base: &GameProfile, names: Option<u32>) -> Self {
+        Self {
+            rom,
+            names,
+            name_length: base.layout.species_name_length,
+            count: base.layout.species_count,
+        }
+    }
+
+    /// Its name in the ROM, if that entry reads as a name.
+    fn name(&self, id: u16) -> Option<String> {
+        if id == 0 || id >= EXPANDED_SPECIES {
+            return None;
+        }
+        let table = self.names?;
+        let entry = rom_at(
+            self.rom,
+            table + u32::from(id) * self.name_length,
+            self.name_length as usize,
+        )?;
+        let ends = entry.contains(&pactlocke_game::text::END);
+        let name = decode_text(entry);
+        // FireRed's unused species slots are all named "?", and past the
+        // last species the table runs into move names (" HEAL BELL").
+        let readable = name.starts_with(char::is_alphanumeric) && !name.contains(char::REPLACEMENT_CHARACTER);
+        (ends && readable).then_some(name)
+    }
+
+    /// Whether a script naming it could be real: the ROM names it, or,
+    /// without the names table, it is one of the base game's.
+    fn named(&self, id: u16) -> bool {
+        match self.names {
+            Some(_) => self.name(id).is_some(),
+            None => (1..self.count).contains(&id),
+        }
+    }
+
+    fn of(&self, id: u16) -> ScriptSpecies {
+        if SCRIPT_VARS.contains(&id) {
+            return ScriptSpecies::Variable(id);
+        }
+        ScriptSpecies::Species {
+            id,
+            name: self.name(id),
+        }
+    }
+}
+
+/// Whether a script command a Gift or Static script does next starts at
+/// `addr`, with operands that could be real: a compare, goto or call, a flag
+/// or variable set, a text load, a cry, the wild battle, a species name
+/// buffered, a release, or a text colour.
+fn script_command_at(rom: &[u8], addr: u32, species: &Species) -> bool {
+    let byte = |offset: u32| rom_at(rom, addr + offset, 1).map(|b| b[0]);
+    let pointer = |offset: u32| u32_at(rom, addr + offset).is_some_and(|p| in_rom(rom, p));
+    let variable = |offset: u32| matches!(byte(offset + 1), Some(0x40 | 0x80));
+    let Some(op) = byte(0) else {
+        return false;
+    };
+    match op {
+        // compare VAR, value
+        0x21 => variable(1),
+        // call, goto
+        0x04 | 0x05 => pointer(1),
+        // call_if, goto_if
+        0x06 | 0x07 => byte(1).is_some_and(|c| c <= 5) && pointer(2),
+        // setflag, clearflag
+        0x29 | 0x2A => byte(2).is_some_and(|hi| hi <= 0x09),
+        // setvar
+        0x16 => variable(1),
+        // copyvar
+        0x19 => variable(1) && variable(3),
+        // loadword
+        0x0F => byte(1).is_some_and(|i| i <= 3) && pointer(2),
+        // waitse, then playmoncry
+        0x30 => byte(1) == Some(0xA1),
+        // playmoncry SPECIES
+        0xA1 => u16_at(rom, addr + 1).is_some_and(|id| species.named(id)),
+        // dowildbattle
+        0xB7 => true,
+        // bufferspeciesname
+        0x7D => byte(1).is_some_and(|i| i <= 2),
+        // release, releaseall, then end or return
+        0x6B | 0x6C => matches!(byte(1), Some(0x02 | 0x03)),
+        // textcolor
+        0xC7 => byte(1).is_some_and(|c| c <= 3),
+        _ => false,
+    }
+}
+
+/// Whether what a `giveegg` script does next starts at `addr`: a text
+/// colour (FireRed, LeafGreen), a release then end (Hoenn), a text load, or a
+/// fanfare. Bytes in code that pass for a `giveegg` go on to a goto or a flag.
+fn egg_follow_up_at(rom: &[u8], addr: u32, species: &Species) -> bool {
+    match rom_at(rom, addr, 1).map(|b| b[0]) {
+        // playfanfare SONG: the games' songs are numbered below 0x400
+        Some(0x31) => rom_at(rom, addr + 2, 1).is_some_and(|hi| hi[0] < 0x04),
+        // textcolor, release or releaseall, loadword: as after any script
+        Some(0xC7 | 0x6B | 0x6C | 0x0F) => script_command_at(rom, addr, species),
+        _ => false,
+    }
+}
+
+/// `special N` and `waitstate`, as this ROM has them where the base profile
+/// lists its starter, when the base game gives the starter from code.
+fn starter_special(rom: &[u8], base: &GameProfile) -> Option<[u8; 4]> {
+    let at = *base
+        .sources
+        .iter()
+        .find(|s| s.kind == SourceKind::Starter)?
+        .at
+        .first()?;
+    let bytes: [u8; 4] = rom_at(rom, at, 4)?.try_into().ok()?;
+    (bytes[0] == SPECIAL && bytes[3] == WAITSTATE).then_some(bytes)
 }
 
 /// Trainers of the classes the base profile's cap stages belong to, with the
