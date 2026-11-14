@@ -11,8 +11,8 @@ use pactlocke_run::{Outgoing, PlayerKey, RunClock, RunEvent, SystemRunClock};
 
 use crate::coop::{CoopStart, HostCoop, HostRom, JoinCoop};
 use pactlocke_net::{
-    APP_VERSION, HostLobby, HostNode, Invite, JoinLobby, JoinNode, LobbyView, Message, PeerKey, Relays, RomStatus,
-    RunAdvert, load_or_create_key,
+    APP_VERSION, HostLobby, HostNode, Invite, JoinLobby, JoinNode, LobbyView, Message, PeerKey, Relays, Replaced,
+    RomStatus, RunAdvert, load_or_create_key,
 };
 
 /// A friend's invite, being filled in.
@@ -35,11 +35,13 @@ pub struct Lobbies {
     pub addresses: Option<PathBuf>,
     host: Option<(HostNode, HostCoop)>,
     join: Option<(JoinNode, JoinCoop)>,
+    /// Nodes this app left, still shutting down on their own threads.
+    left: Replaced,
     prompt: Option<JoinPrompt>,
     /// The SHA-1 of this Player's ROM, told to a Host on every reconnect.
     rom_sha1: Option<String>,
-    /// A relay to try a Host on beside finding them by key: the one the
-    /// Run's first Host gave in their invite.
+    /// A relay to try a Host on beside finding them by key: the custom
+    /// relay the Run's first Host gave in their invite, if any.
     relay: Option<String>,
     /// Addresses to try for the Run's first Host beside its relay (the test rig's).
     direct: Vec<std::net::SocketAddr>,
@@ -86,6 +88,7 @@ impl Lobbies {
             addresses: None,
             host: None,
             join: None,
+            left: Replaced::none(),
             prompt: None,
             rom_sha1: None,
             relay: None,
@@ -149,10 +152,16 @@ impl Lobbies {
     /// Leaves the lobby this app is in. The network shuts down on its own
     /// thread, so the window never waits for it.
     fn leave(&mut self) {
-        let (host, join) = (self.host.take(), self.join.take());
-        if host.is_some() || join.is_some() {
-            drop_in_background((host, join));
-        }
+        self.left = self.take_nodes().in_background();
+    }
+
+    /// Takes this app's network nodes out of the lobby, with any it left
+    /// that are still shutting down: a node started next on the same key
+    /// waits for them all to close.
+    fn take_nodes(&mut self) -> Replaced {
+        let host = self.host.take().map(|(node, _)| node);
+        let join = self.join.take().map(|(node, _)| node);
+        Replaced::from((host, join)).and(std::mem::take(&mut self.left))
     }
 
     /// This Player leaves the Run with friends they were playing: to the
@@ -164,13 +173,16 @@ impl Lobbies {
 
     /// Opens a lobby for this Run on the Host's ROM and makes an invite link.
     pub fn host(&mut self, run: RunAdvert, rom: HostRom) {
-        self.leave();
         let Ok(key) = self.key.clone() else {
-            return;
+            return self.leave();
         };
+        let replaced = self.take_nodes();
         let coop = HostCoop::new(key, &self.name, &run, rom);
         let lobby = HostLobby::new(run, &self.name, APP_VERSION);
-        self.host = Some((HostNode::start(key, lobby, self.relay_choice()), coop));
+        self.host = Some((
+            HostNode::start_replacing(key, lobby, self.relay_choice(), replaced),
+            coop,
+        ));
         self.relay = None;
         self.addresses_written = false;
         log::info!("Hosting a new lobby");
@@ -195,7 +207,7 @@ impl Lobbies {
         if !log.active().contains(&me) {
             return Err("The others dropped you from this Run. You can carry on alone in a solo copy.".to_owned());
         }
-        self.leave();
+        let replaced = self.take_nodes();
         self.rom_sha1 = Some(locked.game_sha1.clone());
         self.relay = None;
         self.direct = Vec::new();
@@ -221,12 +233,15 @@ impl Lobbies {
             let lobby = HostLobby::taken_over(run, &self.name, APP_VERSION, roster);
             let mut coop = HostCoop::back(key, log, rom);
             coop.order_waiting(waiting);
-            self.host = Some((HostNode::start(key, lobby, self.relay_choice()), coop));
+            self.host = Some((
+                HostNode::start_replacing(key, lobby, self.relay_choice(), replaced),
+                coop,
+            ));
             log::info!("Resuming the Run as its Host");
         } else {
             let mut coop = JoinCoop::stepped_down(key, log, host, rom, now);
             coop.queue_again(waiting);
-            self.join = Some((self.dial(key, host), coop));
+            self.join = Some((self.dial(key, host, replaced), coop));
             self.dialled_at = now;
             log::info!("Resuming the Run: connecting to its Host");
         }
@@ -323,7 +338,6 @@ impl Lobbies {
         let Some((node, coop)) = self.join.take() else {
             return;
         };
-        drop_in_background(node);
         // Everyone still in the Run, the old Host among them: not a Player dropped.
         let active = coop.log().active();
         let roster = locked
@@ -340,7 +354,9 @@ impl Lobbies {
         let (log, waiting, rom) = coop.into_takeover();
         let lobby = HostLobby::taken_over(run, &self.name, APP_VERSION, roster);
         let coop = HostCoop::take_over(key, log, waiting, rom.unwrap_or_default());
-        self.host = Some((HostNode::start(key, lobby, self.relay_choice()), coop));
+        // The join connection closes before the Host's network starts on the same key.
+        let node = HostNode::start_replacing(key, lobby, self.relay_choice(), node.into());
+        self.host = Some((node, coop));
         self.alone_since = None;
         self.addresses_written = false;
         log::info!(
@@ -377,13 +393,12 @@ impl Lobbies {
         let Some((node, coop)) = self.host.take() else {
             return;
         };
-        drop_in_background(node);
         let (log, rom) = coop.into_log();
         if self.rom_sha1.is_none() {
             self.rom_sha1 = log.locked().map(|l| l.game_sha1);
         }
         let coop = JoinCoop::stepped_down(key, log, next, rom, now_ms);
-        let node = self.dial(key, next);
+        let node = self.dial(key, next, node.into());
         self.join = Some((node, coop));
         self.dialled_at = now_ms;
         self.redials = 1;
@@ -441,20 +456,32 @@ impl Lobbies {
             self.redials += 1;
         }
         log::info!("Joiner: connecting to the Host again");
-        let fresh = self.dial(key, target);
+        let direct = self.direct_for(target);
         self.reconnects += 1;
-        if let Some((old, coop)) = self.join.as_mut() {
+        if let Some((node, mut coop)) = self.join.take() {
             coop.dial(target);
-            let old = std::mem::replace(old, fresh);
-            drop_in_background(old);
+            let fresh = self.dial_at(key, target, direct, node.into());
+            self.join = Some((fresh, coop));
         }
         self.dialled_at = now_ms;
         self.lost_at = None;
     }
 
     /// A network node connecting to the Host with key `host`, as a Player
-    /// in the Run's roster: by key, with no invite.
-    fn dial(&self, key: [u8; 32], host: PlayerKey) -> JoinNode {
+    /// in the Run's roster: by key, with no invite. It starts once
+    /// `replaced`, this app's nodes until now, have shut down.
+    fn dial(&self, key: [u8; 32], host: PlayerKey, replaced: Replaced) -> JoinNode {
+        self.dial_at(key, host, self.direct_for(host), replaced)
+    }
+
+    /// The same, trying these `direct` addresses for the Host.
+    fn dial_at(
+        &self,
+        key: [u8; 32],
+        host: PlayerKey,
+        direct: Vec<std::net::SocketAddr>,
+        replaced: Replaced,
+    ) -> JoinNode {
         let lobby = JoinLobby::rejoin(
             PeerKey(host),
             self.relay.clone(),
@@ -462,7 +489,7 @@ impl Lobbies {
             APP_VERSION,
             self.rom_sha1.clone(),
         );
-        JoinNode::start_with(key, lobby, self.relay_choice(), self.direct_for(host))
+        JoinNode::start_replacing(key, lobby, self.relay_choice(), direct, replaced)
     }
 
     /// The direct addresses known for the Host with key `host`.
@@ -597,8 +624,8 @@ impl Lobbies {
         let key = self.key.clone()?;
         let coop = JoinCoop::new(key, lobby.invite().host, rom, SystemRunClock.now_ms());
         let relay = lobby.invite().relay.clone();
-        let node = JoinNode::start_with(key, lobby, self.relay_choice(), direct.clone());
-        self.leave();
+        let replaced = self.take_nodes();
+        let node = JoinNode::start_replacing(key, lobby, self.relay_choice(), direct.clone(), replaced);
         self.join = Some((node, coop));
         self.rom_sha1 = sha1;
         self.relay = relay;
@@ -686,7 +713,7 @@ impl Lobbies {
             ui.label("Paste the invite link your friend sent you.");
             ui.add(
                 egui::TextEdit::singleline(&mut prompt.link)
-                    .hint_text("pactlocke://join?…")
+                    .hint_text("pactlocke:…")
                     .desired_width(420.0),
             );
             ui.horizontal(|ui| {
@@ -877,12 +904,6 @@ fn pick_rom() -> Option<Result<PickedRom, String>> {
     )
 }
 
-/// Drops lobbies on their own thread: a network shuts down there, so the
-/// window never waits for it.
-fn drop_in_background(gone: impl Send + 'static) {
-    std::thread::spawn(move || drop(gone));
-}
-
 /// The file a Host's direct addresses are written to, in `Lobbies::addresses`.
 fn addresses_file(host: PlayerKey) -> String {
     format!("{}.addrs", pactlocke_net::PeerKey(host))
@@ -973,8 +994,9 @@ mod tests {
     }
 
     /// The first app hosts, the others join by invite in turn, everyone is
-    /// Ready, and the Host locks: the Run starts for everyone.
-    fn start_a_run(apps: &mut [Lobbies], rom_file: &Path) {
+    /// Ready, and the Host locks: the Run starts for everyone. With `direct`,
+    /// joiners are given the Host's addresses on this machine too.
+    fn start_a_run(apps: &mut [Lobbies], rom_file: &Path, direct: bool) {
         // Red hosts; the others join by invite, one after the other.
         apps[0].host(
             RunAdvert {
@@ -1001,7 +1023,10 @@ mod tests {
                     .invite()
                     .is_some_and(|(link, addrs)| Some(&link) != used.as_ref() || joiner == 1 && !addrs.is_empty())
             });
-            let (link, addrs) = apps[0].invite().unwrap();
+            let (link, mut addrs) = apps[0].invite().unwrap();
+            if !direct {
+                addrs.clear();
+            }
             apps[joiner]
                 .join(&link, Some((rom_file.to_owned(), FIRERED.into())), addrs)
                 .unwrap();
@@ -1042,7 +1067,7 @@ mod tests {
         let mut apps = vec![app(&dir, "Red"), app(&dir, "Blue"), app(&dir, "Green")];
         let [red, blue, green] = [0, 1, 2].map(|i| apps[i].public_key().unwrap());
 
-        start_a_run(&mut apps, &rom_file);
+        start_a_run(&mut apps, &rom_file, true);
         apps[2].share(vec![died(0xC1)]);
         until(&mut apps, &[], 30, "one log", |apps| {
             same_log(apps) && deaths(apps[0].log().unwrap()) == [0xC1]
@@ -1079,6 +1104,72 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A takeover through n0's relays, as friends on different
+    /// networks play. The new Host's network starts on the same key only once
+    /// its join connection has closed, so the relay never drops one of them,
+    /// and every Player reaches the new Host through it. It reaches the
+    /// internet, so it is run by hand: `cargo test -p pactlocke-app -- --ignored`.
+    #[test]
+    #[ignore = "reaches n0's public relays"]
+    fn a_takeover_through_the_relay_reaches_every_player() {
+        let dir = std::env::temp_dir().join(format!("pactlocke-relay-takeover-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log_file = dir.join("pactlocke.log");
+        crate::logger::init_at(log_file.clone(), false);
+        let rom_file = dir.join("game.gba");
+        std::fs::write(&rom_file, [4, 5, 6]).unwrap();
+        let mut apps: Vec<Lobbies> = ["Red", "Blue", "Green"]
+            .into_iter()
+            .map(|name| {
+                let mut app = app(&dir, name);
+                app.relays = Relays::N0;
+                // No addresses on this machine: the others are found by key.
+                app.addresses = None;
+                app
+            })
+            .collect();
+        let blue = apps[1].public_key().unwrap();
+
+        start_a_run(&mut apps, &rom_file, false);
+        apps[2].share(vec![died(0xC1)]);
+        until(&mut apps, &[], 60, "one log", |apps| {
+            same_log(apps) && deaths(apps[0].log().unwrap()) == [0xC1]
+        });
+
+        // Red's app goes silent; Blue takes over, and Green follows.
+        apps[2].share(vec![died(0xC2)]);
+        until(&mut apps, &[0], 120, "Blue takes over and Green follows", |apps| {
+            apps[1].host.is_some() && same_log(&apps[1..]) && deaths(apps[2].log().unwrap()) == [0xC1, 0xC2]
+        });
+        assert_eq!(apps[2].host_key(), Some(blue));
+
+        // Red is back, and joins Blue as a Player.
+        until(&mut apps, &[], 120, "Red joins Blue", |apps| {
+            apps[0].join.is_some() && apps[0].online() && same_log(apps)
+        });
+        for i in [0, 2] {
+            assert!(apps[i].reach(blue).is_some(), "{} reaches Blue", apps[i].name);
+        }
+        for (i, app) in apps.iter().enumerate() {
+            assert_eq!(app.error(), None, "{i}");
+        }
+        drop(apps);
+        log::logger().flush();
+        let log = std::fs::read_to_string(&log_file).unwrap();
+        for clash in [
+            "Another endpoint connected with the same endpoint id",
+            "Endpoint dropped without calling",
+        ] {
+            assert!(
+                !log.contains(clash),
+                "{clash}:
+{log}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Players leave a Run with friends by closing their app,
     /// and come back with Resume from their copy of the Run log alone.
     #[test]
@@ -1090,7 +1181,7 @@ mod tests {
         std::fs::write(&rom_file, [4, 5, 6]).unwrap();
         let mut apps = vec![app(&dir, "Red"), app(&dir, "Blue")];
         let [red, blue] = [0, 1].map(|i| apps[i].public_key().unwrap());
-        start_a_run(&mut apps, &rom_file);
+        start_a_run(&mut apps, &rom_file, true);
         apps[1].share(vec![died(0xB1)]);
         until(&mut apps, &[], 30, "one log", |apps| {
             same_log(apps) && deaths(apps[0].log().unwrap()) == [0xB1]

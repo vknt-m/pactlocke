@@ -1,5 +1,10 @@
-//! Invite links: the Host's key, the relay to reach them on, a single-use
-//! 128-bit Run secret and the Host's app version. Never an IP address.
+//! Invite links: the Host's key, a single-use 128-bit Run secret and the
+//! Host's app version, plus the relay to reach them on when it isn't one of
+//! n0's default relays. Never an IP address.
+//!
+//! A link is `pactlocke:` and one unbroken block of 68 URL-safe characters
+//! (the key, the secret and the version, in base64url), then `@relay` for a
+//! custom relay. Links from before it, `pactlocke://join?host=…`, still read.
 
 use std::fmt;
 
@@ -54,34 +59,64 @@ pub struct Invite {
     pub app_version: String,
 }
 
-/// Why a link isn't an invite.
+/// Why a link a Player pasted isn't an invite they can join with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InviteError {
+    /// Not a Pactlocke link at all.
     NotAnInvite,
-    Missing(&'static str),
-    Bad(&'static str),
+    /// A Pactlocke link, but cut short, added to or changed on the way.
+    Damaged,
 }
 
 impl fmt::Display for InviteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            InviteError::NotAnInvite => write!(f, "that isn't a Pactlocke invite link"),
-            InviteError::Missing(what) => write!(f, "the invite link has no {what}"),
-            InviteError::Bad(what) => write!(f, "the invite link's {what} is damaged"),
+            InviteError::NotAnInvite => f.write_str("That isn't a Pactlocke invite"),
+            InviteError::Damaged => f.write_str("That invite is damaged: ask your friend to copy it again"),
         }
     }
 }
 
 impl std::error::Error for InviteError {}
 
-const SCHEME: &str = "pactlocke://join?";
+const SCHEME: &str = "pactlocke:";
+/// The links from before the block, which still read.
+const OLD_SCHEME: &str = "pactlocke://join?";
+/// Where each part of the invite is in the block: the Host's key, the Run
+/// secret, then the version's three numbers. 51 bytes are 68 characters.
+const HOST: std::ops::Range<usize> = 0..32;
+const SECRET: std::ops::Range<usize> = 32..48;
+const VERSION: std::ops::Range<usize> = 48..51;
+const BLOCK_BYTES: usize = VERSION.end;
+/// A relay's scheme when the link leaves it out.
+const HTTPS: &str = "https://";
 
 impl Invite {
-    /// The link a Host shares, such as
-    /// `pactlocke://join?host=…&secret=…&v=0.1.0&relay=https%3A%2F%2F…`.
+    /// The link a Host shares: `pactlocke:` and one block of 68 characters,
+    /// then `@relay` if the Host is on a custom relay.
     pub fn link(&self) -> String {
+        let Some(version) = version_bytes(&self.app_version) else {
+            return self.old_link();
+        };
+        let mut bytes = Vec::with_capacity(BLOCK_BYTES);
+        bytes.extend_from_slice(&self.host.0);
+        bytes.extend_from_slice(&self.secret.0);
+        bytes.extend_from_slice(&version);
+        let mut link = format!("{SCHEME}{}", base64url(&bytes));
+        if let Some(relay) = self.relay.as_deref().filter(|r| !is_default_relay(r)) {
+            link.push('@');
+            match relay.strip_prefix(HTTPS) {
+                Some(rest) => link.push_str(rest.strip_suffix('/').unwrap_or(rest)),
+                None => link.push_str(relay),
+            }
+        }
+        link
+    }
+
+    /// The link as it was before the block, for a version the block can't hold.
+    fn old_link(&self) -> String {
         let mut link = format!(
-            "{SCHEME}host={}&secret={}&v={}",
+            "{OLD_SCHEME}host={}&secret={}&v={}",
             self.host,
             hex(&self.secret.0),
             escape(&self.app_version)
@@ -93,33 +128,111 @@ impl Invite {
         link
     }
 
-    /// Reads a link a friend pasted (whitespace around it is ignored).
+    /// Reads a link a friend pasted. Whitespace anywhere in it is ignored, as
+    /// chat apps add spaces and line breaks around and inside long words.
     pub fn parse(link: &str) -> Result<Self, InviteError> {
-        let query = link.trim().strip_prefix(SCHEME).ok_or(InviteError::NotAnInvite)?;
-        let mut host = None;
-        let mut secret = None;
-        let mut version = None;
-        let mut relay = None;
+        let link: String = link.chars().filter(|c| !c.is_whitespace()).collect();
+        if let Some(query) = link.strip_prefix(OLD_SCHEME) {
+            return Self::parse_old(query).ok_or(InviteError::Damaged);
+        }
+        let rest = link.strip_prefix(SCHEME).ok_or(InviteError::NotAnInvite)?;
+        Self::parse_block(rest).ok_or(InviteError::Damaged)
+    }
+
+    fn parse_block(rest: &str) -> Option<Self> {
+        let (block, relay) = match rest.split_once('@') {
+            Some((block, relay)) => (block, Some(relay)),
+            None => (rest, None),
+        };
+        let bytes = unbase64url(block)?;
+        if bytes.len() != BLOCK_BYTES {
+            return None;
+        }
+        let relay = match relay {
+            None => None,
+            Some("") => return None,
+            Some(relay) if relay.contains("://") => Some(relay.to_owned()),
+            Some(relay) => Some(format!("{HTTPS}{relay}/")),
+        };
+        let [major, minor, patch] = bytes[VERSION].try_into().ok()?;
+        Some(Self {
+            host: PeerKey(bytes[HOST].try_into().ok()?),
+            relay,
+            secret: RunSecret(bytes[SECRET].try_into().ok()?),
+            app_version: format!("{major}.{minor}.{patch}"),
+        })
+    }
+
+    fn parse_old(query: &str) -> Option<Self> {
+        let (mut host, mut secret, mut version, mut relay) = (None, None, None, None);
         for pair in query.split('&') {
-            let (key, value) = pair.split_once('=').ok_or(InviteError::NotAnInvite)?;
+            let (key, value) = pair.split_once('=')?;
             match key {
-                "host" => host = Some(value),
-                "secret" => secret = Some(value),
-                "v" => version = Some(unescape(value).ok_or(InviteError::Bad("version"))?),
-                "relay" => relay = Some(unescape(value).ok_or(InviteError::Bad("relay"))?),
+                "host" => host = Some(unhex::<32>(value)?),
+                "secret" => secret = Some(unhex::<16>(value)?),
+                "v" => version = Some(unescape(value)?),
+                "relay" => relay = Some(unescape(value)?),
                 _ => {}
             }
         }
-        let host = unhex::<32>(host.ok_or(InviteError::Missing("Host key"))?).ok_or(InviteError::Bad("Host key"))?;
-        let secret =
-            unhex::<16>(secret.ok_or(InviteError::Missing("Run secret"))?).ok_or(InviteError::Bad("Run secret"))?;
-        Ok(Self {
-            host: PeerKey(host),
+        Some(Self {
+            host: PeerKey(host?),
             relay,
-            secret: RunSecret(secret),
-            app_version: version.ok_or(InviteError::Missing("version"))?,
+            secret: RunSecret(secret?),
+            app_version: version?,
         })
     }
+}
+
+/// A version such as `0.1.0` as three bytes, if it is three numbers that fit.
+fn version_bytes(version: &str) -> Option<[u8; 3]> {
+    let mut numbers = version
+        .split('.')
+        .map(|n| n.parse::<u8>().ok().filter(|b| b.to_string() == n));
+    let bytes = [numbers.next()??, numbers.next()??, numbers.next()??];
+    numbers.next().is_none().then_some(bytes)
+}
+
+/// Whether a relay is one of n0's, which a joiner finds the Host on by key.
+fn is_default_relay(relay: &str) -> bool {
+    relay
+        .parse::<iroh::RelayUrl>()
+        .is_ok_and(|url| iroh::defaults::prod::default_relay_map().contains(&url))
+}
+
+const BASE64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/// Base64url without padding.
+fn base64url(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
+        for i in 0..=chunk.len() {
+            out.push(char::from(BASE64URL[(n >> (18 - 6 * i) & 63) as usize]));
+        }
+    }
+    out
+}
+
+/// The bytes of unpadded base64url, if `text` is that.
+fn unbase64url(text: &str) -> Option<Vec<u8>> {
+    if text.len() % 4 == 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(text.len() / 4 * 3 + 2);
+    for chunk in text.as_bytes().chunks(4) {
+        let mut n = 0u32;
+        for (i, c) in chunk.iter().enumerate() {
+            let value = BASE64URL.iter().position(|b| b == c)? as u32;
+            n |= value << (18 - 6 * i);
+        }
+        let bytes = n.to_be_bytes();
+        out.extend_from_slice(&bytes[1..chunk.len()]);
+    }
+    Some(out)
 }
 
 fn hex(bytes: &[u8]) -> String {

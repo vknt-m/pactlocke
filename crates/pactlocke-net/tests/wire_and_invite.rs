@@ -122,32 +122,96 @@ fn random_bytes_never_crash_the_decoder() {
     }
 }
 
+/// An invite to a Host on one of n0's default relays.
 fn invite() -> Invite {
     Invite {
         host: PeerKey([7; 32]),
-        relay: Some("https://use1-1.relay.n0.iroh.link./".into()),
-        secret: RunSecret::generate(),
+        relay: None,
+        secret: RunSecret([9; 16]),
         app_version: "0.1.0".into(),
     }
 }
 
 #[test]
-fn an_invite_link_round_trips_and_carries_no_ip_address() {
+fn an_invite_link_is_one_clean_block_that_reads_back_as_the_same_invite() {
     let invite = invite();
     let link = invite.link();
-    assert!(link.starts_with("pactlocke://join?"), "{link}");
-    assert_eq!(Invite::parse(&link), Ok(invite.clone()));
-    assert_eq!(
-        Invite::parse(&format!("  {link}\n")),
-        Ok(invite),
-        "pasted with whitespace"
-    );
+    let block = link.strip_prefix("pactlocke:").expect("the scheme");
+    assert_eq!(block.len(), 68, "{link}");
+    assert_eq!(link.len(), 78, "{link}");
     assert!(
-        !link
-            .split(['?', '&', '=', '/', ':'])
-            .any(|part| part.parse::<std::net::Ipv4Addr>().is_ok()),
+        block.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
         "{link}"
     );
+    assert_eq!(Invite::parse(&link), Ok(invite));
+}
+
+#[test]
+fn a_pasted_link_reads_the_same_with_spaces_and_line_breaks_around_and_inside_it() {
+    let invite = invite();
+    let link = invite.link();
+    let (a, b) = link.split_at(40);
+    let (b, c) = b.split_at(20);
+    assert_eq!(Invite::parse(&format!("  {link}\n")), Ok(invite.clone()));
+    assert_eq!(Invite::parse(&format!("{a}\r\n{b} \t{c}\n")), Ok(invite));
+}
+
+#[test]
+fn a_custom_relay_goes_in_the_link_and_a_default_one_is_left_out() {
+    let custom = Invite {
+        relay: Some("https://relay.example.com/".into()),
+        ..invite()
+    };
+    let link = custom.link();
+    assert!(link.ends_with("@relay.example.com"), "{link}");
+    assert_eq!(Invite::parse(&link), Ok(custom));
+
+    let plain = Invite {
+        relay: Some("http://10.0.0.5:3340/".into()),
+        ..invite()
+    };
+    assert_eq!(Invite::parse(&plain.link()), Ok(plain));
+
+    let default = Invite {
+        relay: Some("https://use1-1.relay.n0.iroh.link./".into()),
+        ..invite()
+    };
+    assert_eq!(default.link(), invite().link());
+}
+
+#[test]
+fn an_old_link_still_reads() {
+    let old = format!(
+        "pactlocke://join?host={}&secret={}&v=0.1.0&relay=https%3A%2F%2Fuse1-1.relay.n0.iroh.link.%2F",
+        "07".repeat(32),
+        "09".repeat(16)
+    );
+    assert_eq!(
+        Invite::parse(&old),
+        Ok(Invite {
+            relay: Some("https://use1-1.relay.n0.iroh.link./".into()),
+            ..invite()
+        })
+    );
+    assert_eq!(
+        Invite::parse(&format!(" {old}\n")).map(|i| i.host),
+        Ok(PeerKey([7; 32]))
+    );
+}
+
+#[test]
+fn a_version_too_long_for_the_block_still_makes_a_link_that_reads() {
+    let invite = Invite {
+        app_version: "1.300.0-beta".into(),
+        ..invite()
+    };
+    assert_eq!(Invite::parse(&invite.link()), Ok(invite));
+}
+
+#[test]
+fn an_invite_link_carries_no_ip_address_for_a_host_on_a_default_relay() {
+    let link = invite().link();
+    assert!(!link.contains('.') && !link.contains('@'), "{link}");
 }
 
 #[test]
@@ -158,17 +222,40 @@ fn each_invite_has_its_own_128_bit_secret() {
 }
 
 #[test]
-fn a_damaged_link_is_refused() {
+fn a_link_that_isnt_an_invite_says_so() {
+    for text in ["https://example.com", "", "hello", "mailto:someone"] {
+        let refused = Invite::parse(text);
+        assert_eq!(refused, Err(InviteError::NotAnInvite), "{text:?}");
+        assert_eq!(refused.unwrap_err().to_string(), "That isn't a Pactlocke invite");
+    }
+}
+
+#[test]
+fn a_damaged_link_says_to_copy_it_again() {
     let link = invite().link();
-    assert_eq!(Invite::parse("https://example.com"), Err(InviteError::NotAnInvite));
-    assert_eq!(
-        Invite::parse(&link.replace("secret=", "secrex=")),
-        Err(InviteError::Missing("Run secret"))
+    let old = format!(
+        "pactlocke://join?host={}&secret={}&v=0.1.0",
+        "07".repeat(32),
+        "09".repeat(16)
     );
-    let short = link.replacen("host=0707", "host=07", 1);
-    assert_eq!(Invite::parse(&short), Err(InviteError::Bad("Host key")));
-    let bad = link.replacen("host=07", "host=zz", 1);
-    assert_eq!(Invite::parse(&bad), Err(InviteError::Bad("Host key")));
+    let damaged = [
+        link[..link.len() - 1].to_owned(),
+        format!("{link}A"),
+        link.replacen('A', "*", 1).replacen("pactlocke:", "pactlocke:%", 1),
+        "pactlocke:".to_owned(),
+        format!("{link}@"),
+        old.replace("secret=", "secrex="),
+        old.replacen("host=0707", "host=07", 1),
+        old.replacen("host=07", "host=zz", 1),
+    ];
+    for text in damaged {
+        let refused = Invite::parse(&text);
+        assert_eq!(refused, Err(InviteError::Damaged), "{text:?}");
+        assert_eq!(
+            refused.unwrap_err().to_string(),
+            "That invite is damaged: ask your friend to copy it again"
+        );
+    }
 }
 
 #[test]

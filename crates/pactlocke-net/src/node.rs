@@ -233,6 +233,84 @@ impl<C> Drop for Worker<C> {
     }
 }
 
+/// This app's nodes that a new one on the same key replaces, and any of
+/// its nodes still shutting down. The new node's thread waits for them all
+/// to close before its own network starts: a relay that sees two
+/// connections on one key drops one of them. The caller never waits.
+#[derive(Default)]
+pub struct Replaced {
+    host: Option<HostNode>,
+    join: Option<JoinNode>,
+    /// Earlier nodes shutting down on threads of their own.
+    shutting_down: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl Replaced {
+    /// Nothing to shut down first.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// These nodes and `other`'s, which start shutting down now.
+    pub fn and(mut self, other: Replaced) -> Self {
+        self.shutting_down.extend(other.in_background().shutting_down);
+        self
+    }
+
+    /// Starts shutting the nodes down on a thread of their own, as when the
+    /// Player leaves: what is returned stands for that shutdown, for a node
+    /// started later on the same key to wait for.
+    pub fn in_background(self) -> Self {
+        let thread = std::thread::spawn(move || self.shut_down());
+        Self {
+            shutting_down: vec![thread],
+            ..Self::default()
+        }
+    }
+
+    /// Shuts the nodes down, waiting for their networks to close.
+    fn shut_down(self) {
+        let Self {
+            host,
+            join,
+            shutting_down,
+        } = self;
+        drop(host);
+        drop(join);
+        for thread in shutting_down {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl From<HostNode> for Replaced {
+    fn from(host: HostNode) -> Self {
+        Self {
+            host: Some(host),
+            ..Self::default()
+        }
+    }
+}
+
+impl From<JoinNode> for Replaced {
+    fn from(join: JoinNode) -> Self {
+        Self {
+            join: Some(join),
+            ..Self::default()
+        }
+    }
+}
+
+impl From<(Option<HostNode>, Option<JoinNode>)> for Replaced {
+    fn from((host, join): (Option<HostNode>, Option<JoinNode>)) -> Self {
+        Self {
+            host,
+            join,
+            ..Self::default()
+        }
+    }
+}
+
 enum HostCommand {
     NewInvite,
     Send(Option<PeerKey>, Message),
@@ -277,6 +355,12 @@ enum Outgoing {
 impl HostNode {
     /// Starts the Host's endpoint with `key` and makes the first invite.
     pub fn start(key: [u8; 32], lobby: HostLobby, relays: Relays) -> Self {
+        Self::start_replacing(key, lobby, relays, Replaced::none())
+    }
+
+    /// The same, once `replaced`, this app's nodes on `key` until now, have
+    /// shut down; this returns at once.
+    pub fn start_replacing(key: [u8; 32], lobby: HostLobby, relays: Relays, replaced: Replaced) -> Self {
         let view = Arc::new(Mutex::new(LobbyView {
             run: Some(lobby.run().clone()),
             players: lobby.players(),
@@ -297,7 +381,10 @@ impl HostNode {
         let known = addrs.clone();
         let thread = std::thread::Builder::new()
             .name("lobby host".into())
-            .spawn(move || runtime().block_on(host(key, relays, shared, known, receiver)))
+            .spawn(move || {
+                replaced.shut_down();
+                runtime().block_on(host(key, relays, shared, known, receiver));
+            })
             .expect("a thread for the lobby");
         Self {
             worker: Worker {
@@ -579,6 +666,18 @@ impl JoinNode {
 
     /// The same, also trying these direct addresses (a Host on this machine, in tests).
     pub fn start_with(key: [u8; 32], lobby: JoinLobby, relays: Relays, direct: Vec<SocketAddr>) -> Self {
+        Self::start_replacing(key, lobby, relays, direct, Replaced::none())
+    }
+
+    /// The same, once `replaced`, this app's nodes on `key` until now, have
+    /// shut down; this returns at once.
+    pub fn start_replacing(
+        key: [u8; 32],
+        lobby: JoinLobby,
+        relays: Relays,
+        direct: Vec<SocketAddr>,
+        replaced: Replaced,
+    ) -> Self {
         let view = Arc::new(Mutex::new(LobbyView::default()));
         let inbox = Arc::new(Mutex::new(Vec::new()));
         let (commands, receiver) = mpsc::unbounded_channel();
@@ -587,7 +686,10 @@ impl JoinNode {
         let held = connection.clone();
         let thread = std::thread::Builder::new()
             .name("lobby join".into())
-            .spawn(move || runtime().block_on(join(key, lobby, relays, direct, shown, received, receiver, held)))
+            .spawn(move || {
+                replaced.shut_down();
+                runtime().block_on(join(key, lobby, relays, direct, shown, received, receiver, held));
+            })
             .expect("a thread for the lobby");
         Self {
             worker: Worker {
@@ -647,12 +749,12 @@ fn publish_join(view: &Mutex<LobbyView>, lobby: &JoinLobby) {
 #[allow(clippy::too_many_arguments)]
 async fn join(
     key: [u8; 32],
-    mut lobby: JoinLobby,
+    lobby: JoinLobby,
     relays: Relays,
     direct: Vec<SocketAddr>,
     view: Arc<Mutex<LobbyView>>,
     inbox: Arc<Mutex<Vec<Message>>>,
-    mut commands: mpsc::UnboundedReceiver<JoinCommand>,
+    commands: mpsc::UnboundedReceiver<JoinCommand>,
     held: Arc<Mutex<Option<Connection>>>,
 ) {
     let fail = |why: String| {
@@ -663,9 +765,28 @@ async fn join(
         Ok(endpoint) => endpoint,
         Err(e) => return fail(e),
     };
+    if let Err(why) = join_on(&endpoint, lobby, direct, &view, inbox, commands, held).await {
+        fail(why);
+    }
+    // Closed, never just dropped, on every way out: the relay is told this
+    // key's connection is gone before a node replacing this one connects.
+    endpoint.close().await;
+}
+
+/// The joiner's connection to the Host on `endpoint`, until it ends or the
+/// node is stopped. A stop cuts reaching the Host short too.
+async fn join_on(
+    endpoint: &Endpoint,
+    mut lobby: JoinLobby,
+    direct: Vec<SocketAddr>,
+    view: &Mutex<LobbyView>,
+    inbox: Arc<Mutex<Vec<Message>>>,
+    mut commands: mpsc::UnboundedReceiver<JoinCommand>,
+    held: Arc<Mutex<Option<Connection>>>,
+) -> Result<(), String> {
     let invite: &Invite = lobby.invite();
     let Ok(host) = PublicKey::from_bytes(&invite.host.0) else {
-        return fail("The invite's Host key is damaged.".into());
+        return Err("The invite's Host key is damaged.".into());
     };
     let mut address = EndpointAddr::new(host);
     if let Some(relay) = invite.relay.as_ref().and_then(|r| r.parse::<RelayUrl>().ok()) {
@@ -674,53 +795,89 @@ async fn join(
     for addr in direct {
         address = address.with_ip_addr(addr);
     }
-    let connection = match tokio::time::timeout(CONNECT_WITHIN, endpoint.connect(address, ALPN)).await {
-        Ok(Ok(connection)) => connection,
-        Ok(Err(e)) => return fail(format!("The Host couldn't be reached: {e}.")),
-        Err(_) => return fail("The Host couldn't be reached: no answer in 30 seconds.".into()),
+    let reaching = tokio::time::timeout(CONNECT_WITHIN, endpoint.connect(address, ALPN));
+    tokio::pin!(reaching);
+    // What the Player does meanwhile is carried out once connected.
+    let mut early = Vec::new();
+    let connection = loop {
+        tokio::select! {
+            reached = &mut reaching => match reached {
+                Ok(Ok(connection)) => break connection,
+                Ok(Err(e)) => return Err(format!("The Host couldn't be reached: {e}.")),
+                Err(_) => {
+                    return Err(format!(
+                        "The Host couldn't be reached: no answer in {} seconds.",
+                        CONNECT_WITHIN.as_secs()
+                    ));
+                }
+            },
+            command = commands.recv() => match command {
+                Some(JoinCommand::Stop) | None => return Ok(()),
+                Some(command) => early.push(command),
+            },
+        }
     };
     let Ok((mut send, recv)) = connection.open_bi().await else {
-        return fail("The connection to the Host closed at once.".into());
+        return Err("The connection to the Host closed at once.".into());
     };
     if send.write_all(&lobby.proof()).await.is_err() || write_frame(&mut send, &lobby.hello()).await.is_err() {
-        return fail("The connection to the Host closed at once.".into());
+        return Err("The connection to the Host closed at once.".into());
     }
     *lock(&held) = Some(connection.clone());
     // Frames are read on their own task, so the select below can't cut one short.
     let (mut frames, reader) = frames_of(recv);
+    for command in early {
+        on_command(Some(command), &mut lobby, &mut send, view).await;
+    }
     loop {
         tokio::select! {
             frame = frames.recv() => {
                 let Some(bytes) = frame else {
                     log::warn!("Joiner: the Host's stream ended ({})", connection.close_reason().map_or_else(|| "no reason given".to_owned(), |r| r.to_string()));
                     lobby.lost("it closed");
-                    publish_join(&view, &lobby);
+                    publish_join(view, &lobby);
                     break;
                 };
                 for reply in lobby.receive(&bytes) {
                     let _ = write_frame(&mut send, &reply).await;
                 }
                 lock(&inbox).extend(lobby.take_inbox());
-                publish_join(&view, &lobby);
+                publish_join(view, &lobby);
             }
-            command = commands.recv() => match command {
-                Some(JoinCommand::RomPicked(sha1)) => {
-                    if let Some(message) = lobby.rom_picked(&sha1) {
-                        let _ = write_frame(&mut send, &message).await;
-                    }
-                    publish_join(&view, &lobby);
+            command = commands.recv() => {
+                if !on_command(command, &mut lobby, &mut send, view).await {
+                    break;
                 }
-                Some(JoinCommand::Send(message)) => {
-                    let _ = write_frame(&mut send, &lobby.send(&message)).await;
-                }
-                Some(JoinCommand::Stop) | None => break,
-            },
+            }
         }
     }
     reader.abort();
     *lock(&held) = None;
     connection.close(0u8.into(), b"bye");
-    endpoint.close().await;
+    Ok(())
+}
+
+/// Carries out a Player's command on the connection to the Host; `false`
+/// when it is to stop.
+async fn on_command(
+    command: Option<JoinCommand>,
+    lobby: &mut JoinLobby,
+    send: &mut SendStream,
+    view: &Mutex<LobbyView>,
+) -> bool {
+    match command {
+        Some(JoinCommand::RomPicked(sha1)) => {
+            if let Some(message) = lobby.rom_picked(&sha1) {
+                let _ = write_frame(send, &message).await;
+            }
+            publish_join(view, lobby);
+        }
+        Some(JoinCommand::Send(message)) => {
+            let _ = write_frame(send, &lobby.send(&message)).await;
+        }
+        Some(JoinCommand::Stop) | None => return false,
+    }
+    true
 }
 
 /// A Player's key, shortened for the log.

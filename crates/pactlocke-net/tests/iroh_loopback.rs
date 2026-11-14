@@ -5,7 +5,8 @@
 use std::time::{Duration, Instant};
 
 use pactlocke_net::{
-    APP_VERSION, HostLobby, HostNode, Invite, JoinLobby, JoinNode, LobbyView, Relays, RomStatus, RunAdvert, RunSecret,
+    APP_VERSION, HostLobby, HostNode, Invite, JoinLobby, JoinNode, LobbyView, Relays, Replaced, RomStatus, RunAdvert,
+    RunSecret,
 };
 
 const FIRERED: &str = "41cb23d8dccc8ebd7c649cd8fbb58eeace6e2fdc";
@@ -140,30 +141,82 @@ fn wait_for_addrs(host: &HostNode) -> Vec<std::net::SocketAddr> {
     }
 }
 
+/// A node that takes another's place on the same key starts once the old
+/// one has shut down, even one still trying to reach a Host that never
+/// answers: the relay never sees two connections on one key.
+#[test]
+fn a_node_replacing_another_on_the_same_key_joins_once_the_old_one_has_shut_down() {
+    let host = host();
+    let view = wait_for("the invite", || host.view(), |v| v.invite_link.is_some());
+    let invite = Invite::parse(view.invite_link.as_deref().unwrap()).unwrap();
+    let direct = wait_for_addrs(&host);
+
+    // Blue first dials an address where nothing answers, for 30 seconds.
+    let nowhere = Invite {
+        host: iroh_public(key(9)),
+        ..invite.clone()
+    };
+    let lost = JoinLobby::new(nowhere, "Blue", APP_VERSION, None).unwrap();
+    let lost = JoinNode::start_with(key(7), lost, Relays::Off, vec!["192.0.2.1:9".parse().unwrap()]);
+    std::thread::sleep(Duration::from_millis(300));
+
+    let started = Instant::now();
+    let blue = JoinLobby::new(invite, "Blue", APP_VERSION, None).unwrap();
+    let blue = JoinNode::start_replacing(key(7), blue, Relays::Off, direct, Replaced::from(lost));
+    assert!(started.elapsed() < Duration::from_millis(100), "the caller never waits");
+    wait_for("Blue in the lobby", || blue.view(), |v| v.players.len() == 2);
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the old node stopped trying at once: {:?}",
+        started.elapsed()
+    );
+}
+
+fn iroh_public(secret: [u8; 32]) -> pactlocke_net::PeerKey {
+    pactlocke_net::PeerKey(*iroh::SecretKey::from_bytes(&secret).public().as_bytes())
+}
+
+fn run() -> RunAdvert {
+    RunAdvert {
+        name: "Kanto with friends".into(),
+        game_name: "Pokémon FireRed (USA) 1.0".into(),
+        game_sha1: FIRERED.into(),
+    }
+}
+
+/// An invite as a link from before the block was.
+fn old_link(invite: &Invite) -> String {
+    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    format!(
+        "pactlocke://join?host={}&secret={}&v={}",
+        invite.host,
+        hex(&invite.secret.0),
+        invite.app_version
+    )
+}
+
 /// Through n0's public relays, as friends on different networks join: the
-/// invite carries the Host's relay and no address. It reaches the internet,
-/// so it is run by hand: `cargo test -p pactlocke-net -- --ignored`.
+/// link carries the Host's key and no address or relay, and the joiner finds
+/// the Host by key. One friend joins with the link, one with a link of the
+/// old kind. It reaches the internet, so it is run by hand:
+/// `cargo test -p pactlocke-net -- --ignored`.
 #[test]
 #[ignore = "reaches n0's public relays"]
-fn a_friend_joins_through_the_relay_in_the_invite() {
-    let lobby = HostLobby::new(
-        RunAdvert {
-            name: "Kanto with friends".into(),
-            game_name: "Pokémon FireRed (USA) 1.0".into(),
-            game_sha1: FIRERED.into(),
-        },
-        "Red",
-        APP_VERSION,
+fn friends_join_through_n0_with_the_link_and_with_an_old_one() {
+    let host = HostNode::start(
+        pactlocke_net::new_key(),
+        HostLobby::new(run(), "Red", APP_VERSION),
+        Relays::N0,
     );
-    let host = HostNode::start(pactlocke_net::new_key(), lobby, Relays::N0);
     let view = wait_for(
         "the invite",
         || host.view(),
         |v| v.invite_link.is_some() || v.error.is_some(),
     );
     let link = view.invite_link.expect("an invite");
+    assert_eq!(link.len(), 78, "{link}");
     let invite = Invite::parse(&link).unwrap();
-    assert!(invite.relay.is_some(), "the Host's relay is in the invite: {link}");
+    assert_eq!(invite.relay, None, "n0's relays are left out: {link}");
 
     let blue = JoinLobby::new(invite, "Blue", APP_VERSION, Some(FIRERED.into())).unwrap();
     let blue = JoinNode::start(pactlocke_net::new_key(), blue, Relays::N0);
@@ -174,6 +227,23 @@ fn a_friend_joins_through_the_relay_in_the_invite() {
     );
     assert_eq!(joined.error, None);
     assert_eq!(joined.players[1].name, "Blue");
+
+    host.new_invite();
+    let view = wait_for(
+        "a second invite",
+        || host.view(),
+        |v| v.invite_link.as_ref() != Some(&link),
+    );
+    let old = old_link(&Invite::parse(view.invite_link.as_deref().unwrap()).unwrap());
+    let green = JoinLobby::new(Invite::parse(&old).unwrap(), "Green", APP_VERSION, None).unwrap();
+    let green = JoinNode::start(pactlocke_net::new_key(), green, Relays::N0);
+    let joined = wait_for(
+        "Green in the lobby",
+        || green.view(),
+        |v| v.players.len() == 3 || v.error.is_some(),
+    );
+    assert_eq!(joined.error, None);
+    assert_eq!(joined.players[2].name, "Green");
 }
 
 #[test]
