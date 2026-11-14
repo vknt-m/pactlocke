@@ -577,6 +577,9 @@ struct Unordered {
     bytes: Vec<u8>,
 }
 
+/// What an invite to a Run this Player is in says once the Run has started.
+const RESUME_INSTEAD: &str = "This Run has started, and you're in it: open it from the Runs list and choose Resume.";
+
 impl JoinCoop {
     /// Joining the Run `host` hosts, at `now_ms`.
     pub fn new(key: [u8; 32], host: PeerKey, rom: Option<(PathBuf, String)>, now_ms: i64) -> Self {
@@ -752,6 +755,10 @@ impl JoinCoop {
     fn refuse(&self, locked: &Locked) -> Option<String> {
         if !locked.roster.iter().any(|p| p.key == self.me()) {
             return Some("The Host locked the Run without you in it.".to_owned());
+        }
+        // In the roster, but never Ready in this lobby: an invite used after the lock.
+        if self.ready_to.is_none() {
+            return Some(RESUME_INSTEAD.to_owned());
         }
         if self.ready_to.as_ref() != Some(&locked.ruleset) {
             return Some("The Host locked a Ruleset you didn't say Ready to, so your Run won't start.".to_owned());
@@ -1181,6 +1188,27 @@ mod tests {
                 assert!(blue.error.as_deref().unwrap().contains("didn't say Ready to"));
             }
         }
+        let _ = std::fs::remove_file(rom_file);
+    }
+
+    #[test]
+    fn an_invite_used_after_the_lock_by_a_player_in_the_run_says_to_resume() {
+        let rom_file = std::env::temp_dir().join(format!("pactlocke-late-test-{}.gba", std::process::id()));
+        std::fs::write(&rom_file, [4, 5, 6]).unwrap();
+        let blue_key = Signer::from_secret([2; 32]).public();
+        let mut blue = JoinCoop::new(
+            [2; 32],
+            PeerKey([0; 32]),
+            Some((rom_file.clone(), FIRERED.into())),
+            1_000,
+        );
+        blue.log = RunLog::new(Signer::from_secret([1; 32]).public());
+        let (entries, start_ms) = locked_log(Preset::ClassicNuzlocke.ruleset(&[]), blue_key);
+        for entry in &entries {
+            blue.accept(entry);
+        }
+        assert!(blue.start_when_counted_down(start_ms + 60_000).is_none());
+        assert_eq!(blue.error.as_deref(), Some(RESUME_INSTEAD));
         let _ = std::fs::remove_file(rom_file);
     }
 }

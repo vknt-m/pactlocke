@@ -97,7 +97,10 @@ impl fmt::Display for Refusal {
                 )
             }
             Refusal::Misbehaving => write!(f, "your app sent messages the Host couldn't read"),
-            Refusal::RunStarted => write!(f, "the Run has started: nobody joins after the lock"),
+            Refusal::RunStarted => write!(
+                f,
+                "the Run has started, so nobody new joins. If you're in it, open it from the Runs list and choose Resume"
+            ),
         }
     }
 }
