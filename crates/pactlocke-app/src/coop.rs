@@ -151,7 +151,18 @@ impl HostCoop {
     /// Run `log` from a Host gone silent, then orders the entries they had
     /// waiting for the old Host, signed again after the takeover.
     pub fn take_over(key: [u8; 32], log: RunLog, waiting: Vec<LogBody>, rom_path: PathBuf) -> Self {
-        let mut coop = Self {
+        let mut coop = Self::back(key, log, rom_path);
+        coop.submit(None, &LogBody::Takeover);
+        for body in waiting {
+            coop.submit(None, &body);
+        }
+        coop
+    }
+
+    /// The Host of the Run `log`, back with Resume: they order it again from
+    /// where their copy ends.
+    pub fn back(key: [u8; 32], log: RunLog, rom_path: PathBuf) -> Self {
+        Self {
             setup: None,
             log,
             signer: Signer::from_secret(key),
@@ -164,12 +175,7 @@ impl HostCoop {
             started: true,
             error: None,
             stream_inbox: Vec::new(),
-        };
-        coop.submit(None, &LogBody::Takeover);
-        for body in waiting {
-            coop.submit(None, &body);
         }
-        coop
     }
 
     /// The Host hands over to a Player who took over hosting: the Run log

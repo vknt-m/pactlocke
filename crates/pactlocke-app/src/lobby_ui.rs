@@ -155,6 +155,13 @@ impl Lobbies {
         }
     }
 
+    /// This Player leaves the Run with friends they were playing: to the
+    /// others it is a lost connection, and Resume brings them back.
+    pub fn leave_run(&mut self) {
+        log::info!("Left the Run's network");
+        self.leave();
+    }
+
     /// Opens a lobby for this Run on the Host's ROM and makes an invite link.
     pub fn host(&mut self, run: RunAdvert, rom: HostRom) {
         self.leave();
@@ -167,6 +174,55 @@ impl Lobbies {
         self.relay = None;
         self.addresses_written = false;
         log::info!("Hosting a new lobby");
+    }
+
+    /// Opens a Run with friends again with Resume, from this Player's copy
+    /// of its Run log (`log`) and their ROM: with no invite, by the key of
+    /// the Player the log names as Host. If that is this Player, the Run's
+    /// Lobby opens here and the others come to it.
+    pub fn resume(&mut self, log: pactlocke_run::RunLog, rom: PathBuf) -> Result<(), String> {
+        let key = self.key.clone()?;
+        let me = self.public_key().ok_or("This install has no network key.")?;
+        let locked = log
+            .locked()
+            .ok_or("This Run's log has no lock, so it can't be resumed.")?;
+        if !log.active().contains(&me) {
+            return Err("The others dropped you from this Run. You can carry on alone in a solo copy.".to_owned());
+        }
+        self.leave();
+        self.rom_sha1 = Some(locked.game_sha1.clone());
+        self.relay = None;
+        self.direct = Vec::new();
+        self.lost_at = None;
+        self.redials = 0;
+        self.alone_since = None;
+        self.addresses_written = false;
+        let now = SystemRunClock.now_ms();
+        let host = log.host();
+        if host == me {
+            let active = log.active();
+            let roster = locked
+                .roster
+                .iter()
+                .filter(|p| p.key != me && active.contains(&p.key))
+                .map(|p| (PeerKey(p.key), p.name.clone()))
+                .collect();
+            let run = RunAdvert {
+                name: locked.run_name.clone(),
+                game_name: locked.game_name.clone(),
+                game_sha1: locked.game_sha1.clone(),
+            };
+            let lobby = HostLobby::taken_over(run, &self.name, APP_VERSION, roster);
+            let coop = HostCoop::back(key, log, rom);
+            self.host = Some((HostNode::start(key, lobby, self.relay_choice()), coop));
+            log::info!("Resuming the Run as its Host");
+        } else {
+            let coop = JoinCoop::stepped_down(key, log, host, rom, now);
+            self.join = Some((self.dial(key, host), coop));
+            self.dialled_at = now;
+            log::info!("Resuming the Run: connecting to its Host");
+        }
+        Ok(())
     }
 
     /// Run state from this Player's game, for the shared Run log.
@@ -892,17 +948,10 @@ mod tests {
         logs.len() == apps.len() && logs.windows(2).all(|w| w[0] == w[1])
     }
 
-    #[test]
-    fn when_the_host_goes_silent_the_lobby_moves_to_the_next_player_and_the_old_host_joins_as_a_player() {
-        let dir = std::env::temp_dir().join(format!("pactlocke-takeover-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let rom_file = dir.join("game.gba");
-        std::fs::write(&rom_file, [4, 5, 6]).unwrap();
-        let mut apps = vec![app(&dir, "Red"), app(&dir, "Blue"), app(&dir, "Green")];
-        let [red, blue, green] = [0, 1, 2].map(|i| apps[i].public_key().unwrap());
-
-        // Red hosts; Blue, then Green, join by invite.
+    /// The first app hosts, the others join by invite in turn, everyone is
+    /// Ready, and the Host locks: the Run starts for everyone.
+    fn start_a_run(apps: &mut [Lobbies], rom_file: &Path) {
+        // Red hosts; the others join by invite, one after the other.
         apps[0].host(
             RunAdvert {
                 name: "Kanto with friends".into(),
@@ -917,37 +966,38 @@ mod tests {
                 sync_gates: Vec::new(),
             },
         );
-        for (joiner, players) in [(1, 2), (2, 3)] {
-            if joiner == 2 {
+        for joiner in 1..apps.len() {
+            let players = joiner + 1;
+            if joiner > 1 {
                 apps[0].new_invite();
             }
             let used = apps[0].invite().map(|(link, _)| link);
-            until(&mut apps, &[], 30, "an invite", |apps| {
+            until(apps, &[], 30, "an invite", |apps| {
                 apps[0]
                     .invite()
                     .is_some_and(|(link, addrs)| Some(&link) != used.as_ref() || joiner == 1 && !addrs.is_empty())
             });
             let (link, addrs) = apps[0].invite().unwrap();
             apps[joiner]
-                .join(&link, Some((rom_file.clone(), FIRERED.into())), addrs)
+                .join(&link, Some((rom_file.to_owned(), FIRERED.into())), addrs)
                 .unwrap();
-            until(&mut apps, &[], 30, "the joiner in setup", |apps| {
+            until(apps, &[], 30, "the joiner in setup", |apps| {
                 apps[0].setup_version().is_some() && apps[0].host.as_ref().unwrap().1.players() == players
             });
         }
 
-        // Everyone Ready to the Ruleset as it stands; Red locks; the Run starts.
-        until(&mut apps, &[], 30, "everyone sees the Ruleset", |apps| {
+        // Everyone Ready to the Ruleset as it stands; the Host locks; the Run starts.
+        until(apps, &[], 30, "everyone sees the Ruleset", |apps| {
             apps.iter().all(|a| a.setup_version() == apps[0].setup_version())
         });
-        for app in &mut apps {
+        for app in apps.iter_mut() {
             app.ready(true);
         }
-        until(&mut apps, &[], 30, "everyone Ready", |apps| {
+        until(apps, &[], 30, "everyone Ready", |apps| {
             apps[0].host.as_ref().unwrap().1.not_ready().is_empty()
         });
         apps[0].lock(SystemRunClock.now_ms()).unwrap();
-        let mut started = [false; 3];
+        let mut started = vec![false; apps.len()];
         let start = Instant::now();
         while started.iter().any(|s| !s) {
             assert!(start.elapsed() < Duration::from_secs(30), "the Run starts for everyone");
@@ -956,6 +1006,19 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    #[test]
+    fn when_the_host_goes_silent_the_lobby_moves_to_the_next_player_and_the_old_host_joins_as_a_player() {
+        let dir = std::env::temp_dir().join(format!("pactlocke-takeover-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let rom_file = dir.join("game.gba");
+        std::fs::write(&rom_file, [4, 5, 6]).unwrap();
+        let mut apps = vec![app(&dir, "Red"), app(&dir, "Blue"), app(&dir, "Green")];
+        let [red, blue, green] = [0, 1, 2].map(|i| apps[i].public_key().unwrap());
+
+        start_a_run(&mut apps, &rom_file);
         apps[2].share(vec![died(0xC1)]);
         until(&mut apps, &[], 30, "one log", |apps| {
             same_log(apps) && deaths(apps[0].log().unwrap()) == [0xC1]
@@ -985,6 +1048,59 @@ mod tests {
         let tallies = apps[0].log().unwrap().tallies();
         assert_eq!(tallies.deaths.get(&red), Some(&1));
         assert_eq!(tallies.deaths.get(&green), Some(&2));
+        for (i, app) in apps.iter().enumerate() {
+            assert_eq!(app.error(), None, "{i}");
+        }
+        drop(apps);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Players leave a Run with friends by closing their app,
+    /// and come back with Resume from their copy of the Run log alone.
+    #[test]
+    fn players_come_back_with_resume_and_whoever_is_back_first_keeps_the_run_going() {
+        let dir = std::env::temp_dir().join(format!("pactlocke-resume-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let rom_file = dir.join("game.gba");
+        std::fs::write(&rom_file, [4, 5, 6]).unwrap();
+        let mut apps = vec![app(&dir, "Red"), app(&dir, "Blue")];
+        let [red, blue] = [0, 1].map(|i| apps[i].public_key().unwrap());
+        start_a_run(&mut apps, &rom_file);
+        apps[1].share(vec![died(0xB1)]);
+        until(&mut apps, &[], 30, "one log", |apps| {
+            same_log(apps) && deaths(apps[0].log().unwrap()) == [0xB1]
+        });
+
+        // Blue closes the app, and opens the Run again: no invite, the Host by key.
+        let kept = apps[1].log().unwrap().clone();
+        apps[1] = app(&dir, "Blue");
+        apps[1].resume(kept, rom_file.clone()).unwrap();
+        apps[1].share(vec![died(0xB2)]);
+        until(&mut apps, &[], 30, "Blue back with Red", |apps| {
+            apps[1].online() && same_log(apps) && deaths(apps[0].log().unwrap()) == [0xB1, 0xB2]
+        });
+        assert_eq!(apps[1].host_key(), Some(red));
+
+        // Red, the Host, closes the app. Blue, back first, keeps the Run going.
+        let red_kept = apps[0].log().unwrap().clone();
+        let blue_kept = apps[1].log().unwrap().clone();
+        apps[0] = app(&dir, "Red");
+        apps[1] = app(&dir, "Blue");
+        apps[1].resume(blue_kept, rom_file.clone()).unwrap();
+        apps[1].share(vec![died(0xB3)]);
+        until(&mut apps, &[0], 60, "Blue takes over", |apps| {
+            apps[1].host.is_some() && deaths(apps[1].log().unwrap()) == [0xB1, 0xB2, 0xB3]
+        });
+
+        // Red comes back, and joins Blue as a Player; Red's death is in.
+        apps[0].resume(red_kept, rom_file.clone()).unwrap();
+        apps[0].share(vec![died(0xA1)]);
+        until(&mut apps, &[], 90, "Red joins Blue as a Player", |apps| {
+            apps[0].join.is_some() && same_log(apps) && deaths(apps[1].log().unwrap()).contains(&0xA1)
+        });
+        assert_eq!(apps[0].host_key(), Some(blue));
+        assert_eq!(deaths(apps[0].log().unwrap()), [0xB1, 0xB2, 0xB3, 0xA1]);
         for (i, app) in apps.iter().enumerate() {
             assert_eq!(app.error(), None, "{i}");
         }

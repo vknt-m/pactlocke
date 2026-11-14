@@ -304,6 +304,13 @@ impl RunLog {
         Ok(log)
     }
 
+    /// A Player's copy of the log as their Run file keeps it, checked from
+    /// its Genesis entry's author, the Run's first Host.
+    pub fn from_kept(entries: Vec<LogEntry>) -> Result<Self, LogError> {
+        let first_host = entries.first().ok_or(LogError::NoGenesis)?.submission.author;
+        Self::verify(first_host, entries)
+    }
+
     /// An author's entry, signed for this Run. `counter` is the author's
     /// next, from 1.
     pub fn sign(&self, signer: &Signer, counter: u64, body: &LogBody) -> Submission {

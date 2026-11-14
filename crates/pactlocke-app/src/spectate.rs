@@ -135,6 +135,15 @@ impl Spectate {
         })
     }
 
+    /// The Run was resumed from its Run file: the log as kept there was
+    /// followed before, and `own` is this Player's stream from before this
+    /// session, to answer the others asking for what they missed.
+    pub fn resumed(&mut self, log: &RunLog, own: Vec<InputChunk>) {
+        self.follower = LogFollower::resuming(self.me, log);
+        self.fed = log.entries().len();
+        self.hub.already_sent(own);
+    }
+
     /// This Player's game draws the Partner Avatars from here.
     pub fn draw_partner_avatars(&mut self, avatars: Arc<Mutex<Vec<pactlocke_run::PartnerAvatar>>>) {
         self.avatars = Some(avatars);

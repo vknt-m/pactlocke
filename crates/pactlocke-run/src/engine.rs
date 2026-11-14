@@ -125,6 +125,9 @@ pub struct RunEngine {
     /// frame boundary (a big event happened), and when it last was.
     suspend_slot_due: bool,
     suspend_slot_kept_ms: i64,
+    /// In a Run with friends, this Player's copy of the Run log as the Run
+    /// file kept it when the Run was opened again.
+    kept_log: Vec<crate::LogEntry>,
     /// This boot's input stream from before this session: a Run with friends
     /// resumes by going on with the boot it left, so the others' Shadow
     /// Games carry on.
@@ -175,6 +178,7 @@ impl RunEngine {
         let mut engine = Self::reopened(&stored, storage, clock);
         let (plan, from) = crate::boot::plan(&stored);
         engine.with_friends = !stored.log.is_empty();
+        engine.kept_log = stored.log.clone();
         if engine.with_friends {
             engine.go_on_with_the_boot(&plan, &stored);
         }
@@ -211,6 +215,12 @@ impl RunEngine {
             keys: Vec::new(),
             stamped: Vec::new(),
         };
+    }
+
+    /// In a Run with friends, this Player's copy of the Run log as the Run
+    /// file kept it, to go on with on resume; empty alone.
+    pub fn kept_log(&self) -> &[crate::LogEntry] {
+        &self.kept_log
     }
 
     /// This boot's input stream from before this session, as the Run file
@@ -561,6 +571,7 @@ impl RunEngine {
             speed: 1,
             recorded_since: VecDeque::new(),
             with_friends: false,
+            kept_log: Vec::new(),
             suspend_slot_due: false,
             suspend_slot_kept_ms: now,
             earlier: Vec::new(),
