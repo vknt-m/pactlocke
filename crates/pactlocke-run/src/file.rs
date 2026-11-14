@@ -87,6 +87,11 @@ CREATE TABLE IF NOT EXISTS shadow_checkpoints (
     seen TEXT NOT NULL,
     core BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS copy_of (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    name TEXT NOT NULL,
+    at_ms INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS suspend (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     reason TEXT NOT NULL,
@@ -120,6 +125,16 @@ pub struct RunSummary {
     pub deaths: u32,
     /// Whether it is a Run with friends: its file keeps a Run log.
     pub with_friends: bool,
+    /// For a solo copy, the Run with friends it was copied from, and when.
+    pub copied_from: Option<CopiedFrom>,
+}
+
+/// The Run with friends a solo copy was made from: its name, and when.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopiedFrom {
+    pub name: String,
+    /// Unix time in milliseconds.
+    pub at_ms: i64,
 }
 
 /// The folder of Run files.
@@ -145,6 +160,11 @@ impl RunLibrary {
 
     /// A new, empty Run file; starting a Run in it fills it in.
     pub fn create(&self) -> Result<RunFile, StorageError> {
+        RunFile::open(self.path(&self.new_id()))
+    }
+
+    /// A name for a new Run file that no file in the folder has.
+    fn new_id(&self) -> RunId {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_millis());
@@ -154,7 +174,63 @@ impl RunLibrary {
             n += 1;
             id = RunId(format!("run-{stamp}-{n}"));
         }
-        RunFile::open(self.path(&id))
+        id
+    }
+
+    /// A solo copy of the Run with friends `id`, made at `now_ms`: a new
+    /// solo Run going on from this Player's game exactly where they left the
+    /// Run with friends, which stays as it is. It keeps the Ruleset but for
+    /// Links and Sync Gates, which are off, and starts with what is left of
+    /// the shared Retry pool. Its name is the Run's with " (solo)".
+    pub fn solo_copy(&self, id: &RunId, now_ms: i64) -> Result<RunId, StorageError> {
+        // Opening the Run file brings an older one's tables up to date.
+        let stored = self.open_run(id)?.load()?;
+        let log = crate::RunLog::from_kept(stored.log.clone())
+            .map_err(|e| StorageError::File(format!("its Run log can't be read: {e}")))?;
+        // A solo Run counts its Retries from its own file, where every
+        // Retry of the Run with friends is recorded too.
+        let retried = stored
+            .events
+            .iter()
+            .filter(|e| matches!(e.event, crate::RunEvent::Retried { .. }))
+            .count();
+        let ruleset = Ruleset {
+            links: false,
+            sync_gates: Vec::new(),
+            retries: log
+                .retries_left()
+                .saturating_add(u8::try_from(retried).unwrap_or(u8::MAX)),
+            ..stored.info.ruleset.clone()
+        };
+        let copy = self.new_id();
+        let to = self.path(&copy);
+        let written = || -> rusqlite::Result<()> {
+            let from = Connection::open_with_flags(self.path(id), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            from.execute("VACUUM INTO ?1", [to.to_string_lossy()])?;
+            drop(from);
+            let db = Connection::open(&to)?;
+            let tx = db.unchecked_transaction()?;
+            tx.execute(
+                "UPDATE run SET name = ?1, ruleset = ?2 WHERE id = 1",
+                params![
+                    format!("{} (solo)", stored.info.name),
+                    serde_json::to_string(&ruleset).expect("a Ruleset serialises")
+                ],
+            )?;
+            for table in ["run_log", "waiting", "shadow_checkpoints"] {
+                tx.execute(&format!("DELETE FROM {table}"), [])?;
+            }
+            tx.execute(
+                "INSERT OR REPLACE INTO copy_of (id, name, at_ms) VALUES (1, ?1, ?2)",
+                params![stored.info.name, now_ms],
+            )?;
+            tx.commit()
+        };
+        if let Err(e) = written() {
+            let _ = self.delete(&copy);
+            return Err(StorageError::File(format!("the solo copy couldn't be written: {e}")));
+        }
+        Ok(copy)
     }
 
     /// An existing Run's file.
@@ -216,10 +292,19 @@ fn summary(path: &Path) -> Option<RunSummary> {
     let with_friends = db
         .query_row("SELECT EXISTS (SELECT 1 FROM run_log)", [], |row| row.get(0))
         .unwrap_or(false);
+    let copied_from = db
+        .query_row("SELECT name, at_ms FROM copy_of WHERE id = 1", [], |row| {
+            Ok(CopiedFrom {
+                name: row.get(0)?,
+                at_ms: row.get(1)?,
+            })
+        })
+        .ok();
     Some(RunSummary {
         id,
         deaths,
         with_friends,
+        copied_from,
         last_played_ms: last_event.unwrap_or(info.created_ms),
         name: info.name,
         game_name: info.game_name,

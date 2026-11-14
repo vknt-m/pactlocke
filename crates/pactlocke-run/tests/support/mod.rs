@@ -97,7 +97,8 @@ impl Player {
         Self::starts(new, storage, clock)
     }
 
-    fn starts(new: NewRun, storage: Box<dyn RunStorage>, clock: TestClock) -> Self {
+    /// A Player who has just started the Run `new`, standing in Pallet Town.
+    pub fn starts(new: NewRun, storage: Box<dyn RunStorage>, clock: TestClock) -> Self {
         let engine = RunEngine::start(new, storage, Box::new(clock.clone())).unwrap();
         let mut player = Self::playing(engine, clock);
         player.game.area = Some(Area {

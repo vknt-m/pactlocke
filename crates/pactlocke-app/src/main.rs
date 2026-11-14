@@ -328,6 +328,8 @@ struct PactlockeApp {
     name_draft: String,
     /// A Run waiting for Delete… to be confirmed.
     deleting: Option<RunSummary>,
+    /// A Run with friends waiting for Continue as solo… to be confirmed.
+    copying: Option<RunSummary>,
     about: bool,
     /// Paused from Emulation ▸ Pause.
     paused: bool,
@@ -374,6 +376,7 @@ impl PactlockeApp {
             settings_dialog: None,
             name_draft: String::new(),
             deleting: None,
+            copying: None,
             about: false,
             paused: false,
             fast_forward: false,
@@ -1425,7 +1428,12 @@ impl PactlockeApp {
                             ui.end_row();
                         }
                         for summary in &self.runs {
-                            ui.strong(&summary.name);
+                            ui.vertical(|ui| {
+                                ui.strong(&summary.name);
+                                if let Some(from) = &summary.copied_from {
+                                    ui.weak(format!("Copied from {} on {}", from.name, logger::date(from.at_ms)));
+                                }
+                            });
                             ui.label(&summary.game_name);
                             ui.label(preset_name(&summary.ruleset));
                             ui.label(summary.deaths.to_string());
@@ -1433,6 +1441,14 @@ impl PactlockeApp {
                             ui.horizontal(|ui| {
                                 if ui.button("Resume").clicked() {
                                     resume = Some(summary.clone());
+                                }
+                                if summary.with_friends
+                                    && ui
+                                        .button("Continue as solo…")
+                                        .on_hover_text("A new solo Run from where you left this one")
+                                        .clicked()
+                                {
+                                    self.copying = Some(summary.clone());
                                 }
                                 if ui.button("Delete…").clicked() {
                                     self.deleting = Some(summary.clone());
@@ -1489,6 +1505,52 @@ impl PactlockeApp {
             self.refresh_runs();
         } else if keep || modal.should_close() {
             self.deleting = None;
+        }
+    }
+
+    /// Continue as solo…: asks first, then makes a solo copy of the Run
+    /// with friends from where this Player left it, and resumes the copy.
+    fn solo_copy_prompt(&mut self, ctx: &egui::Context) {
+        let Some(summary) = self.copying.clone() else {
+            return;
+        };
+        let (mut copy, mut cancel) = (false, false);
+        let modal = egui::Modal::new(egui::Id::unique("solo copy")).show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.heading("Continue as solo");
+            ui.label(format!(
+                "Make a solo copy of {}? The Run with friends stays as it is.",
+                summary.name
+            ));
+            ui.weak(
+                "The copy goes on from where you left the Run with friends, with the same rules except \
+                 Links and Sync Gates, and the Retries the group has left.",
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                copy = ui.button("Make a solo copy").clicked();
+                cancel = ui.button("Cancel").clicked();
+            });
+        });
+        if copy {
+            self.copying = None;
+            let made = self.run_library().and_then(|library| {
+                library
+                    .solo_copy(&summary.id, SystemRunClock.now_ms())
+                    .map_err(|e| format!("{} couldn't be copied: {e}", summary.name))
+            });
+            self.refresh_runs();
+            match made {
+                Ok(id) => {
+                    log::info!("Made a solo copy of the Run {}", summary.name);
+                    if let Some(copy) = self.runs.iter().find(|r| r.id == id).cloned() {
+                        self.resume_run(&copy);
+                    }
+                }
+                Err(e) => self.error = Some(e),
+            }
+        } else if cancel || modal.should_close() {
+            self.copying = None;
         }
     }
 
@@ -2047,6 +2109,7 @@ impl eframe::App for PactlockeApp {
         egui::CentralPanel::default_margins().show(ui, |ui| self.game_screen(ui));
         self.new_run_prompt(&ctx);
         self.delete_prompt(&ctx);
+        self.solo_copy_prompt(&ctx);
         self.settings_window(&ctx);
         self.about(&ctx);
         self.first_launch(&ctx);

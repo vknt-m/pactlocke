@@ -33,7 +33,7 @@ pub use cheats::{Cheat, CheatWatch, FAST_BURST_FRAMES, Flag};
 pub use clock::{RunClock, SystemRunClock};
 pub use engine::{RunEngine, SUSPEND_SLOT_EVERY_MS};
 pub use event::{AreaRef, CheckpointReason, DeathCause, Recorded, ResumedFrom, RunEvent, SourceRef};
-pub use file::{RunFile, RunId, RunLibrary, RunSummary};
+pub use file::{CopiedFrom, RunFile, RunId, RunLibrary, RunSummary};
 pub use links::{Judge, Link, LinkKeeper, Member, links};
 pub use live::{LiveGame, PlayedGame};
 pub use presence::{DROPOUT_OFFER_MS, HOST_SILENT_MS, OFFLINE_MS, Presence};

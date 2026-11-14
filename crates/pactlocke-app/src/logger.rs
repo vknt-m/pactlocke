@@ -118,6 +118,12 @@ fn now_utc() -> String {
     )
 }
 
+/// The UTC date of a Unix time in milliseconds, as `YYYY-MM-DD`.
+pub fn date(ms: i64) -> String {
+    let (year, month, day) = civil_from_days(ms.div_euclid(86_400_000));
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
 /// Days since 1970-01-01 to a calendar date (Howard Hinnant's algorithm).
 fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let z = days + 719_468;

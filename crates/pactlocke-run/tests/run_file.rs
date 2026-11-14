@@ -329,3 +329,99 @@ fn a_run_with_friends_keeps_its_run_log_in_the_run_file_and_is_listed_so() {
     );
     assert!(library.open_run(&alone.id).unwrap().load().unwrap().log.is_empty());
 }
+
+/// A Run log locked for `ruleset`, with its Host the only Player in it.
+fn friends_log(host: &pactlocke_run::Signer, ruleset: &Ruleset) -> pactlocke_run::RunLog {
+    use pactlocke_run::{LogBody, RunLog};
+    let mut log = RunLog::new(host.public());
+    let genesis = LogBody::Genesis {
+        nonce: [2; 16],
+        run_name: "Kanto with friends".into(),
+        game_name: "Pokémon FireRed (USA) 1.0".into(),
+        game_sha1: "41cb23d8dccc8ebd7c649cd8fbb58eeace6e2fdc".into(),
+    };
+    let locked = LogBody::Locked(pactlocke_run::Locked {
+        run_name: "Kanto with friends".into(),
+        game_name: "Pokémon FireRed (USA) 1.0".into(),
+        game_sha1: "41cb23d8dccc8ebd7c649cd8fbb58eeace6e2fdc".into(),
+        ruleset: ruleset.clone(),
+        roster: vec![pactlocke_run::RosterEntry {
+            key: host.public(),
+            name: "Red".into(),
+        }],
+        start_ms: START_MS,
+    });
+    for (counter, body) in [(1, genesis), (2, locked)] {
+        let submission = log.sign(host, counter, &body);
+        log.order(host, submission).unwrap();
+    }
+    log
+}
+
+#[test]
+fn a_solo_copy_of_a_run_with_friends_goes_on_alone_from_there_and_the_run_with_friends_stays() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = RunLibrary::open(dir.path()).unwrap();
+    let clock = TestClock::at(START_MS);
+    let ruleset = Ruleset {
+        first_encounter: true,
+        faint_is_dead: true,
+        links: true,
+        retries: 3,
+        sync_gates: vec!["Brock".into()],
+        ..Ruleset::default()
+    };
+    let mut new = new_solo_run(ruleset.clone());
+    new.name = "Kanto with friends".into();
+    let mut player = Player::starts(new, Box::new(library.create().unwrap()), clock.clone());
+    player.engine.take_checkpoint(core_checkpoint(0));
+    let host = pactlocke_run::Signer::from_secret([7; 32]);
+    player.engine.keep_log(0, friends_log(&host, &ruleset).entries());
+    player.game.party = vec![party_pokemon(PIDGEY, 0x0000_BEEF, "BIRDY")];
+    player.walks_into(route_1());
+    player.meets_wild(RATTATA);
+    player.faints(0x0000_BEEF);
+    player.leaves_battle();
+    player.engine.suspend(core_checkpoint(0x44));
+    drop(player);
+    let original = library.list()[0].id.clone();
+
+    clock.advance_ms(86_400_000);
+    let copy = library.solo_copy(&original, START_MS + 86_400_000).unwrap();
+    let runs = library.list();
+    let summary = runs.iter().find(|r| r.id == copy).expect("the copy is listed");
+    assert_eq!(summary.name, "Kanto with friends (solo)");
+    assert!(!summary.with_friends);
+    assert_eq!(
+        summary.copied_from,
+        Some(pactlocke_run::CopiedFrom {
+            name: "Kanto with friends".into(),
+            at_ms: START_MS + 86_400_000,
+        })
+    );
+    assert_eq!(
+        summary.ruleset,
+        Ruleset {
+            links: false,
+            sync_gates: Vec::new(),
+            ..ruleset.clone()
+        },
+        "Links and Sync Gates off, every other rule kept, and the Retries left"
+    );
+
+    // The Run with friends stays as it was, and can still be resumed from there.
+    let stored = library.open_run(&original).unwrap().load().unwrap();
+    assert!(!stored.log.is_empty());
+    assert_eq!(stored.suspended.map(|s| s.core), Some(core_checkpoint(0x44)));
+    assert_eq!(stored.info.name, "Kanto with friends");
+
+    // The copy goes on alone, exactly where the Player left: the Dead stay Dead.
+    let player = Player::resumes_from(Box::new(library.open_run(&copy).unwrap()), clock);
+    let pactlocke_run::BootPlan::Suspended(from) = player.engine.boot_plan() else {
+        panic!("from where the Player left the Run with friends");
+    };
+    assert_eq!(from.core, core_checkpoint(0x44));
+    assert_eq!(player.engine.view().graveyard.len(), 1);
+    assert_eq!(player.engine.view().closed_areas, ["Route 1"]);
+    assert!(player.engine.kept_log().is_empty(), "alone");
+}
