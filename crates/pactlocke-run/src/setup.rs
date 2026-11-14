@@ -36,11 +36,7 @@ impl Preset {
     }
 
     /// The preset's Ruleset, with `level_caps` (the game's defaults) where it uses them.
-    /// Whether it ticks every Sync Gate, once there is a second Player.
-    pub fn ticks_every_gate(self) -> bool {
-        matches!(self, Preset::SoulLink | Preset::Hardcore)
-    }
-
+    /// Its Sync Gates are set by the setup: every gate, once there is a second Player.
     pub fn ruleset(self, level_caps: &[LevelCap]) -> Ruleset {
         let classic = Ruleset {
             first_encounter: true,
@@ -265,11 +261,10 @@ pub struct RunSetup {
     level_caps: Vec<LevelCap>,
     /// Every battle the Game Profile can make a Sync Gate, in order.
     sync_gates: Vec<String>,
-    /// The gates the Ruleset has whenever there are two Players or more: the
-    /// preset's, or the Host's own choice since. A solo Run has none, so they
+    /// The gates the Ruleset has whenever there are two Players or more:
+    /// every gate, or the Host's own choice since. A solo Run has none, so they
     /// come back when a second Player joins.
     gates_wanted: Vec<String>,
-    preset: Preset,
     ruleset: Ruleset,
     version: u64,
     players: Vec<SetupPlayer>,
@@ -296,7 +291,6 @@ impl RunSetup {
             level_caps,
             sync_gates: Vec::new(),
             gates_wanted: Vec::new(),
-            preset,
             ruleset: Ruleset::default(),
             version: 0,
             players: vec![host],
@@ -307,16 +301,14 @@ impl RunSetup {
         setup
     }
 
-    /// The battles this ROM's Game Profile can make Sync Gates. Soul Link
-    /// and Hardcore tick them all once there is a second Player.
+    /// The battles this ROM's Game Profile can make Sync Gates. Every preset
+    /// ticks them all once there is a second Player.
     pub fn set_sync_gates(&mut self, gates: Vec<String>) {
         self.sync_gates = gates;
-        if self.preset.ticks_every_gate() {
-            self.gates_wanted = self.sync_gates.clone();
-            let wanted = self.gates_wanted.clone();
-            // Only the gates change; a locked Run keeps its Ruleset.
-            let _ = self.edit(|r| r.sync_gates = wanted);
-        }
+        self.gates_wanted = self.sync_gates.clone();
+        let wanted = self.gates_wanted.clone();
+        // Only the gates change; a locked Run keeps its Ruleset.
+        let _ = self.edit(|r| r.sync_gates = wanted);
     }
 
     /// Every battle this ROM can make a Sync Gate, in order.
@@ -327,12 +319,9 @@ impl RunSetup {
     /// Starts the Ruleset again from a preset.
     pub fn choose(&mut self, preset: Preset) -> Result<(), SetupError> {
         let mut ruleset = preset.ruleset(&self.level_caps);
-        if preset.ticks_every_gate() {
-            ruleset.sync_gates = self.sync_gates.clone();
-        }
+        ruleset.sync_gates = self.sync_gates.clone();
         let wanted = ruleset.sync_gates.clone();
         self.edit(|r| *r = ruleset)?;
-        self.preset = preset;
         self.gates_wanted = wanted;
         Ok(())
     }

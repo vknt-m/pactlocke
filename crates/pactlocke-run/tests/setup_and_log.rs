@@ -296,9 +296,13 @@ fn only_run_state_goes_in_the_shared_log() {
 }
 
 #[test]
-fn soul_link_and_hardcore_tick_every_gate_once_a_second_player_joins_and_the_host_can_untick_any() {
+fn every_preset_ticks_every_gate_once_a_second_player_joins_and_the_host_can_untick_any() {
     let gates: Vec<String> = ["Brock", "Misty", "Champion"].map(String::from).to_vec();
-    let mut coop = Coop::host("Red", CapabilityReport::everything_enforceable(), Preset::SoulLink);
+    let mut coop = Coop::host(
+        "Red",
+        CapabilityReport::everything_enforceable(),
+        Preset::ClassicNuzlocke,
+    );
     coop.setup.set_sync_gates(gates.clone());
     assert!(
         coop.setup.ruleset().sync_gates.is_empty(),
@@ -328,10 +332,10 @@ fn soul_link_and_hardcore_tick_every_gate_once_a_second_player_joins_and_the_hos
         .unwrap();
     assert_eq!(coop.setup.ruleset().sync_gates, ["Brock", "Champion"]);
 
-    coop.setup.choose(Preset::ClassicNuzlocke).unwrap();
-    assert!(coop.setup.ruleset().sync_gates.is_empty(), "Classic Nuzlocke has none");
-    coop.setup.choose(Preset::Hardcore).unwrap();
-    assert_eq!(coop.setup.ruleset().sync_gates, gates);
+    for preset in Preset::ALL {
+        coop.setup.choose(preset).unwrap();
+        assert_eq!(coop.setup.ruleset().sync_gates, gates, "{}", preset.name());
+    }
 }
 
 /// A locked three-Player log with an entry from each Player.

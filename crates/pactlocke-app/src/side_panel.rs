@@ -163,7 +163,15 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
                             asks.command = Some(command);
                         }
                     }
-                    Tab::Lobby => lobbies.lobby_tab(ui, now),
+                    Tab::Lobby => {
+                        lobbies.lobby_tab(ui, now);
+                        if let (Some(spectate), Some(log)) = (run.spectate, lobbies.log()) {
+                            let online = lobbies.online();
+                            if let Some(ask) = crate::spectate::dropout_by_hand(ui, log, spectate, online) {
+                                asks.dropout = Some(ask);
+                            }
+                        }
+                    }
                 });
         });
     });

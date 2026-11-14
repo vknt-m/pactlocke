@@ -392,21 +392,25 @@ impl Spectate {
     }
 }
 
+/// A Player's name from the Run's roster.
+fn roster_name(log: &RunLog, key: &PlayerKey) -> String {
+    log.locked()
+        .and_then(|l| l.roster.into_iter().find(|p| p.key == *key))
+        .map_or_else(|| "A Player".to_owned(), |p| p.name)
+}
+
+/// The button that starts a Dropout vote on a Player.
+fn start_dropout_button(ui: &mut eframe::egui::Ui, text: &str, online: bool) -> bool {
+    ui.add_enabled(online, eframe::egui::Button::new(text))
+        .on_hover_text("Everyone else must say Yes; their Pokémon leave every Link, and the Run goes on without them")
+        .clicked()
+}
+
 /// Dropouts: a vote under way, or the offer to start one for a Player
-/// offline 15 minutes (or to keep waiting).
+/// offline 15 minutes (or to keep waiting). With two Players there is none.
 pub fn dropouts(ui: &mut eframe::egui::Ui, log: &RunLog, spectate: &Spectate, online: bool) -> Option<DropoutAsk> {
     let me = spectate.me;
-    let names: Vec<(PlayerKey, String)> = log
-        .locked()
-        .map(|l| l.roster.iter().map(|p| (p.key, p.name.clone())).collect())
-        .unwrap_or_default();
-    let name = |key: &PlayerKey| {
-        names
-            .iter()
-            .find(|(k, _)| k == key)
-            .map_or("A Player", |(_, n)| n.as_str())
-            .to_owned()
-    };
+    let name = |key: &PlayerKey| roster_name(log, key);
     let mut cast = None;
     if let Some((leaving, yes)) = log.dropout_vote() {
         let voters = log.active().len().saturating_sub(1);
@@ -429,6 +433,9 @@ pub fn dropouts(ui: &mut eframe::egui::Ui, log: &RunLog, spectate: &Spectate, on
         }
         return cast;
     }
+    if !log.dropout_allowed() {
+        return None;
+    }
     let now = SystemRunClock.now_ms();
     for player in log.active() {
         if player == me || spectate.keep_waiting.contains(&player) || !spectate.presence.dropout_offered(&player, now) {
@@ -440,19 +447,38 @@ pub fn dropouts(ui: &mut eframe::egui::Ui, log: &RunLog, spectate: &Spectate, on
             pactlocke_run::DROPOUT_OFFER_MS / 60_000
         ));
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(online, eframe::egui::Button::new("Start a Dropout vote"))
-                .on_hover_text(
-                    "Everyone else must say Yes; their Pokémon leave every Link, and the Run goes on without them",
-                )
-                .clicked()
-            {
+            if start_dropout_button(ui, "Start a Dropout vote", online) {
                 cast = Some(DropoutAsk::Vote(RunEvent::DropoutVote { player, yes: true }));
             }
             if ui.button("Keep waiting").clicked() {
                 cast = Some(DropoutAsk::KeepWaiting(player));
             }
         });
+    }
+    cast
+}
+
+/// The Lobby tab's Dropout votes started by hand: one for each other Player
+/// offline now, once their offer was dismissed or before it comes. None
+/// with two Players, or while a vote is under way.
+pub fn dropout_by_hand(
+    ui: &mut eframe::egui::Ui,
+    log: &RunLog,
+    spectate: &Spectate,
+    online: bool,
+) -> Option<DropoutAsk> {
+    if !log.dropout_allowed() || log.dropout_vote().is_some() {
+        return None;
+    }
+    let mut cast = None;
+    for player in log.active() {
+        if player == spectate.me || !spectate.shows_offline(&player) {
+            continue;
+        }
+        let text = format!("Start a Dropout vote on {}", roster_name(log, &player));
+        if start_dropout_button(ui, &text, online) {
+            cast = Some(DropoutAsk::Vote(RunEvent::DropoutVote { player, yes: true }));
+        }
     }
     cast
 }

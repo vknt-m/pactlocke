@@ -294,12 +294,27 @@ fn the_leaver_has_no_say_and_a_vote_on_someone_already_gone_counts_for_nothing()
     everyone_plays(&mut table, 20);
     assert_eq!(table.apps[0].log.active(), [key(0), key(2)]);
 
-    // A late Yes on Blue opens nothing, and a vote on Green can still start.
+    // A late Yes on Blue opens nothing, and with two Players left a vote
+    // on Red can't start: Green would decide alone.
     table.votes_to_drop(0, 1, true);
     assert_eq!(table.apps[0].log.dropout_vote(), None);
     table.votes_to_drop(2, 0, true);
     everyone_plays(&mut table, 20);
-    assert_eq!(table.apps[2].log.active(), [key(2)], "Green's Yes was all it needed");
+    assert_eq!(table.apps[2].log.dropout_vote(), None);
+    assert_eq!(table.apps[2].log.active(), [key(0), key(2)]);
+}
+
+#[test]
+fn with_two_players_there_is_no_dropout() {
+    let mut table = Table::start(&["Red", "Blue"], soul_link());
+    everyone_plays(&mut table, 40);
+    for log in [&table.apps[0].log, &table.apps[1].log] {
+        assert!(!log.dropout_allowed(), "one Player would decide alone");
+    }
+    table.votes_to_drop(0, 1, true);
+    everyone_plays(&mut table, 20);
+    assert_eq!(table.apps[0].log.dropout_vote(), None);
+    assert_eq!(table.apps[1].log.active(), [key(0), key(1)]);
 }
 
 #[test]

@@ -208,6 +208,9 @@ pub struct Tallies {
     pub violations: BTreeMap<[u8; 32], u32>,
 }
 
+/// The fewest Players still in a Run for a Dropout vote: with two, one would decide alone.
+pub const DROPOUT_MIN_PLAYERS: usize = 3;
+
 /// One copy of the Run log: the Host's, or a Player's, each checked entry by entry.
 #[derive(Debug, Clone)]
 pub struct RunLog {
@@ -254,6 +257,12 @@ impl RunLog {
             .filter(|p| !self.dropped.contains(p))
             .copied()
             .collect()
+    }
+
+    /// Whether a Dropout can be voted now: only with three Players or more
+    /// still in the Run, since with two one Player would decide alone.
+    pub fn dropout_allowed(&self) -> bool {
+        self.active().len() >= DROPOUT_MIN_PLAYERS
     }
 
     /// Who takes over ordering the log if the Host goes silent: the next
@@ -576,13 +585,16 @@ impl RunLog {
     pub fn dropout_vote(&self) -> Option<(PlayerKey, BTreeSet<PlayerKey>)> {
         let mut open: Option<(PlayerKey, BTreeSet<PlayerKey>)> = None;
         let mut gone: Vec<PlayerKey> = Vec::new();
+        let roster = self.roster.as_ref().map_or(0, Vec::len);
         for (author, body) in self.bodies() {
             match body {
-                // The leaver has no say, and a vote on someone already gone counts for nothing.
+                // The leaver has no say, a vote on someone already gone counts
+                // for nothing, and with two Players left there is no Dropout.
                 LogBody::Event(RunEvent::DropoutVote { player, .. })
                     if author == player
                         || gone.contains(&player)
-                        || !self.roster.as_ref().is_some_and(|r| r.contains(&player)) => {}
+                        || !self.roster.as_ref().is_some_and(|r| r.contains(&player))
+                        || roster - gone.len() < DROPOUT_MIN_PLAYERS => {}
                 LogBody::Event(RunEvent::DropoutVote { player, yes }) => match &mut open {
                     None if yes => open = Some((player, BTreeSet::from([author]))),
                     Some((leaving, yes_votes)) if *leaving == player && yes => {
