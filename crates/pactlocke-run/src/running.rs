@@ -43,6 +43,9 @@ pub enum RunCommand {
     OthersSpeed { player: String, speed: u8 },
     /// The other Players dropped this Player from the Run.
     DroppedOut,
+    /// In a Run with friends: keep this Player's copy of the Run log in the
+    /// Run file, these entries replacing any from the one numbered `from` on.
+    KeepLog { from: u64, entries: Vec<crate::LogEntry> },
     /// A cheat flag in the Run log, for the feed.
     Flagged {
         player: String,
@@ -201,6 +204,7 @@ impl<G: PlayedGame> RunningGame<G> {
                 RunCommand::Speed(speed) => self.engine.speed(speed),
                 RunCommand::OthersSpeed { player, speed } => self.engine.others_speed(player, speed),
                 RunCommand::DroppedOut => self.engine.dropped_out(),
+                RunCommand::KeepLog { from, entries } => self.engine.keep_log(from, &entries),
                 RunCommand::Flagged {
                     player,
                     cheat,

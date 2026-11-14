@@ -648,6 +648,11 @@ impl RunEngine {
         });
     }
 
+    /// Keeps this Player's copy of the Run log in the Run file, from entry `from` on.
+    pub fn keep_log(&mut self, from: u64, entries: &[crate::LogEntry]) {
+        self.storage.keep_log(from, entries);
+    }
+
     /// The other Players dropped this Player from the Run: the feed says so.
     pub fn dropped_out(&mut self) {
         self.record(RunEvent::DroppedOut);
@@ -1188,6 +1193,7 @@ impl RunStorage for Retired {
     fn append_with_checkpoint(&mut self, _event: &Recorded, _checkpoint: &StoredCheckpoint) {}
     fn store_suspend(&mut self, _event: &Recorded, _checkpoint: &StoredCheckpoint) {}
     fn clear_suspend(&mut self) {}
+    fn keep_log(&mut self, _from: u64, _entries: &[crate::LogEntry]) {}
     fn load(&mut self) -> Result<crate::storage::StoredRun, StorageError> {
         Err(StorageError::NoRun)
     }

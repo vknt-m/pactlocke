@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use pactlocke_emu::{Checkpoint, Keys};
 use pactlocke_game::Change;
 
-use crate::{CheckpointReason, Recorded, Ruleset};
+use crate::{CheckpointReason, LogEntry, Recorded, Ruleset};
 
 /// What a Run is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +72,8 @@ pub struct StoredRun {
     pub latest_checkpoint: Option<StoredCheckpoint>,
     /// The suspend slot: where the Player suspended and quit, until resumed.
     pub suspended: Option<StoredCheckpoint>,
+    /// In a Run with friends, this Player's copy of the whole Run log; empty alone.
+    pub log: Vec<LogEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +108,9 @@ pub trait RunStorage: Send {
     fn store_suspend(&mut self, event: &Recorded, checkpoint: &StoredCheckpoint);
     /// Empties the suspend slot: it is used up on resume.
     fn clear_suspend(&mut self);
+    /// Keeps this Player's copy of the Run log: these entries replace any
+    /// kept from the one numbered `from` on.
+    fn keep_log(&mut self, from: u64, entries: &[LogEntry]);
     fn load(&mut self) -> Result<StoredRun, StorageError>;
     /// Why a write failed, if one has since the Run was opened.
     fn write_failure(&mut self) -> Option<String>;
@@ -190,6 +195,7 @@ impl RunStorage for MemoryStorage {
             save_memory: None,
             latest_checkpoint: None,
             suspended: None,
+            log: Vec::new(),
         });
         Ok(())
     }
@@ -226,6 +232,13 @@ impl RunStorage for MemoryStorage {
 
     fn clear_suspend(&mut self) {
         self.with(|run| run.suspended = None);
+    }
+
+    fn keep_log(&mut self, from: u64, entries: &[LogEntry]) {
+        self.with(|run| {
+            run.log.retain(|e| e.seq < from);
+            run.log.extend_from_slice(entries);
+        });
     }
 
     fn load(&mut self) -> Result<StoredRun, StorageError> {

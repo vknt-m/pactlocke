@@ -930,13 +930,16 @@ fn verifies(key: &[u8; 32], message: &[u8], signature: &[u8]) -> bool {
     key.verify_strict(message, &signature).is_ok()
 }
 
-/// What a Player's app does as the shared Run log grows: it joins every
-/// other Player's Run Checkpoint with its own game, and when the log says
-/// Retry, it goes back to its own part of that Run Checkpoint.
+/// What a Player's app does as the shared Run log grows: it keeps the log
+/// in the Run file, joins every other Player's Run Checkpoint with its own
+/// game, and when the log says Retry, it goes back to its own part of that
+/// Run Checkpoint.
 #[derive(Debug, Clone)]
 pub struct LogFollower {
     me: PlayerKey,
     seen: usize,
+    /// The hash of every entry kept in the Run file so far, in order.
+    kept: Vec<[u8; 32]>,
     /// Cheat flags already put in the feed: by Player, cheat and boot.
     flagged: Vec<(PlayerKey, crate::Cheat, u32)>,
 }
@@ -947,17 +950,38 @@ impl LogFollower {
         Self {
             me,
             seen: 0,
+            kept: Vec::new(),
             flagged: Vec::new(),
         }
     }
 
+    /// The command that keeps the log in the Run file, if it has changed
+    /// since: grown, or replaced from some entry on by another copy.
+    fn keep(&mut self, log: &RunLog) -> Option<crate::RunCommand> {
+        let entries = log.entries();
+        let from = entries
+            .iter()
+            .zip(&self.kept)
+            .position(|(entry, kept)| entry.hash() != *kept)
+            .unwrap_or(self.kept.len().min(entries.len()));
+        if from == entries.len() && from == self.kept.len() {
+            return None;
+        }
+        self.kept.truncate(from);
+        self.kept.extend(entries[from..].iter().map(LogEntry::hash));
+        Some(crate::RunCommand::KeepLog {
+            from: from as u64,
+            entries: entries[from..].to_vec(),
+        })
+    }
+
     /// The commands for this Player's Run from the entries since the last call.
     pub fn follow(&mut self, log: &RunLog) -> Vec<crate::RunCommand> {
+        let mut commands: Vec<crate::RunCommand> = self.keep(log).into_iter().collect();
         if log.entries().len() <= self.seen {
-            return Vec::new();
+            return commands;
         }
         let calls = log.calls();
-        let mut commands = Vec::new();
         for (index, (author, body)) in log.bodies().enumerate().skip(self.seen) {
             match body {
                 LogBody::Event(RunEvent::Checkpoint { .. }) if author != self.me => {

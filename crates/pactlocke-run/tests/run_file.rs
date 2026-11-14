@@ -239,3 +239,68 @@ fn checkpoints_and_the_suspend_slot_are_kept_in_the_run_file() {
     drop(player);
     assert!(library.open_run(&id).unwrap().load().unwrap().suspended.is_none());
 }
+
+/// The Host orders a speed change of theirs into the log.
+fn host_logs_speed(log: &mut pactlocke_run::RunLog, host: &pactlocke_run::Signer, speed: u8) {
+    use pactlocke_run::{LogBody, RunEvent};
+    let counter = log.next_counter(&host.public());
+    let submission = log.sign(host, counter, &LogBody::Event(RunEvent::SpeedChanged { speed }));
+    log.order(host, submission).unwrap();
+}
+
+#[test]
+fn a_run_with_friends_keeps_its_run_log_in_the_run_file_and_is_listed_so() {
+    use pactlocke_run::{LogBody, RunLog, Signer};
+    let dir = tempfile::tempdir().unwrap();
+    let library = RunLibrary::open(dir.path()).unwrap();
+    let clock = TestClock::at(START_MS);
+    drop(Player::starts_named_run_in(
+        "Alone",
+        Box::new(library.create().unwrap()),
+        clock.clone(),
+    ));
+    clock.advance_ms(1_000);
+    let mut player = Player::starts_named_run_in("Together", Box::new(library.create().unwrap()), clock.clone());
+
+    let host = Signer::from_secret([7; 32]);
+    let mut log = RunLog::new(host.public());
+    let genesis = LogBody::Genesis {
+        nonce: [1; 16],
+        run_name: "Together".into(),
+        game_name: "Pokémon FireRed (USA) 1.0".into(),
+        game_sha1: "41cb23d8dccc8ebd7c649cd8fbb58eeace6e2fdc".into(),
+    };
+    let submission = log.sign(&host, 1, &genesis);
+    log.order(&host, submission).unwrap();
+    let locked = LogBody::Locked(pactlocke_run::Locked {
+        run_name: "Together".into(),
+        game_name: "Pokémon FireRed (USA) 1.0".into(),
+        game_sha1: "41cb23d8dccc8ebd7c649cd8fbb58eeace6e2fdc".into(),
+        ruleset: first_encounter(),
+        roster: vec![pactlocke_run::RosterEntry {
+            key: host.public(),
+            name: "Red".into(),
+        }],
+        start_ms: START_MS,
+    });
+    let submission = log.sign(&host, 2, &locked);
+    log.order(&host, submission).unwrap();
+    host_logs_speed(&mut log, &host, 2);
+    let mut other = log.clone();
+    host_logs_speed(&mut log, &host, 3);
+    host_logs_speed(&mut log, &host, 4);
+    player.engine.keep_log(0, log.entries());
+    // Another copy of the log, alike for three entries, wins from there on.
+    host_logs_speed(&mut other, &host, 1);
+    player.engine.keep_log(3, &other.entries()[3..]);
+    drop(player);
+
+    let runs = library.list();
+    let together = runs.iter().find(|r| r.name == "Together").unwrap();
+    let alone = runs.iter().find(|r| r.name == "Alone").unwrap();
+    assert!(together.with_friends);
+    assert!(!alone.with_friends);
+    let stored = library.open_run(&together.id).unwrap().load().unwrap();
+    assert_eq!(stored.log, other.entries());
+    assert!(library.open_run(&alone.id).unwrap().load().unwrap().log.is_empty());
+}

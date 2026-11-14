@@ -14,7 +14,7 @@ use pactlocke_game::Change;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::storage::{InputBatch, RunInfo, RunStorage, Stamped, StorageError, StoredCheckpoint, StoredRun};
-use crate::{CheckpointReason, Recorded, Ruleset};
+use crate::{CheckpointReason, LogEntry, Recorded, Ruleset};
 
 /// Run files end in this.
 const EXTENSION: &str = "pactrun";
@@ -71,6 +71,10 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     patches BLOB NOT NULL,
     core BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS run_log (
+    seq INTEGER PRIMARY KEY,
+    entry BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS suspend (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     reason TEXT NOT NULL,
@@ -102,6 +106,8 @@ pub struct RunSummary {
     pub last_played_ms: i64,
     /// Deaths recorded in it, a Retry's undone ones included.
     pub deaths: u32,
+    /// Whether it is a Run with friends: its file keeps a Run log.
+    pub with_friends: bool,
 }
 
 /// The folder of Run files.
@@ -194,9 +200,14 @@ fn summary(path: &Path) -> Option<RunSummary> {
             |row| row.get(0),
         )
         .unwrap_or(0);
+    // A file from before Run logs were kept has no table for one.
+    let with_friends = db
+        .query_row("SELECT EXISTS (SELECT 1 FROM run_log)", [], |row| row.get(0))
+        .unwrap_or(false);
     Some(RunSummary {
         id,
         deaths,
+        with_friends,
         last_played_ms: last_event.unwrap_or(info.created_ms),
         name: info.name,
         game_name: info.game_name,
@@ -237,6 +248,7 @@ enum Message {
     Checkpoint(Recorded, StoredCheckpoint),
     Suspend(Recorded, StoredCheckpoint),
     ClearSuspend,
+    KeepLog(u64, Vec<LogEntry>),
     Load(Sender<Result<StoredRun, StorageError>>),
     ReadCheckpoint(u64, Sender<Result<Option<StoredCheckpoint>, StorageError>>),
 }
@@ -336,6 +348,10 @@ impl RunStorage for RunFile {
         self.send(Message::ClearSuspend);
     }
 
+    fn keep_log(&mut self, from: u64, entries: &[LogEntry]) {
+        self.send(Message::KeepLog(from, entries.to_vec()));
+    }
+
     fn load(&mut self) -> Result<StoredRun, StorageError> {
         self.ask(Message::Load)
     }
@@ -378,6 +394,7 @@ fn serve(db: &Connection, messages: &Receiver<Message>, failure: &Mutex<Option<S
             Message::Checkpoint(event, checkpoint) => store_checkpoint(db, &event, &checkpoint, Slot::Checkpoints),
             Message::Suspend(event, checkpoint) => store_checkpoint(db, &event, &checkpoint, Slot::Suspend),
             Message::ClearSuspend => db.execute("DELETE FROM suspend", []).map(drop),
+            Message::KeepLog(from, entries) => keep_log(db, from, &entries),
             Message::Load(reply) => {
                 let _ = reply.send(load(db));
                 Ok(())
@@ -593,6 +610,19 @@ fn read_checkpoint_where(
     }))
 }
 
+/// The entries replace any kept from the one numbered `from` on, in one transaction.
+fn keep_log(db: &Connection, from: u64, entries: &[LogEntry]) -> rusqlite::Result<()> {
+    let tx = db.unchecked_transaction()?;
+    tx.execute("DELETE FROM run_log WHERE seq >= ?1", [from as i64])?;
+    for entry in entries {
+        tx.execute(
+            "INSERT INTO run_log (seq, entry) VALUES (?1, ?2)",
+            params![entry.seq as i64, entry.to_bytes()],
+        )?;
+    }
+    tx.commit()
+}
+
 fn record_inputs(db: &Connection, batch: &InputBatch) -> rusqlite::Result<()> {
     let keys: Vec<u8> = batch.keys.iter().flat_map(|k| k.0.to_le_bytes()).collect();
     let tx = db.unchecked_transaction()?;
@@ -687,6 +717,19 @@ fn load(db: &Connection) -> Result<StoredRun, StorageError> {
         }
     }
 
+    let log = db
+        .prepare("SELECT entry FROM run_log ORDER BY seq")
+        .and_then(|mut query| {
+            query
+                .query_map([], |row| row.get::<_, Vec<u8>>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .map_err(file_error)?
+        .iter()
+        .map(|bytes| {
+            LogEntry::from_bytes(bytes).ok_or_else(|| StorageError::File("a Run log entry can't be read".into()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let save_memory = db
         .query_row("SELECT bytes FROM save_memory WHERE id = 1", [], |row| row.get(0))
         .optional()
@@ -698,5 +741,6 @@ fn load(db: &Connection) -> Result<StoredRun, StorageError> {
         save_memory,
         latest_checkpoint: read_checkpoint(db, Slot::Checkpoints)?,
         suspended: read_checkpoint(db, Slot::Suspend)?,
+        log,
     })
 }
