@@ -773,6 +773,11 @@ impl RunEngine {
         });
     }
 
+    /// A cheat flag the Run log says was cleared by everyone's vote: the feed says so.
+    pub fn flag_cleared(&mut self, player: String, frame: u64) {
+        self.record(RunEvent::FlagCleared { player, frame });
+    }
+
     /// Keeps this Player's copy of the Run log in the Run file, from entry `from` on.
     pub fn keep_log(&mut self, from: u64, entries: &[crate::LogEntry]) {
         self.with_friends = true;

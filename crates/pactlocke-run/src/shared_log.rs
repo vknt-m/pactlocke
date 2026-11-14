@@ -702,39 +702,103 @@ impl RunLog {
             .collect()
     }
 
-    /// Every cheat flag in the log, one per Player, cheat and boot, with
-    /// everyone who flagged it. Nothing clears one.
+    /// Every cheat flag in the log that stands, one per Player, cheat and
+    /// boot, with everyone who flagged it: all but those cleared by vote.
     pub fn flags(&self) -> Vec<crate::Flag> {
+        self.flag_state().standing
+    }
+
+    /// The votes under way on clearing a cheat flag: the flag, and who said Yes.
+    pub fn flag_votes(&self) -> Vec<FlagVote> {
+        self.flag_state().votes
+    }
+
+    /// The cheat flags everyone's vote cleared, in the order they were.
+    pub fn cleared_flags(&self) -> Vec<crate::Flag> {
+        self.flag_state().cleared
+    }
+
+    /// Who may clear a flag on `player` by vote: everyone else still in the Run.
+    pub fn flag_voters(&self, player: &PlayerKey) -> Vec<PlayerKey> {
+        self.active().into_iter().filter(|p| p != player).collect()
+    }
+
+    /// Every cheat flag, every vote on clearing one, and the flags cleared,
+    /// from the log in order. A vote starts at a Yes and ends at the first
+    /// No; once everyone but the flagged Player said Yes, the flag is
+    /// cleared, and the same flag logged again from no later a frame stays so.
+    fn flag_state(&self) -> FlagState {
         let roster = self.roster.clone().unwrap_or_default();
-        let mut flags: Vec<crate::Flag> = Vec::new();
+        let mut state = FlagState::default();
         for (author, body) in self.bodies() {
-            let LogBody::Event(RunEvent::CheatFlag {
-                player,
-                cheat,
-                boot,
-                frame,
-                at_ms,
-            }) = body
-            else {
-                continue;
-            };
-            let player = player.unwrap_or(author);
-            if !roster.contains(&player) {
-                continue;
-            }
-            match flags.iter_mut().find(|f| f.is(&player, cheat, boot)) {
-                Some(flag) if !flag.by.contains(&author) => flag.by.push(author),
-                Some(_) => {}
-                None => flags.push(crate::Flag {
+            match body {
+                LogBody::Event(RunEvent::CheatFlag {
                     player,
                     cheat,
-                    at: GamePoint { boot, frame },
+                    boot,
+                    frame,
                     at_ms,
-                    by: vec![author],
-                }),
+                }) => {
+                    let player = player.unwrap_or(author);
+                    let cleared = state
+                        .cleared
+                        .iter()
+                        .any(|f| f.is(&player, cheat, boot) && frame <= f.at.frame);
+                    if !roster.contains(&player) || cleared {
+                        continue;
+                    }
+                    match state.standing.iter_mut().find(|f| f.is(&player, cheat, boot)) {
+                        Some(flag) if !flag.by.contains(&author) => flag.by.push(author),
+                        Some(_) => {}
+                        None => state.standing.push(crate::Flag {
+                            player,
+                            cheat,
+                            at: GamePoint { boot, frame },
+                            at_ms,
+                            by: vec![author],
+                        }),
+                    }
+                }
+                LogBody::Event(RunEvent::FlagVote {
+                    player,
+                    cheat,
+                    boot,
+                    yes,
+                }) => {
+                    let voters = self.flag_voters(&player);
+                    let Some(at) = state.standing.iter().position(|f| f.is(&player, cheat, boot)) else {
+                        continue;
+                    };
+                    if !voters.contains(&author) {
+                        continue;
+                    }
+                    let open = state.votes.iter().position(|v| v.flag.is(&player, cheat, boot));
+                    match (open, yes) {
+                        (Some(i), true) => {
+                            state.votes[i].yes.insert(author);
+                        }
+                        (None, true) => state.votes.push(FlagVote {
+                            flag: state.standing[at].clone(),
+                            yes: BTreeSet::from([author]),
+                        }),
+                        (Some(i), false) => {
+                            state.votes.remove(i);
+                        }
+                        (None, false) => {}
+                    }
+                    let done = state
+                        .votes
+                        .iter()
+                        .position(|v| v.flag.is(&player, cheat, boot) && voters.iter().all(|p| v.yes.contains(p)));
+                    if let Some(i) = done {
+                        state.votes.remove(i);
+                        state.cleared.push(state.standing.remove(at));
+                    }
+                }
+                _ => {}
             }
         }
-        flags
+        state
     }
 
     /// The speed each Player last said they play at (1x until they say).
@@ -953,6 +1017,22 @@ fn verifies(key: &[u8; 32], message: &[u8], signature: &[u8]) -> bool {
     key.verify_strict(message, &signature).is_ok()
 }
 
+/// The cheat flags in a Run log as they stand, the votes on clearing them,
+/// and those cleared.
+#[derive(Default)]
+struct FlagState {
+    standing: Vec<crate::Flag>,
+    votes: Vec<FlagVote>,
+    cleared: Vec<crate::Flag>,
+}
+
+/// A vote under way on clearing a cheat flag: the flag, and who said Yes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlagVote {
+    pub flag: crate::Flag,
+    pub yes: BTreeSet<PlayerKey>,
+}
+
 /// What a Player's app does as the shared Run log grows: it keeps the log
 /// in the Run file, joins every other Player's Run Checkpoint with its own
 /// game, and when the log says Retry, it goes back to its own part of that
@@ -963,6 +1043,8 @@ pub struct LogFollower {
     seen: usize,
     /// The hash of every entry kept in the Run file so far, in order.
     kept: Vec<[u8; 32]>,
+    /// How many cleared cheat flags the feed has said so of.
+    cleared: usize,
     /// Cheat flags already put in the feed: by Player, cheat and boot.
     flagged: Vec<(PlayerKey, crate::Cheat, u32)>,
 }
@@ -974,6 +1056,7 @@ impl LogFollower {
             me,
             seen: 0,
             kept: Vec::new(),
+            cleared: 0,
             flagged: Vec::new(),
         }
     }
@@ -986,6 +1069,7 @@ impl LogFollower {
             me,
             seen: log.entries().len(),
             kept: log.entries().iter().map(LogEntry::hash).collect(),
+            cleared: log.cleared_flags().len(),
             flagged: Vec::new(),
         }
     }
@@ -1092,6 +1176,21 @@ impl LogFollower {
             }
         }
         self.seen = log.entries().len();
+        let cleared = log.cleared_flags();
+        for flag in cleared.iter().skip(self.cleared) {
+            let player = if flag.player == self.me {
+                "you".to_owned()
+            } else {
+                log.locked()
+                    .and_then(|l| l.roster.into_iter().find(|p| p.key == flag.player))
+                    .map_or_else(|| "a Player".to_owned(), |p| p.name)
+            };
+            commands.push(crate::RunCommand::FlagCleared {
+                player,
+                frame: flag.at.frame,
+            });
+        }
+        self.cleared = self.cleared.max(cleared.len());
         commands
     }
 }

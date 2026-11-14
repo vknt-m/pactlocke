@@ -336,23 +336,30 @@ impl Table {
             }
         };
         let mut engine = RunEngine::resume(Box::new(storage.clone()), Box::new(self.clock.clone())).unwrap();
-        // Rebuilt after a crash: the presses the Run file lost, from the Host, before the game boots.
-        if let pactlocke_run::BootPlan::Rebuild { from, keys, .. } = engine.boot_plan().clone()
-            && i != self.host
-        {
+        // Rebuilt after a crash: the presses the Run file lost, before the game
+        // boots, from every Player it reaches: a joiner asks the Host, a Host
+        // asks each Player (who has the Host's stream from the Host).
+        if let pactlocke_run::BootPlan::Rebuild { from, keys, .. } = engine.boot_plan().clone() {
             let want = pactlocke_run::StreamWant {
                 player: key(i),
                 boot: from.boot,
                 from_frame: from.frame + keys.len() as u64,
             };
-            let out = self.apps[self.host].hub.receive(key(i), StreamMessage::Want(want)).send;
-            let chunks: Vec<InputChunk> = out
-                .into_iter()
-                .filter_map(|o| match o {
+            let asked: Vec<usize> = if i == self.host {
+                (0..self.apps.len())
+                    .filter(|&j| j != i && !self.offline.contains(&j))
+                    .collect()
+            } else {
+                vec![self.host]
+            };
+            let mut chunks: Vec<InputChunk> = Vec::new();
+            for j in asked {
+                let out = self.apps[j].hub.receive(key(i), StreamMessage::Want(want)).send;
+                chunks.extend(out.into_iter().filter_map(|o| match o {
                     Outgoing::To(_, StreamMessage::Chunk(chunk)) => Some(chunk),
                     _ => None,
-                })
-                .collect();
+                }));
+            }
             engine.take_back_presses(&chunks);
         }
         let mut game = FakeGame {
@@ -442,6 +449,20 @@ impl Table {
             i,
             &LogBody::Event(RunEvent::DropoutVote {
                 player: key(leaving),
+                yes,
+            }),
+        );
+        self.tick();
+    }
+
+    /// Player `i` votes on clearing this cheat flag.
+    pub fn votes_on_flag(&mut self, i: usize, flag: &pactlocke_run::Flag, yes: bool) {
+        self.submit(
+            i,
+            &LogBody::Event(RunEvent::FlagVote {
+                player: flag.player,
+                cheat: flag.cheat,
+                boot: flag.at.boot,
                 yes,
             }),
         );

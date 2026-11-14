@@ -297,6 +297,16 @@ impl Lobbies {
         }
     }
 
+    /// Whether another Player's app is connected to this one now: a joiner's
+    /// Host, or any Player connected to this Host.
+    pub fn reaches_anyone(&self) -> bool {
+        match (&self.host, &self.join) {
+            (Some((node, _)), _) => node.view().players.len() > 1,
+            (None, Some((_, coop))) => coop.connected(),
+            (None, None) => false,
+        }
+    }
+
     /// The next Player in join order, once the Run's Host has been silent
     /// long enough, takes over: their app hosts the lobby on its own
     /// node, lets the rest of the roster in by key, and orders the Run log.

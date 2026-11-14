@@ -249,3 +249,57 @@ fn time_played_slowly_is_no_credit_for_playing_fast_later() {
     assert_eq!(flags[0].cheat, Cheat::TooFast);
     assert!(flags[0].at.frame > 5400, "during the fast part");
 }
+
+/// A flag that shouldn't stand (a crash nobody could give the
+/// presses back for, say) can be cleared by a vote of everyone but the
+/// Player it is about. The first No ends the vote.
+#[test]
+fn everyone_but_the_flagged_player_can_vote_a_flag_away() {
+    let mut table = Table::start(&["Red", "Blue", "Green"], with_retries());
+    everyone_plays(&mut table, 200);
+    let have = table.apps[0].hub.received(&key(1)).unwrap().1;
+    table.forges(1, other_presses(1, 1, have - 30, 30));
+    everyone_plays(&mut table, 20);
+    let flag = table.apps[0].log.flags()[0].clone();
+    assert_eq!(flag.player, key(1));
+
+    // Blue has no say; Red says Yes; Green's No ends the vote.
+    table.votes_on_flag(1, &flag, true);
+    assert!(
+        table.apps[0].log.flag_votes().is_empty(),
+        "Blue's own Yes opens nothing"
+    );
+    table.votes_on_flag(0, &flag, true);
+    let votes = table.apps[2].log.flag_votes();
+    assert_eq!(votes.len(), 1);
+    assert_eq!(votes[0].yes, std::collections::BTreeSet::from([key(0)]));
+    table.votes_on_flag(2, &flag, false);
+    assert!(table.apps[0].log.flag_votes().is_empty());
+    assert_eq!(table.apps[0].log.flags().len(), 1, "it stands");
+
+    // Asked again, Red and Green say Yes: it is cleared for everyone.
+    table.votes_on_flag(0, &flag, true);
+    table.votes_on_flag(2, &flag, true);
+    everyone_plays(&mut table, 20);
+    for (i, app) in table.apps.iter().enumerate() {
+        assert_eq!(app.log.flags(), [], "{i}");
+        assert_eq!(app.log.cleared_flags(), std::slice::from_ref(&flag), "{i}");
+    }
+    let frame = flag.at.frame;
+    for (i, whom) in [(0, "Blue"), (1, "you"), (2, "Blue")] {
+        let line = format!("The cheat flag on {whom}, at frame {frame}, was cleared by everyone's vote");
+        assert!(feed_has(&table, i, &line), "{i}: {:?}", table.apps[i].view_feed());
+    }
+
+    // The same flag sent again from before the vote doesn't bring it back.
+    let late = pactlocke_run::LogBody::Event(pactlocke_run::RunEvent::CheatFlag {
+        player: Some(key(1)),
+        cheat: flag.cheat,
+        boot: flag.at.boot,
+        frame,
+        at_ms: flag.at_ms,
+    });
+    table.submit(2, &late);
+    everyone_plays(&mut table, 20);
+    assert_eq!(table.apps[0].log.flags(), []);
+}

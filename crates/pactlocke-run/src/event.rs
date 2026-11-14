@@ -72,7 +72,7 @@ pub enum RunEvent {
     /// A cheat flag, in the Run log: what `player`'s game did that it can't
     /// have done honestly, at that boot and frame boundary, seen at `at_ms`
     /// by the Player who logs it. `None`: about the Player who logs it, whose
-    /// own app saw it (a tampered Run file). Nothing clears it.
+    /// own app saw it (a tampered Run file). Only a vote clears it (`FlagVote`).
     CheatFlag {
         /// Whose game, or `None` for the Player who logs it.
         player: Option<[u8; 32]>,
@@ -82,6 +82,22 @@ pub enum RunEvent {
         frame: u64,
         /// When it was seen (Unix milliseconds).
         at_ms: i64,
+    },
+    /// A Player's vote on clearing the cheat flag on `player` for `cheat` in
+    /// their game's `boot`: everyone else still in the Run must say Yes, the
+    /// flagged Player has no say, and the first No ends the vote.
+    FlagVote {
+        player: [u8; 32],
+        cheat: crate::Cheat,
+        boot: u32,
+        yes: bool,
+    },
+    /// A cheat flag the Run log says was cleared by everyone's vote, for the feed.
+    FlagCleared {
+        /// Whose game: their name, or "you".
+        player: String,
+        /// The frame boundary in their game it was raised at.
+        frame: u64,
     },
     /// A cheat flag in the Run log, for the feed.
     Flagged {
@@ -306,6 +322,7 @@ impl RunEvent {
                 | RunEvent::Died { .. }
                 | RunEvent::RetryVote { .. }
                 | RunEvent::DropoutVote { .. }
+                | RunEvent::FlagVote { .. }
                 | RunEvent::Retried { .. }
                 | RunEvent::EncounterOver { .. }
                 | RunEvent::Skipped { .. }

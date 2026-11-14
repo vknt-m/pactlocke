@@ -825,7 +825,9 @@ impl StreamHub {
                 }
             }
             StreamMessage::Want(want) => {
-                if want.player != self.me && !self.hosting() {
+                // A joiner answers for its own stream, and its Host for any it
+                // has: a Host back from a crash asks for its own lost presses.
+                if want.player != self.me && !self.hosting() && from != self.host {
                     return Received::default();
                 }
                 let send = self

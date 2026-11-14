@@ -1,8 +1,9 @@
 //! Cheat flags: what one Player's app sees of another's stream that their
 //! game can't have done honestly. A flag says who, what and when, goes in
-//! the Run log signed by the Player who saw it, and stays there: nothing
-//! clears it, a Retry doesn't undo it, and it triggers nothing. The group
-//! decides what to do about it (a Dropout vote, say).
+//! the Run log signed by the Player who saw it, and stays there: no Host or
+//! Retry undoes it, and it triggers nothing. The group decides what to do
+//! about it: a vote of everyone but the flagged Player clears it, or a
+//! Dropout vote.
 //!
 //! Seen here: a stream that rewrites frames the others already have (a
 //! savestate load, or rewritten history); a new boot with no Retry behind it

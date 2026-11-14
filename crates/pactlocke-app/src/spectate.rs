@@ -441,6 +441,83 @@ fn roster_name(log: &RunLog, key: &PlayerKey) -> String {
         .map_or_else(|| "A Player".to_owned(), |p| p.name)
 }
 
+/// The vote on clearing a cheat flag, for a Player who may vote.
+fn flag_vote(flag: &pactlocke_run::Flag, yes: bool) -> RunEvent {
+    RunEvent::FlagVote {
+        player: flag.player,
+        cheat: flag.cheat,
+        boot: flag.at.boot,
+        yes,
+    }
+}
+
+/// Votes under way on clearing a cheat flag, with the other votes: what
+/// each is about, how many said Yes, and Yes and No for a Player who may vote.
+pub fn flag_votes(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey, online: bool) -> Option<RunEvent> {
+    let mut cast = None;
+    for vote in log.flag_votes() {
+        let voters = log.flag_voters(&vote.flag.player);
+        let whom = if vote.flag.player == me {
+            "you".to_owned()
+        } else {
+            roster_name(log, &vote.flag.player)
+        };
+        ui.label(format!(
+            "Vote to clear the cheat flag on {whom}, at frame {}: {} · {} of {} said Yes",
+            vote.flag.at.frame,
+            vote.flag.cheat.describe(),
+            vote.yes.len(),
+            voters.len()
+        ));
+        if voters.contains(&me) && !vote.yes.contains(&me) && online {
+            ui.horizontal(|ui| {
+                for (text, yes) in [("Yes", true), ("No", false)] {
+                    if ui.button(text).clicked() {
+                        cast = Some(flag_vote(&vote.flag, yes));
+                    }
+                }
+            });
+        }
+    }
+    cast
+}
+
+/// The Lobby tab's cheat flags that stand, each with a vote to clear it for
+/// a Player who may vote and none is under way: a flag that shouldn't stand,
+/// such as one after a crash nobody could give the presses back for.
+pub fn flags_to_clear(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey, online: bool) -> Option<RunEvent> {
+    let votes = log.flag_votes();
+    let mut cast = None;
+    for flag in log.flags() {
+        let whom = if flag.player == me {
+            "you".to_owned()
+        } else {
+            roster_name(log, &flag.player)
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.colored_label(
+                crate::theme::CHEAT,
+                format!(
+                    "Cheat flag on {whom}, at frame {}: {}",
+                    flag.at.frame,
+                    flag.cheat.describe()
+                ),
+            );
+            let open = votes.iter().any(|v| v.flag == flag);
+            if !open
+                && log.flag_voters(&flag.player).contains(&me)
+                && ui
+                    .add_enabled(online, eframe::egui::Button::new("Vote to clear it"))
+                    .on_hover_text("Everyone but the flagged Player must say Yes; the first No ends the vote")
+                    .clicked()
+            {
+                cast = Some(flag_vote(&flag, true));
+            }
+        });
+    }
+    cast
+}
+
 /// The button that starts a Dropout vote on a Player.
 fn start_dropout_button(ui: &mut eframe::egui::Ui, text: &str, online: bool) -> bool {
     ui.add_enabled(online, eframe::egui::Button::new(text))

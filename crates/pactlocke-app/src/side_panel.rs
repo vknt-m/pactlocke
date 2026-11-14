@@ -119,7 +119,12 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
                     });
                 });
         }
-        asks.vote = crate::spectate::votes(ui, log, spectate.me(), lobbies.online());
+        asks.vote = crate::spectate::votes(ui, log, spectate.me(), lobbies.online()).or(crate::spectate::flag_votes(
+            ui,
+            log,
+            spectate.me(),
+            lobbies.online(),
+        ));
         asks.dropout = crate::spectate::dropouts(ui, log, spectate, lobbies.online());
     }
     if let Some(wanted) = run.view.nickname_wanted.first() {
@@ -169,6 +174,9 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
                             let online = lobbies.online();
                             if let Some(ask) = crate::spectate::dropout_by_hand(ui, log, spectate, online) {
                                 asks.dropout = Some(ask);
+                            }
+                            if let Some(vote) = crate::spectate::flags_to_clear(ui, log, spectate.me(), online) {
+                                asks.vote = Some(vote);
                             }
                         }
                     }

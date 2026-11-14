@@ -55,6 +55,8 @@ pub enum RunCommand {
         player: PlayerKey,
         checkpoint: Box<crate::ShadowCheckpoint>,
     },
+    /// A cheat flag the Run log says was cleared by everyone's vote, for the feed.
+    FlagCleared { player: String, frame: u64 },
     /// A cheat flag in the Run log, for the feed.
     Flagged {
         player: String,
@@ -228,6 +230,7 @@ impl<G: PlayedGame> RunningGame<G> {
                     frame,
                     by,
                 } => self.engine.flagged(player, cheat, frame, by),
+                RunCommand::FlagCleared { player, frame } => self.engine.flag_cleared(player, frame),
                 RunCommand::Retry { to } => {
                     if let Err(why) = self.retry(&to) {
                         self.engine.retry_failed(why);

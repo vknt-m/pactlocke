@@ -197,3 +197,22 @@ fn two_copies_of_the_log_meet_and_the_takeovers_wins_whatever_order_its_entries_
         .collect();
     assert!(speeds.ends_with(&[4, 1, 2, 3]), "every event kept: {speeds:?}");
 }
+
+#[test]
+fn a_crashed_host_takes_its_lost_presses_back_from_the_others_and_nobody_is_flagged() {
+    let mut table = Table::start(&["Red", "Blue"], first_encounter());
+    everyone_plays(&mut table, 330);
+    let blue_has = table.apps[1].hub.received(&key(0)).unwrap().1;
+
+    table.leaves_and_resumes(0, Leaving::Crashes);
+    assert_eq!(
+        table.apps[0].running.engine().frames_run(),
+        blue_has,
+        "through every press Blue had of Red's game"
+    );
+
+    everyone_plays(&mut table, 600);
+    table.waits(2_000);
+    assert_eq!(table.apps[1].shadow_of(key(0)).state(), ShadowState::Matched);
+    assert_eq!(table.apps[1].log.flags(), [], "no rewritten history");
+}

@@ -191,7 +191,7 @@ impl FeedIcon {
             RunEvent::GateReady { .. } | RunEvent::GateOpened { .. } | RunEvent::GateRefused { .. } => FeedIcon::Gate,
             RunEvent::Retried { .. } | RunEvent::RetryFailed { .. } => FeedIcon::Retry,
             RunEvent::SpeedChanged { .. } | RunEvent::OthersSpeed { .. } => FeedIcon::Speed,
-            RunEvent::CheatFlag { .. } | RunEvent::Flagged { .. } => FeedIcon::Cheat,
+            RunEvent::CheatFlag { .. } | RunEvent::Flagged { .. } | RunEvent::FlagCleared { .. } => FeedIcon::Cheat,
             _ => match kind {
                 FeedKind::Death => FeedIcon::Death,
                 FeedKind::Violation => FeedIcon::Violation,
@@ -272,7 +272,12 @@ impl FeedEntry {
             RunEvent::Checkpoint { .. }
             | RunEvent::Closed
             | RunEvent::RetryVote { .. }
-            | RunEvent::DropoutVote { .. } => return None,
+            | RunEvent::DropoutVote { .. }
+            | RunEvent::FlagVote { .. } => return None,
+            RunEvent::FlagCleared { player, frame } => (
+                FeedKind::Run,
+                format!("The cheat flag on {player}, at frame {frame}, was cleared by everyone's vote"),
+            ),
             RunEvent::DroppedOut => (
                 FeedKind::Problem,
                 "The other Players dropped you from the Run: it goes on without you".to_owned(),
@@ -551,7 +556,9 @@ impl FeedEntry {
         };
         let about = match &recorded.event {
             RunEvent::OthersSpeed { player, .. } => Some(player.clone()),
-            RunEvent::Flagged { player, .. } if player != "you" => Some(player.clone()),
+            RunEvent::Flagged { player, .. } | RunEvent::FlagCleared { player, .. } if player != "you" => {
+                Some(player.clone())
+            }
             _ => None,
         };
         Some(Self {

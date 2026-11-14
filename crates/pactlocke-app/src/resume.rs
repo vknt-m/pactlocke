@@ -1,7 +1,7 @@
 //! Resume for a Run with friends, before its game boots: the Run's network
 //! opens from this Player's copy of its Run log, by the Host's key with no
-//! invite, and after a crash the Host gives back the presses the Run file
-//! lost, so the game goes on from the frame the others have. The windowed
+//! invite, and after a crash the other Players give back the presses the
+//! Run file lost, so the game goes on from the frame the others have. The windowed
 //! app and the headless one both resume this way.
 
 use std::path::PathBuf;
@@ -10,10 +10,11 @@ use pactlocke_run::{BootPlan, GamePoint, InputChunk, Locked, Outgoing, RunEngine
 
 use crate::lobby_ui::Lobbies;
 
-/// How long a Run resumed after a crash waits for its Host before booting
-/// without the presses the Host may have.
-const TAKE_BACK_WAIT_MS: i64 = 15_000;
-/// How long it waits for the Host's answer, once asked.
+/// How long a Run resumed after a crash waits for another Player before
+/// booting without the presses they may have: long enough for a Host whose
+/// group moved on to a new Host to step down and find them.
+const TAKE_BACK_WAIT_MS: i64 = 45_000;
+/// How long it gathers the answers, once it has asked.
 const TAKE_BACK_ANSWER_MS: i64 = 3_000;
 
 /// A Run with friends opened with Resume, its game not booted yet.
@@ -23,8 +24,10 @@ pub struct Resuming {
     /// This Player's copy of the Run log, as the Run file kept it.
     pub log: RunLog,
     since_ms: i64,
-    /// When the Host was asked for this Player's lost presses.
+    /// When the other Players were asked for this Player's lost presses,
+    /// and what has come back so far: each may have a different amount.
     asked_ms: Option<i64>,
+    taken_back: Vec<InputChunk>,
 }
 
 impl Resuming {
@@ -43,39 +46,42 @@ impl Resuming {
             log,
             since_ms: now_ms,
             asked_ms: None,
+            taken_back: Vec::new(),
         })
     }
 
     /// Whether the game can boot now. A game rebuilt after a crash first
-    /// asks the Host for this Player's presses after what the Run file kept,
-    /// and plays them too; it boots once they are back, or once there is no
-    /// Host to ask: this Player hosts, or none answered in time.
+    /// asks every Player it reaches for this Player's presses after what the
+    /// Run file kept (a joiner asks the Host, which has every stream; a Host
+    /// asks each Player, who has the Host's), plays them too, and boots once
+    /// the answers are in; or, with nobody to ask, after a while. Only a
+    /// resume after a crash waits: nothing here runs while the game plays.
     pub fn ready_to_boot(&mut self, lobbies: &mut Lobbies, now_ms: i64) -> bool {
-        let me = lobbies.public_key();
-        let host = lobbies.host_key().filter(|h| Some(*h) != me);
         let lost = match self.engine.boot_plan() {
-            BootPlan::Rebuild { from, keys, .. } => Some(GamePoint {
+            BootPlan::Rebuild { from, keys, .. } => GamePoint {
                 boot: from.boot,
                 frame: from.frame + keys.len() as u64,
-            }),
-            _ => None,
+            },
+            _ => return true,
         };
-        let (Some(lost), Some(host), Some(me)) = (lost, host, me) else {
+        let Some(me) = lobbies.public_key() else {
             return true;
         };
-        if now_ms - self.since_ms >= TAKE_BACK_WAIT_MS {
-            return true;
-        }
-        if !lobbies.online() {
-            return false;
-        }
         let Some(asked) = self.asked_ms else {
+            if now_ms - self.since_ms >= TAKE_BACK_WAIT_MS {
+                log::warn!("No Player answered: the game goes on from what the Run file kept");
+                return true;
+            }
+            if !lobbies.reaches_anyone() {
+                return false;
+            }
             let want = StreamWant {
                 player: me,
                 boot: lost.boot,
                 from_frame: lost.frame,
             };
-            lobbies.send_stream(Outgoing::To(host, StreamMessage::Want(want)));
+            // A Host sends it to every Player connected; a joiner to its Host.
+            lobbies.send_stream(Outgoing::AllBut(me, StreamMessage::Want(want)));
             self.asked_ms = Some(now_ms);
             return false;
         };
@@ -88,10 +94,11 @@ impl Resuming {
                 _ => None,
             })
             .collect();
-        if mine.is_empty() && now_ms - asked < TAKE_BACK_ANSWER_MS {
+        self.taken_back.extend(mine);
+        if now_ms - asked < TAKE_BACK_ANSWER_MS {
             return false;
         }
-        self.engine.take_back_presses(&mine);
+        self.engine.take_back_presses(&std::mem::take(&mut self.taken_back));
         true
     }
 }
