@@ -169,6 +169,15 @@ pub struct Bit {
     pub mask: u8,
 }
 
+/// Where a block of the game's memory is: `{ pointer = … }` for one the
+/// game moves and points to, `{ at = … }` for one that stays put.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Place {
+    Pointer(u32),
+    At(u32),
+}
+
 /// Where the game keeps what the rules engine reads.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -177,9 +186,13 @@ pub struct Symbols {
     pub party_count: u32,
     /// The opponent's party, filled in before a battle starts.
     pub enemy_party: u32,
-    pub pc_storage_pointer: u32,
-    pub save_block_1_pointer: u32,
-    pub save_block_2_pointer: u32,
+    /// The PC's storage: behind a pointer in FireRed, LeafGreen and
+    /// Emerald, which move it; fixed in Ruby and Sapphire.
+    pub pc_storage: Place,
+    /// Save block 1 (the Bag, event flags, the Player's position), placed as the PC is.
+    pub save_block_1: Place,
+    /// Save block 2 (trainer ID, play time, options), placed as the PC is.
+    pub save_block_2: Place,
     pub region_map_section: u32,
     pub main_callback2: u32,
     pub overworld_callback: u32,
@@ -259,8 +272,8 @@ pub struct Layout {
     pub trainer_id: u32,
     /// In save block 2: play time as hours (two bytes), minutes, seconds and frames.
     pub play_time: u32,
-    /// In save block 1: one byte, a bit per badge.
-    pub badges: u32,
+    /// The first of the eight badge event flags (`FLAG_BADGE01_GET`), one per badge.
+    pub badge_flags: u16,
     /// In save block 1: the event flags, a bit per flag.
     pub event_flags: u32,
     pub trainer_size: u32,

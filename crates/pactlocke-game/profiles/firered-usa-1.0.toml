@@ -14,9 +14,9 @@ status = "supported"
 party = 0x02024284
 party_count = 0x02024029
 enemy_party = 0x0202402C              # gEnemyParty
-pc_storage_pointer = 0x03005010
-save_block_1_pointer = 0x03005008
-save_block_2_pointer = 0x0300500C
+pc_storage = { pointer = 0x03005010 }
+save_block_1 = { pointer = 0x03005008 }
+save_block_2 = { pointer = 0x0300500C }
 region_map_section = 0x02036E10        # gMapHeader.regionMapSectionId
 main_callback2 = 0x030030F4            # gMain.callback2
 overworld_callback = 0x080565B4        # CB2_Overworld
@@ -82,7 +82,7 @@ pc_box_slots = 30
 pc_boxes_offset = 4
 trainer_id = 0x0A                      # in save block 2
 play_time = 0x0E                       # in save block 2: hours, minutes, seconds, frames
-badges = 0xFE4                         # in save block 1: flags 0x820-0x827
+badge_flags = 0x820                    # FLAG_BADGE01_GET: eight flags, one per badge
 event_flags = 0xEE0                    # in save block 1
 # pret's struct Trainer (40 bytes) and its party entries; the party flags say
 # whether entries carry custom moves (16 bytes) or not (8 bytes).

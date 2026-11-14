@@ -9,7 +9,7 @@ use crate::game::{
     ScriptStatus, Side, StoredPokemon,
 };
 use crate::profile::HOLD_SCRIPT_LEN;
-use crate::profile::{GameProfile, Method, PatchSite, ROM_BASE};
+use crate::profile::{GameProfile, Method, PatchSite, Place, ROM_BASE};
 use crate::{Area, Source, text};
 use crate::{AvatarRoom, OAM, OBJ_PALETTES, OBJ_TILES, SpriteImage, Whereabouts};
 
@@ -74,12 +74,26 @@ impl<M: Memory> ProfileGame<M> {
     }
 
     fn save_block(&mut self, number: u8) -> u32 {
-        let pointer = if number == 1 {
-            self.profile.symbols.save_block_1_pointer
+        let place = if number == 1 {
+            self.profile.symbols.save_block_1
         } else {
-            self.profile.symbols.save_block_2_pointer
+            self.profile.symbols.save_block_2
         };
-        self.u32(pointer)
+        self.place(place)
+    }
+
+    /// Where a block is now: read through its pointer, or where it always is.
+    fn place(&mut self, place: Place) -> u32 {
+        match place {
+            Place::Pointer(pointer) => self.u32(pointer),
+            Place::At(addr) => addr,
+        }
+    }
+
+    /// Whether an event flag is set.
+    fn flag(&mut self, flag: u16) -> bool {
+        let flags = self.save_block(1) + self.profile.layout.event_flags;
+        self.u8(flags + u32::from(flag / 8)) & (1 << (flag % 8)) != 0
     }
 
     fn party_count(&mut self) -> u8 {
@@ -94,7 +108,7 @@ impl<M: Memory> ProfileGame<M> {
         let layout = &self.profile.layout;
         let index = u32::from(box_index) * u32::from(layout.pc_box_slots) + u32::from(slot_index);
         let (offset, size) = (layout.pc_boxes_offset, layout.box_slot_size);
-        self.u32(self.profile.symbols.pc_storage_pointer) + offset + index * size
+        self.place(self.profile.symbols.pc_storage) + offset + index * size
     }
 
     fn has_species(&mut self, addr: u32) -> bool {
@@ -340,22 +354,17 @@ impl<M: Memory> Game for ProfileGame<M> {
     }
 
     fn badges(&mut self) -> Badges {
-        let block = self.save_block(1);
-        Badges(self.u8(block + self.profile.layout.badges))
+        let first = self.profile.layout.badge_flags;
+        Badges((0..8u16).fold(0, |bits, badge| bits | (u8::from(self.flag(first + badge)) << badge)))
     }
 
     fn cap_stage(&mut self) -> usize {
         let badges = self.badges();
-        let flags = self.save_block(1) + self.profile.layout.event_flags;
         let profile = self.profile.clone();
         profile
             .level_caps
             .iter()
-            .take_while(|stage| {
-                stage.passed(badges, |flag| {
-                    self.u8(flags + u32::from(flag / 8)) & (1 << (flag % 8)) != 0
-                })
-            })
+            .take_while(|stage| stage.passed(badges, |flag| self.flag(flag)))
             .count()
     }
 
@@ -687,7 +696,7 @@ impl<M: Memory> Game for ProfileGame<M> {
         if !self.at_safe_overworld_point() {
             return None;
         }
-        let block = self.u32(self.profile.symbols.save_block_1_pointer);
+        let block = self.save_block(1);
         let at = |offset: u32| block.wrapping_add(offset);
         Some(Whereabouts {
             map: (self.u8(at(avatars.location)), self.u8(at(avatars.location + 1))),

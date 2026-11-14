@@ -1,0 +1,247 @@
+# Pokémon LeafGreen (USA) 1.0, laid out like FireRed: its RAM is FireRed's,
+# and only ROM addresses move. Each one here is FireRed's, moved to the same
+# pret pokeleafgreen symbol (plus offset), and its bytes checked in a clean dump.
+
+schema = 1
+id = "leafgreen-usa-1.0"
+name = "Pokémon LeafGreen (USA) 1.0"
+game_code = "BPGE"
+sha1 = "574fa542ffebb14be69902d1d36f1ec0a4afd71e"
+status = "supported"
+parent = "firered-usa-1.0"
+
+[symbols]
+species_info = 0x08254760
+species_names = 0x08245EBC              # gSpeciesNames
+evolution_table = 0x08259734            # gEvolutionTable
+items = 0x083DAE64
+trainers = 0x0823EAA4                   # gTrainers
+type_names = 0x0824F17C                 # gTypeNames
+
+# As FireRed's, with the ball's "BOX is full" lines pointed at Oak's: the
+# Bag's, and the Safari Zone's BALL (battle string 0x530/4), which gets a copy
+# without the {PLAYER} placeholder battle text can't show, in free ROM.
+[rules.catch_block]
+method = "patch"
+sites = [
+  { at = 0x08040F6C, expect = "10 B5 00 24", write = "01 20 70 47" },  # IsPlayerPartyAndPokemonStorageFull -> TRUE
+  { at = 0x080A1E30, expect = "6D 64 41 08", write = "61 62 41 08" },  # gText_BoxFull -> gText_OakForbidsUseOfItemHere
+  { at = 0x08F00800, expect = "FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF", write = "C9 BB C5 F0 00 CE DC DD E7 00 DD E7 E2 B4 E8 00 E8 DC D9 00 E8 DD E1 D9 FE E8 E3 00 E9 E7 D9 00 E8 DC D5 E8 AB FB FF" },  # "OAK: This isn't the time / to use that!"
+  { at = 0x083FE2A8, expect = "B2 D6 3F 08", write = "00 08 F0 08" },  # the Safari BALL's line -> that copy
+]
+
+[rules.must_nickname]
+method = "key_filter"
+battle_script_pointer = 0x02023D74   # gBattlescriptCurrInstr
+command_table = 0x082500F8           # gBattleScriptingCommandsTable
+command = 0x0802DD39                 # Cmd_trygivecaughtmonnick
+battle_communication = 0x02023E82
+field_yes_no = [0x081A4E41]          # Std_MsgboxYesNo, after its yesnobox
+question = "give a nickname"
+
+# FireRed's catalogue, each instruction at LeafGreen's address. The Game
+# Corner prizes differ by species (LeafGreen's Pinsir for Scyther, say) but
+# not by instruction.
+[[sources]]
+key = "starter"
+name = "Starter"
+kind = "starter"
+at = [0x08169C67]
+
+[[sources]]
+key = "magikarp_route_4"
+name = "Magikarp salesman on Route 4"
+kind = "gift"
+at = [0x0816F7A1]
+
+[[sources]]
+key = "mt_moon_fossil"
+name = "Mt. Moon fossil (Omanyte or Kabuto)"
+kind = "gift"
+at = [0x0816E745, 0x0816E78A]
+
+[[sources]]
+key = "old_amber"
+name = "Old Amber (Aerodactyl)"
+kind = "gift"
+at = [0x0816E7CF]
+
+[[sources]]
+key = "eevee_celadon"
+name = "Eevee in Celadon Mansion"
+kind = "gift"
+at = [0x0816C450]
+
+[[sources]]
+key = "game_corner_prize_1"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CCB0]
+
+[[sources]]
+key = "game_corner_prize_2"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CCC5]
+
+[[sources]]
+key = "game_corner_prize_3"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CCDA]
+
+[[sources]]
+key = "game_corner_prize_4"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CCEF]
+
+[[sources]]
+key = "game_corner_prize_5"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CD04]
+
+[[sources]]
+key = "game_corner_prize_6"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CD19]
+
+[[sources]]
+key = "fighting_dojo"
+name = "Fighting Dojo prize (Hitmonlee or Hitmonchan)"
+kind = "gift"
+at = [0x0816EC5F]
+
+[[sources]]
+key = "lapras_silph"
+name = "Lapras in Silph Co."
+kind = "gift"
+at = [0x08161ABC]
+
+[[sources]]
+key = "togepi_egg"
+name = "Togepi egg"
+kind = "egg"
+at = [0x081688A5]
+
+[[sources]]
+key = "snorlax_route_12"
+name = "Snorlax on Route 12"
+kind = "static"
+at = [0x08168024]
+
+[[sources]]
+key = "snorlax_route_16"
+name = "Snorlax on Route 16"
+kind = "static"
+at = [0x08168131]
+
+[[sources]]
+key = "electrode_power_plant_1"
+name = "Electrode in the Power Plant"
+kind = "static"
+at = [0x0816381B]
+
+[[sources]]
+key = "electrode_power_plant_2"
+name = "Electrode in the Power Plant"
+kind = "static"
+at = [0x08163879]
+
+[[sources]]
+key = "zapdos"
+name = "Zapdos in the Power Plant"
+kind = "static"
+at = [0x081637A7]
+
+[[sources]]
+key = "articuno"
+name = "Articuno in the Seafoam Islands"
+kind = "static"
+at = [0x0816319B]
+
+[[sources]]
+key = "moltres"
+name = "Moltres on Mt. Ember"
+kind = "static"
+at = [0x08163B22]
+
+[[sources]]
+key = "hypno_berry_forest"
+name = "Hypno in Berry Forest"
+kind = "static"
+at = [0x08163C9D]
+
+[[sources]]
+key = "mewtwo"
+name = "Mewtwo in Cerulean Cave"
+kind = "static"
+at = [0x081624F9]
+
+# FireRed's Sync Gates, at LeafGreen's addresses.
+[sync_gates]
+hold = 0x08F00000
+
+[[sync_gates.gates]]
+name = "Brock"
+sites = [{ at = 0x0816A57C, expect = "5C 01 9E 01 00" }]
+
+[[sync_gates.gates]]
+name = "Misty"
+sites = [{ at = 0x0816AA8A, expect = "5C 01 9F 01 00" }]
+
+[[sync_gates.gates]]
+name = "Lt. Surge"
+sites = [{ at = 0x0816B933, expect = "5C 01 A0 01 00" }]
+
+[[sync_gates.gates]]
+name = "Erika"
+sites = [{ at = 0x0816D04A, expect = "5C 01 A1 01 00" }]
+
+[[sync_gates.gates]]
+name = "Koga"
+sites = [{ at = 0x0816D537, expect = "5C 01 A2 01 00" }]
+
+[[sync_gates.gates]]
+name = "Sabrina"
+sites = [{ at = 0x0816EDC1, expect = "5C 01 A4 01 00" }]
+
+[[sync_gates.gates]]
+name = "Blaine"
+sites = [{ at = 0x0816D9BD, expect = "5C 01 A3 01 00" }]
+
+[[sync_gates.gates]]
+name = "Giovanni"
+sites = [{ at = 0x08169EB3, expect = "5C 01 5E 01 00" }]
+
+[[sync_gates.gates]]
+name = "Lorelei"
+sites = [{ at = 0x0816262F, expect = "5C 03 9A 01 00" }]
+
+[[sync_gates.gates]]
+name = "Bruno"
+sites = [{ at = 0x0816273F, expect = "5C 03 9B 01 00" }]
+
+[[sync_gates.gates]]
+name = "Agatha"
+sites = [{ at = 0x081628D7, expect = "5C 03 9C 01 00" }]
+
+[[sync_gates.gates]]
+name = "Lance"
+sites = [{ at = 0x08162A67, expect = "5C 03 9D 01 00" }]
+
+[[sync_gates.gates]]
+name = "Champion"
+sites = [
+    { at = 0x08162CA1, expect = "5C 03 B6 01 00" },
+    { at = 0x08162CAC, expect = "5C 03 B7 01 00" },
+    { at = 0x08162CB7, expect = "5C 03 B8 01 00" },
+]
+
+# FireRed's, with LeafGreen's party icon tables.
+[avatars]
+icon_table = 0x083D35DC
+icon_palette_indices = 0x083D3CBC
+icon_palette_table = 0x083D3E74

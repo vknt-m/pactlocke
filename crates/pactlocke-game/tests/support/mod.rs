@@ -62,9 +62,9 @@ pub const BODY: &str = r#"
 party = 0x02024284
 party_count = 0x02024029
 enemy_party = 0x0202402C
-pc_storage_pointer = 0x03005010
-save_block_1_pointer = 0x03005008
-save_block_2_pointer = 0x0300500C
+pc_storage = { pointer = 0x03005010 }
+save_block_1 = { pointer = 0x03005008 }
+save_block_2 = { pointer = 0x0300500C }
 region_map_section = 0x02036E10
 main_callback2 = 0x030030F4
 overworld_callback = 0x080565B4
@@ -127,7 +127,7 @@ pc_box_slots = 30
 pc_boxes_offset = 4
 trainer_id = 0x0A
 play_time = 0x0E
-badges = 0xFE4
+badge_flags = 0x820
 event_flags = 0xEE0
 trainer_size = 40
 trainer_party_flags = 0

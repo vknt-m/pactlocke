@@ -1,0 +1,501 @@
+# Pokémon Ruby (USA) 1.0. Addresses are pret's pokeruby symbols, and every
+# patch site's expected bytes were read from a clean dump. Laid out like
+# Emerald, but its save blocks and PC stay put, and the party is in IWRAM. The
+# rule methods are FireRed's, checked on Ruby and Sapphire. Its clock is
+# the fake-epoch real-time clock every Run's core keeps.
+
+schema = 1
+id = "ruby-usa-1.0"
+name = "Pokémon Ruby (USA) 1.0"
+game_code = "AXVE"
+family = "RSE"
+sha1 = "f28b6ffc97847e94a6c21a63cacf633ee5c8df1e"
+status = "supported"
+
+[symbols]
+party = 0x03004360
+party_count = 0x03004350
+enemy_party = 0x030045C0              # gEnemyParty
+pc_storage = { at = 0x020300A0 }
+save_block_1 = { at = 0x02025734 }
+save_block_2 = { at = 0x02024EA4 }
+region_map_section = 0x0202E83C        # gMapHeader.regionMapSectionId
+main_callback2 = 0x03001774            # gMain.callback2
+overworld_callback = 0x080543A4        # CB2_Overworld
+in_battle = { at = 0x03001BAD, mask = 0x02 }   # gMain.inBattle (Ruby's gMain is 4 bytes longer)
+battle_type_flags = 0x020239F8
+battle_mons = 0x02024A80
+battler_party_indexes = 0x02024A6A
+battler_statuses3 = 0x02024C98
+disable_structs = 0x02024CA8
+script_context_status = 0x030005B0     # 0 running, 1 waiting, 2 idle
+script_context = 0x030005B8
+species_info = 0x081FEC18
+species_names = 0x081F716C              # gSpeciesNames
+evolution_table = 0x08203B68            # gEvolutionTable
+items = 0x083C5564
+trainers = 0x081F04FC                   # gTrainers
+type_names = 0x081F9870                 # gTypeNames
+message_buffer = 0x020234CC             # gStringVar4
+
+[layout]
+# How a Pokémon is stored (pret's struct Pokemon / BoxPokemon), as in FireRed.
+party_slot_size = 100
+box_slot_size = 80
+encrypted = true
+ot_id = 0x04
+nickname = 0x08
+nickname_length = 10
+flags = 0x13
+egg_mask = 0x04
+has_species_mask = 0x02
+checksum = 0x1C
+substructures = 0x20
+level = 0x54
+hp = 0x56
+max_hp = 0x58
+battle_mon_size = 0x58
+battle_mon_hp = 0x28
+battle_type_trainer = 0x08
+# BATTLE_TYPE_FIRST_BATTLE and _WALLY_TUTORIAL: Birch's Poochyena, fought
+# before the Player has a ball, and Wally's catching demo.
+battle_type_uncatchable = 0x210
+battle_type_double = 0x01
+perish_song_status3 = 0x20
+disable_struct_size = 0x1C
+perish_timer = 0x0F
+script_context_stack_depth = 0x00
+script_context_stack = 0x0C
+script_context_pointer = 0x08
+species_info_size = 28
+species_name_length = 11
+species_count = 412                     # NUM_SPECIES
+evolutions_per_species = 5              # EVOS_PER_MON
+evolution_size = 8                      # struct Evolution
+evolution_target = 4
+primary_type = 6
+item_size = 44
+item_count = 349
+item_pocket = 26
+item_battle_usage = 32
+ball_pocket = 2                         # POCKET_POKE_BALLS
+pc_boxes = 14
+pc_box_slots = 30
+pc_boxes_offset = 4
+trainer_id = 0x0A                      # in save block 2
+play_time = 0x0E                       # in save block 2: hours, minutes, seconds, frames
+badge_flags = 0x807                    # FLAG_BADGE01_GET: eight flags, one per badge
+event_flags = 0x1220                   # in save block 1
+trainer_size = 40
+trainer_party_flags = 0
+trainer_party_size = 32
+trainer_party = 36
+trainer_mon_level = 2
+trainer_mon_sizes = [8, 16, 8, 16]
+type_name_length = 7
+balls_pocket = 0x600                   # in save block 1: bagPocket_PokeBalls
+balls_pocket_slots = 16
+dead_box = 14
+
+[options.battle_style]
+name = "Battle style"
+menu = "OPTION > BATTLE STYLE"
+save_block = 2
+offset = 0x15
+mask = 0x02
+values = { shift = 0x00, set = 0x02 }
+
+# Closes an Area: the ball is refused, and kept, with Dad's "time and place"
+# line: the Bag's, and the Safari Zone's BALL (battle string 0x530/4), which
+# gets a copy without the {PLAYER} placeholder battle text can't show, in
+# free ROM.
+[rules.catch_block]
+method = "patch"
+sites = [
+  { at = 0x0803DD20, expect = "10 B5 00 24", write = "01 20 70 47" },  # PlayerPartyAndPokemonStorageFull -> TRUE
+  { at = 0x080CA28C, expect = "F4 EA 40 08", write = "EA E8 40 08" },  # gOtherText_BoxIsFull -> gOtherText_DadsAdvice
+  { at = 0x08F00800, expect = "FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF", write = "BE BB BE B4 E7 00 D5 D8 EA DD D7 D9 AD AD AD FE CE DC D9 E6 D9 B4 E7 00 D5 00 E8 DD E1 D9 00 D5 E2 D8 00 E4 E0 D5 D7 D9 00 DA E3 E6 FA D9 EA D9 E6 ED E8 DC DD E2 DB AB FB FF" },  # "DAD's advice... / There's a time and place for / everything!"
+  { at = 0x084014BC, expect = "4C 0A 40 08", write = "00 08 F0 08" },  # the Safari BALL's line -> that copy
+]
+
+# The level-100 checks after `movs r1, #0x38` (MON_DATA_LEVEL); the first byte
+# is the cap. Not the Day Care's (TakeSelectedPokemonFromDaycare): it has only
+# the soft cap.
+[rules.level_cap]
+method = "patch"
+sites = [
+  { at = 0x080202B4, expect = "64 28" },  # atk23_getexp
+  { at = 0x0802059C, expect = "64 28" },  # atk23_getexp
+  { at = 0x0803E5F8, expect = "64 28" },  # PokemonUseItemEffects (Rare Candy)
+  { at = 0x080706A8, expect = "64 28" },  # DoRareCandyItemEffect
+]
+
+# BATTLE_TYPE_TRAINER added to the "items can't be used" mask in the action
+# selection (pret's HandleTurnActionSelectionState).
+[rules.no_items_trainer]
+method = "patch"
+sites = [{ at = 0x080126D4, expect = "02 09 00 00", write = "0A 09 00 00" }]
+
+# Only Poké Balls keep a battle use in wild battles.
+[rules.no_items_wild]
+method = "zero_table_field"
+
+[rules.set_mode]
+method = "option_bit"
+option = "battle_style"
+value = "set"
+
+# "Give a nickname?" is answered Yes, as in FireRed.
+[rules.must_nickname]
+method = "key_filter"
+battle_script_pointer = 0x02024C10   # gBattlescriptCurrInstr
+command_table = 0x081FA73C           # gBattleScriptingCommandsTable
+command = 0x0802BC91                 # atkF3_trygivecaughtmonnick
+battle_communication = 0x02024D1E
+field_yes_no = [0x0819F804]          # Std_MsgboxYesNo, after its yesnobox
+question = "give a nickname"
+
+# The game's region-map sections (pret's MAPSEC_*), in its own words.
+[areas]
+0x00 = "Littleroot Town"
+0x01 = "Oldale Town"
+0x02 = "Dewford Town"
+0x03 = "Lavaridge Town"
+0x04 = "Fallarbor Town"
+0x05 = "Verdanturf Town"
+0x06 = "Pacifidlog Town"
+0x07 = "Petalburg City"
+0x08 = "Slateport City"
+0x09 = "Mauville City"
+0x0A = "Rustboro City"
+0x0B = "Fortree City"
+0x0C = "Lilycove City"
+0x0D = "Mossdeep City"
+0x0E = "Sootopolis City"
+0x0F = "Ever Grande City"
+0x10 = "Route 101"
+0x11 = "Route 102"
+0x12 = "Route 103"
+0x13 = "Route 104"
+0x14 = "Route 105"
+0x15 = "Route 106"
+0x16 = "Route 107"
+0x17 = "Route 108"
+0x18 = "Route 109"
+0x19 = "Route 110"
+0x1A = "Route 111"
+0x1B = "Route 112"
+0x1C = "Route 113"
+0x1D = "Route 114"
+0x1E = "Route 115"
+0x1F = "Route 116"
+0x20 = "Route 117"
+0x21 = "Route 118"
+0x22 = "Route 119"
+0x23 = "Route 120"
+0x24 = "Route 121"
+0x25 = "Route 122"
+0x26 = "Route 123"
+0x27 = "Route 124"
+0x28 = "Route 125"
+0x29 = "Route 126"
+0x2A = "Route 127"
+0x2B = "Route 128"
+0x2C = "Route 129"
+0x2D = "Route 130"
+0x2E = "Route 131"
+0x2F = "Route 132"
+0x30 = "Route 133"
+0x31 = "Route 134"
+0x32 = "Underwater"
+0x33 = "Underwater"
+0x34 = "Underwater"
+0x35 = "Underwater"
+0x36 = "Underwater"
+0x37 = "Granite Cave"
+0x38 = "Mt. Chimney"
+0x39 = "Safari Zone"
+0x3A = "Battle Tower"
+0x3B = "Petalburg Woods"
+0x3C = "Rusturf Tunnel"
+0x3D = "Abandoned Ship"
+0x3E = "New Mauville"
+0x3F = "Meteor Falls"
+0x40 = "Meteor Falls"
+0x41 = "Mt. Pyre"
+0x42 = "Magma Hideout"
+0x43 = "Shoal Cave"
+0x44 = "Seafloor Cavern"
+0x45 = "Underwater"
+0x46 = "Victory Road"
+0x47 = "Mirage Island"
+0x48 = "Cave of Origin"
+0x49 = "Southern Island"
+0x4A = "Fiery Path"
+0x4B = "Fiery Path"
+0x4C = "Jagged Pass"
+0x4D = "Jagged Pass"
+0x4E = "Sealed Chamber"
+0x4F = "Underwater"
+0x50 = "Scorched Slab"
+0x51 = "Island Cave"
+0x52 = "Desert Ruins"
+0x53 = "Ancient Tomb"
+0x54 = "Inside of Truck"
+0x55 = "Sky Pillar"
+0x56 = "Secret Base"
+
+# The game repeats "Underwater": each says where it is. (pret's pokeruby
+# names 0x33 to 0x35 one route early; its maps put them under 126 to 128.)
+[area_renames]
+0x32 = "Underwater (124)"
+0x33 = "Underwater (126)"
+0x34 = "Underwater (127)"
+0x35 = "Underwater (128)"
+0x36 = "Underwater (Sootopolis)"
+0x45 = "Underwater (Seafloor Cavern)"
+0x4F = "Underwater (134)"
+
+# One Area per place: Meteor Falls', Fiery Path's and Jagged Pass's second
+# sections count as their first.
+[area_merges]
+0x40 = 0x3F
+0x4B = 0x4A
+0x4D = 0x4C
+
+# Level cap stages, in order: each next gym leader, then each Elite Four member
+# and the Champion. A gym stage is passed by badge count, a League stage by its
+# flag. Trainer ids are pret's TRAINER_*.
+[[level_caps]]
+name = "Roxanne"
+trainers = [265]
+badges = 1
+
+[[level_caps]]
+name = "Brawly"
+trainers = [266]
+badges = 2
+
+[[level_caps]]
+name = "Wattson"
+trainers = [267]
+badges = 3
+
+[[level_caps]]
+name = "Flannery"
+trainers = [268]
+badges = 4
+
+[[level_caps]]
+name = "Norman"
+trainers = [269]
+badges = 5
+
+[[level_caps]]
+name = "Winona"
+trainers = [270]
+badges = 6
+
+[[level_caps]]
+name = "Tate & Liza"
+trainers = [271]
+badges = 7
+
+[[level_caps]]
+name = "Wallace"
+trainers = [272]
+badges = 8
+
+[[level_caps]]
+name = "Sidney"
+trainers = [261]
+flag = 0x4DD   # FLAG_DEFEATED_ELITE_4_SYDNEY
+
+[[level_caps]]
+name = "Phoebe"
+trainers = [262]
+flag = 0x4DE   # FLAG_DEFEATED_ELITE_4_PHOEBE
+
+[[level_caps]]
+name = "Glacia"
+trainers = [263]
+flag = 0x4DF   # FLAG_DEFEATED_ELITE_4_GLACIA
+
+[[level_caps]]
+name = "Drake"
+trainers = [264]
+flag = 0x4E0   # FLAG_DEFEATED_ELITE_4_DRAKE
+
+[[level_caps]]
+name = "Champion"
+trainers = [335]
+flag = 0x804   # FLAG_SYS_GAME_CLEAR, set in the Hall of Fame
+
+# The Gift and Static catalogue: each source's givemon, giveegg or
+# setwildbattle instruction (found in the ROM by pret's script labels and
+# checked by the local acceptance test). The starter is the exception: the
+# game gives it from code after `special ChooseStarter`, whose instruction is
+# listed. Not listed: the Eon Ticket's Southern Island Latias. The Kecleon on
+# Routes 119 and 120 share one script, so they are one source; Steven's on
+# Route 120 is its own.
+[[sources]]
+key = "starter"
+name = "Starter"
+kind = "starter"
+at = [0x0814EA9D]
+
+[[sources]]
+key = "wynaut_egg"
+name = "Wynaut egg in Lavaridge Town"
+kind = "egg"
+at = [0x0814E799]
+
+[[sources]]
+key = "rustboro_fossil"
+name = "Devon fossil (Lileep or Anorith)"
+kind = "gift"
+at = [0x08157690, 0x081576E3]
+
+[[sources]]
+key = "castform"
+name = "Castform at the Weather Institute"
+kind = "gift"
+at = [0x08163D98]
+
+[[sources]]
+key = "beldum"
+name = "Beldum in Steven's house"
+kind = "gift"
+at = [0x0815AAAE]
+
+[[sources]]
+key = "kecleon"
+name = "Kecleon on Routes 119 and 120"
+kind = "static"
+at = [0x081A05EA]
+
+[[sources]]
+key = "kecleon_steven"
+name = "Kecleon with Steven on Route 120"
+kind = "static"
+at = [0x081518F0]
+
+[[sources]]
+key = "voltorb_new_mauville_1"
+name = "Voltorb in New Mauville"
+kind = "static"
+at = [0x0815E902]
+
+[[sources]]
+key = "voltorb_new_mauville_2"
+name = "Voltorb in New Mauville"
+kind = "static"
+at = [0x0815E920]
+
+[[sources]]
+key = "voltorb_new_mauville_3"
+name = "Voltorb in New Mauville"
+kind = "static"
+at = [0x0815E93E]
+
+[[sources]]
+key = "electrode_hideout_1"
+name = "Electrode in the Magma Hideout"
+kind = "static"
+at = [0x081A04FF]
+
+[[sources]]
+key = "electrode_hideout_2"
+name = "Electrode in the Magma Hideout"
+kind = "static"
+at = [0x081A051D]
+
+[[sources]]
+key = "regirock"
+name = "Regirock in the Desert Ruins"
+kind = "static"
+at = [0x0815CB91]
+
+[[sources]]
+key = "regice"
+name = "Regice in the Island Cave"
+kind = "static"
+at = [0x0815EFA9]
+
+[[sources]]
+key = "registeel"
+name = "Registeel in the Ancient Tomb"
+kind = "static"
+at = [0x0815F05C]
+
+[[sources]]
+key = "cave_of_origin_legendary"
+name = "Groudon in the Cave of Origin"
+kind = "static"
+at = [0x0815DE25]
+
+[[sources]]
+key = "rayquaza"
+name = "Rayquaza at the Sky Pillar"
+kind = "static"
+at = [0x0815F318]
+
+# Sync Gates: every gym leader, Elite Four member and the Champion, each by its
+# trainerbattle instruction, found by `cargo dev scan` and checked against the
+# ROM (Ruby has no gym rematches). A closed gate's first 5 bytes become a goto
+# to its hold script, written with the hold message into free ROM at `hold`
+# (0xFF in a clean ROM).
+[sync_gates]
+hold = 0x08F00000
+
+[[sync_gates.gates]]
+name = "Roxanne"
+sites = [{ at = 0x081578D9, expect = "5C 01 09 01 00" }]
+
+[[sync_gates.gates]]
+name = "Brawly"
+sites = [{ at = 0x08153152, expect = "5C 01 0A 01 00" }]
+
+[[sync_gates.gates]]
+name = "Wattson"
+sites = [{ at = 0x081565AB, expect = "5C 01 0B 01 00" }]
+
+[[sync_gates.gates]]
+name = "Flannery"
+sites = [{ at = 0x08153741, expect = "5C 01 0C 01 00" }]
+
+[[sync_gates.gates]]
+name = "Norman"
+sites = [{ at = 0x081549DE, expect = "5C 03 0D 01 00" }]
+
+[[sync_gates.gates]]
+name = "Winona"
+sites = [{ at = 0x08157EF0, expect = "5C 01 0E 01 00" }]
+
+[[sync_gates.gates]]
+name = "Tate & Liza"
+sites = [{ at = 0x0815A56B, expect = "5C 08 0F 01 00" }]
+
+[[sync_gates.gates]]
+name = "Wallace"
+sites = [{ at = 0x0815AFFF, expect = "5C 01 10 01 00" }]
+
+[[sync_gates.gates]]
+name = "Sidney"
+sites = [{ at = 0x0815B5AD, expect = "5C 03 05 01 00" }]
+
+[[sync_gates.gates]]
+name = "Phoebe"
+sites = [{ at = 0x0815B647, expect = "5C 03 06 01 00" }]
+
+[[sync_gates.gates]]
+name = "Glacia"
+sites = [{ at = 0x0815B6E1, expect = "5C 03 07 01 00" }]
+
+[[sync_gates.gates]]
+name = "Drake"
+sites = [{ at = 0x0815B77B, expect = "5C 03 08 01 00" }]
+
+[[sync_gates.gates]]
+name = "Champion"
+sites = [{ at = 0x0815B811, expect = "5C 03 4F 01 00" }]

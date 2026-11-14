@@ -24,7 +24,7 @@ pub use game::{
 };
 pub use icons::{ICON_SIZE, party_icon_rgba};
 pub use profile::{
-    Bit, Family, GameProfile, GateDef, HexBytes, Layout, Method, OptionDef, PatchSite, ROM_BASE, RuleMethods,
+    Bit, Family, GameProfile, GateDef, HexBytes, Layout, Method, OptionDef, PatchSite, Place, ROM_BASE, RuleMethods,
     SCHEMA_VERSION, SupportStatus, Symbols, SyncGates,
 };
 pub use profile_game::ProfileGame;

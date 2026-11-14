@@ -209,6 +209,62 @@ fn badges_trainer_id_and_options_are_read_from_the_save_blocks() {
     assert_eq!(game.option("no_such_option"), None);
 }
 
+/// The test profile laid out like Ruby and Sapphire: save blocks and the PC
+/// at fixed addresses rather than behind pointers, and badge flags that
+/// don't start on a byte (Ruby's FLAG_BADGE01_GET is 0x807).
+fn ruby_like(image: MemoryImage) -> ProfileGame<MemoryImage> {
+    let rom = image.rom.clone();
+    let text = profile_toml("ruby-like", &sha1_hex(&rom))
+        .replace(
+            "save_block_1 = { pointer = 0x03005008 }",
+            "save_block_1 = { at = 0x02025000 }",
+        )
+        .replace(
+            "save_block_2 = { pointer = 0x0300500C }",
+            "save_block_2 = { at = 0x02024F00 }",
+        )
+        .replace(
+            "pc_storage = { pointer = 0x03005010 }",
+            "pc_storage = { at = 0x02029000 }",
+        )
+        .replace("badge_flags = 0x820", "badge_flags = 0x807");
+    let store = ProfileStore::from_sources([("ruby-like.toml", text)]).unwrap();
+    let profile = store.find(&sha1_hex(&rom)).unwrap().clone();
+    ProfileGame::new(profile, rom, image)
+}
+
+#[test]
+fn a_game_with_fixed_save_blocks_reads_them_where_they_are() {
+    let mut image = MemoryImage::new(patchable_rom(b"AXVE"));
+    // Nothing behind the pointer symbols: they would read address 0.
+    image.put32(SAVE_BLOCK_2 + 0x0A, 0x0BAD_F00D);
+    let flags = SAVE_BLOCK_1 + 0xEE0;
+    // Badges 1 and 3: flags 0x807 and 0x809, either side of a byte boundary.
+    image.put8(flags + 0x807 / 8, 1 << (0x807 % 8));
+    image.put8(flags + 0x809 / 8, 1 << (0x809 % 8));
+    let bulba = TestMon {
+        pid: 0x1234_5678,
+        ot_id: 0x0BAD_F00D,
+        species: 1,
+        nickname: BULBA,
+        met_section: 0x10,
+        egg: false,
+        level: 5,
+        hp: 19,
+        max_hp: 21,
+    };
+    image.put(PC_STORAGE + 4 + 80 * 2, &bulba.party_bytes()[..80]);
+    let mut game = ruby_like(image);
+
+    assert_eq!(game.trainer_id(), 0x0BAD_F00D);
+    let badges = game.badges();
+    assert_eq!(badges.count(), 2);
+    assert!(badges.has(1) && !badges.has(2) && badges.has(3));
+    let pc = game.pc();
+    assert_eq!(pc.len(), 1);
+    assert_eq!((pc[0].box_number, pc[0].slot, pc[0].pokemon.species), (1, 3, 1));
+}
+
 #[test]
 fn blocking_catches_patches_every_catch_site_and_unblocking_puts_it_back() {
     let mut game = at_overworld();

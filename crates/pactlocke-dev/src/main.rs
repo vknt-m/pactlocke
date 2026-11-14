@@ -21,7 +21,13 @@ use pactlocke_game::{GameProfile, ProfileStore, sha1_hex};
 
 /// Each profile's acceptance scripts: the test targets, in `pactlocke-game`
 /// and `pactlocke-run`, that drive its game.
-const ACCEPTANCE: &[(&str, &str)] = &[("firered-usa-1.0", "firered_acceptance")];
+const ACCEPTANCE: &[(&str, &str)] = &[
+    ("firered-usa-1.0", "firered_acceptance"),
+    ("leafgreen-usa-1.0", "leafgreen_acceptance"),
+    ("emerald-usa-1.0", "emerald_acceptance"),
+    ("ruby-usa-1.0", "ruby_acceptance"),
+    ("sapphire-usa-1.0", "sapphire_acceptance"),
+];
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

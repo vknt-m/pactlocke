@@ -1,0 +1,211 @@
+# Pokémon Sapphire (USA) 1.0, laid out like Ruby: its RAM is Ruby's, and only
+# ROM addresses move. Each one here is pret's pokesapphire symbol, its bytes
+# checked in a clean dump.
+
+schema = 1
+id = "sapphire-usa-1.0"
+name = "Pokémon Sapphire (USA) 1.0"
+game_code = "AXPE"
+sha1 = "3ccbbd45f8553c36463f13b938e833f652b793e4"
+status = "supported"
+parent = "ruby-usa-1.0"
+
+[symbols]
+overworld_callback = 0x080543A8        # CB2_Overworld
+species_info = 0x081FEBA8
+species_names = 0x081F70FC              # gSpeciesNames
+evolution_table = 0x08203AF8            # gEvolutionTable
+items = 0x083C55BC
+trainers = 0x081F048C                   # gTrainers
+type_names = 0x081F9800                 # gTypeNames
+
+# As Ruby's, at Sapphire's addresses.
+[rules.catch_block]
+method = "patch"
+sites = [
+  { at = 0x0803DD20, expect = "10 B5 00 24", write = "01 20 70 47" },  # PlayerPartyAndPokemonStorageFull -> TRUE
+  { at = 0x080CA28C, expect = "50 EB 40 08", write = "46 E9 40 08" },  # gOtherText_BoxIsFull -> gOtherText_DadsAdvice
+  { at = 0x08F00800, expect = "FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF", write = "BE BB BE B4 E7 00 D5 D8 EA DD D7 D9 AD AD AD FE CE DC D9 E6 D9 B4 E7 00 D5 00 E8 DD E1 D9 00 D5 E2 D8 00 E4 E0 D5 D7 D9 00 DA E3 E6 FA D9 EA D9 E6 ED E8 DC DD E2 DB AB FB FF" },  # "DAD's advice... / There's a time and place for / everything!"
+  { at = 0x08401514, expect = "A4 0A 40 08", write = "00 08 F0 08" },  # the Safari BALL's line -> that copy
+]
+
+[rules.level_cap]
+method = "patch"
+sites = [
+  { at = 0x080202B4, expect = "64 28" },  # atk23_getexp
+  { at = 0x0802059C, expect = "64 28" },  # atk23_getexp
+  { at = 0x0803E5F8, expect = "64 28" },  # PokemonUseItemEffects (Rare Candy)
+  { at = 0x080706AC, expect = "64 28" },  # DoRareCandyItemEffect
+]
+
+[rules.must_nickname]
+method = "key_filter"
+battle_script_pointer = 0x02024C10   # gBattlescriptCurrInstr
+command_table = 0x081FA6CC           # gBattleScriptingCommandsTable
+command = 0x0802BC91                 # atkF3_trygivecaughtmonnick
+battle_communication = 0x02024D1E
+field_yes_no = [0x0819F794]          # Std_MsgboxYesNo, after its yesnobox
+question = "give a nickname"
+
+[areas]
+0x42 = "Aqua Hideout"
+
+# Ruby's catalogue at Sapphire's addresses, with Kyogre for Groudon. Not
+# listed: the Eon Ticket's Southern Island Latios.
+[[sources]]
+key = "starter"
+name = "Starter"
+kind = "starter"
+at = [0x0814EA31]
+
+[[sources]]
+key = "wynaut_egg"
+name = "Wynaut egg in Lavaridge Town"
+kind = "egg"
+at = [0x0814E72D]
+
+[[sources]]
+key = "rustboro_fossil"
+name = "Devon fossil (Lileep or Anorith)"
+kind = "gift"
+at = [0x08157620, 0x08157673]
+
+[[sources]]
+key = "castform"
+name = "Castform at the Weather Institute"
+kind = "gift"
+at = [0x08163D28]
+
+[[sources]]
+key = "beldum"
+name = "Beldum in Steven's house"
+kind = "gift"
+at = [0x0815AA3E]
+
+[[sources]]
+key = "kecleon"
+name = "Kecleon on Routes 119 and 120"
+kind = "static"
+at = [0x081A057A]
+
+[[sources]]
+key = "kecleon_steven"
+name = "Kecleon with Steven on Route 120"
+kind = "static"
+at = [0x08151884]
+
+[[sources]]
+key = "voltorb_new_mauville_1"
+name = "Voltorb in New Mauville"
+kind = "static"
+at = [0x0815E892]
+
+[[sources]]
+key = "voltorb_new_mauville_2"
+name = "Voltorb in New Mauville"
+kind = "static"
+at = [0x0815E8B0]
+
+[[sources]]
+key = "voltorb_new_mauville_3"
+name = "Voltorb in New Mauville"
+kind = "static"
+at = [0x0815E8CE]
+
+[[sources]]
+key = "electrode_hideout_1"
+name = "Electrode in the Aqua Hideout"
+kind = "static"
+at = [0x081A048F]
+
+[[sources]]
+key = "electrode_hideout_2"
+name = "Electrode in the Aqua Hideout"
+kind = "static"
+at = [0x081A04AD]
+
+[[sources]]
+key = "regirock"
+name = "Regirock in the Desert Ruins"
+kind = "static"
+at = [0x0815CB21]
+
+[[sources]]
+key = "regice"
+name = "Regice in the Island Cave"
+kind = "static"
+at = [0x0815EF39]
+
+[[sources]]
+key = "registeel"
+name = "Registeel in the Ancient Tomb"
+kind = "static"
+at = [0x0815EFEC]
+
+[[sources]]
+key = "cave_of_origin_legendary"
+name = "Kyogre in the Cave of Origin"
+kind = "static"
+at = [0x0815DDB5]
+
+[[sources]]
+key = "rayquaza"
+name = "Rayquaza at the Sky Pillar"
+kind = "static"
+at = [0x0815F2A8]
+
+# Ruby's Sync Gates, at Sapphire's addresses.
+[sync_gates]
+hold = 0x08F00000
+
+[[sync_gates.gates]]
+name = "Roxanne"
+sites = [{ at = 0x08157869, expect = "5C 01 09 01 00" }]
+
+[[sync_gates.gates]]
+name = "Brawly"
+sites = [{ at = 0x081530E2, expect = "5C 01 0A 01 00" }]
+
+[[sync_gates.gates]]
+name = "Wattson"
+sites = [{ at = 0x0815653B, expect = "5C 01 0B 01 00" }]
+
+[[sync_gates.gates]]
+name = "Flannery"
+sites = [{ at = 0x081536D1, expect = "5C 01 0C 01 00" }]
+
+[[sync_gates.gates]]
+name = "Norman"
+sites = [{ at = 0x0815496E, expect = "5C 03 0D 01 00" }]
+
+[[sync_gates.gates]]
+name = "Winona"
+sites = [{ at = 0x08157E80, expect = "5C 01 0E 01 00" }]
+
+[[sync_gates.gates]]
+name = "Tate & Liza"
+sites = [{ at = 0x0815A4FB, expect = "5C 08 0F 01 00" }]
+
+[[sync_gates.gates]]
+name = "Wallace"
+sites = [{ at = 0x0815AF8F, expect = "5C 01 10 01 00" }]
+
+[[sync_gates.gates]]
+name = "Sidney"
+sites = [{ at = 0x0815B53D, expect = "5C 03 05 01 00" }]
+
+[[sync_gates.gates]]
+name = "Phoebe"
+sites = [{ at = 0x0815B5D7, expect = "5C 03 06 01 00" }]
+
+[[sync_gates.gates]]
+name = "Glacia"
+sites = [{ at = 0x0815B671, expect = "5C 03 07 01 00" }]
+
+[[sync_gates.gates]]
+name = "Drake"
+sites = [{ at = 0x0815B70B, expect = "5C 03 08 01 00" }]
+
+[[sync_gates.gates]]
+name = "Champion"
+sites = [{ at = 0x0815B7A1, expect = "5C 03 4F 01 00" }]
