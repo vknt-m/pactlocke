@@ -264,11 +264,17 @@ impl<M: Memory> Game for ProfileGame<M> {
         for box_index in 0..boxes {
             for slot_index in 0..slots {
                 let addr = self.box_slot_addr(box_index, slot_index);
-                if self.has_species(addr) {
+                if !self.has_species(addr) {
+                    continue;
+                }
+                // A slot with the flag but no species holds nothing: Emerald
+                // leaves its last one so for a frame while it moves its save data.
+                let pokemon = self.pokemon(addr, false);
+                if pokemon.species != 0 {
                     stored.push(StoredPokemon {
                         box_number: box_index + 1,
                         slot: slot_index + 1,
-                        pokemon: self.pokemon(addr, false),
+                        pokemon,
                     });
                 }
             }

@@ -67,6 +67,16 @@ fn the_area_is_the_current_region_map_section_after_renames() {
 }
 
 #[test]
+fn a_pc_slot_flagged_as_holding_a_pokemon_but_with_no_species_is_empty() {
+    // As Emerald leaves its last box slot for a frame while it moves its save
+    // data: the has-species flag set over zeroed data (PID 0, species 0).
+    let mut game = at_overworld();
+    let last_slot = PC_STORAGE + 4 + (13 * 30 + 29) * 80;
+    game.memory_mut().put8(last_slot + 0x13, 0x02);
+    assert_eq!(game.pc(), vec![], "no Pokémon there: nothing a Gift could be");
+}
+
+#[test]
 fn the_pc_lists_every_stored_pokemon_with_its_box_and_slot() {
     let mut game = at_overworld();
     let boxed = bulbasaur().party_bytes();
