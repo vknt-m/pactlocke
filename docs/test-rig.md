@@ -39,7 +39,8 @@ Each scenario is a folder in `scripts/rig/scenarios/<game>/`. `rig.env` names th
 | `link-death` | 2 | The starters are one Link. Red's faints to the rival with Faint = Dead, and Blue's dies with it, judged from Red's Shadow Game. |
 | `sync-gate` | 2 | The lab rival as a test-only Sync Gate holds each Player with its message until both are Ready there, then opens with a Run Checkpoint every Player is captured in. The battle itself isn't played: the lab's walk-in trigger can't run again after a hold. |
 | `retry` | 2 | After the gate's Run Checkpoint, both walk out of the lab and vote for a Retry. Both games go back as a new boot, and each Shadow Game follows it and matches. |
-| `disconnect` | 2 | Blue's network is cut for 90 seconds, long enough for the connection to drop, while they play on. Blue reconnects, their stream catches up, and Red's Shadow Game of Blue matches. |
+| `disconnect` | 2 | Blue's network is cut for 90 seconds, long enough for the connection to drop, while they play on. With Red silent, Blue takes over hosting; once the cut ends Red joins Blue as a Player, each stream catches up, and each Shadow Game matches. |
+| `host-vanish` | 3 | The Host vanishes at the lab. Blue, next in join order, hosts from then on, Green dials Blue, and both Shadow Games of the Players who stayed match. |
 | `savestate-cheat` | 2 | Blue's game goes back to its Run Checkpoint with no Retry in the log, and Red's app flags it as a savestate load. |
 
 Emerald scenarios wait for Emerald's Game Profile: the app won't start a Run on a game it has no profile for.

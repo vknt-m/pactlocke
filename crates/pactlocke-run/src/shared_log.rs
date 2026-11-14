@@ -159,6 +159,9 @@ pub enum LogError {
     BadTakeover { seq: u64 },
     /// A Dropout not everyone else voted for.
     BadDropout { seq: u64 },
+    /// From a copy of the log without the takeover this copy has there or
+    /// after: the copy with the rightful takeover wins.
+    WithoutTakeover { seq: u64 },
 }
 
 impl std::fmt::Display for LogError {
@@ -179,6 +182,12 @@ impl std::fmt::Display for LogError {
                 write!(f, "entry {seq} takes over the Run log out of turn")
             }
             LogError::BadDropout { seq } => write!(f, "entry {seq} drops a Player nobody agreed to drop"),
+            LogError::WithoutTakeover { seq } => {
+                write!(
+                    f,
+                    "entry {seq} is from a copy of the Run log without the takeover this copy has"
+                )
+            }
             LogError::BadRetry { seq } => write!(
                 f,
                 "entry {seq} is a Retry nobody agreed to: not everyone voted Yes, no Retry is left, or it isn't the latest Run Checkpoint"
@@ -202,6 +211,8 @@ pub struct Tallies {
 /// One copy of the Run log: the Host's, or a Player's, each checked entry by entry.
 #[derive(Debug, Clone)]
 pub struct RunLog {
+    /// The Run's first Host, who wrote the Genesis entry.
+    first_host: PlayerKey,
     host: [u8; 32],
     run_id: [u8; 32],
     entries: Vec<LogEntry>,
@@ -215,6 +226,7 @@ impl RunLog {
     /// An empty log for the Run the Host with this key hosts.
     pub fn new(host: [u8; 32]) -> Self {
         Self {
+            first_host: host,
             host,
             run_id: [0; 32],
             entries: Vec::new(),
@@ -222,6 +234,11 @@ impl RunLog {
             counters: BTreeMap::new(),
             dropped: Vec::new(),
         }
+    }
+
+    /// The Run's first Host, who wrote the Genesis entry.
+    pub fn first_host(&self) -> PlayerKey {
+        self.first_host
     }
 
     /// Who orders the log now: the Host, or whoever took over.
@@ -397,6 +414,42 @@ impl RunLog {
         self.counters.insert(s.author, s.counter);
         self.entries.push(entry);
         Ok(())
+    }
+
+    /// Takes in an entry of the Host's copy of the log, as it comes. Where
+    /// this copy has a different entry there, the copies split (the Host
+    /// vanished mid-send, or played on alone): the Host's copy wins from
+    /// there on, and the submissions of `mine` this copy drops come back, in
+    /// order, to send again. Unless this copy has a takeover from there on:
+    /// the copy with the rightful takeover wins, so this one stays.
+    /// An entry already here changes nothing.
+    pub fn give_way_to(&mut self, entry: LogEntry, mine: &PlayerKey) -> Result<Vec<Submission>, LogError> {
+        let at = entry.seq as usize;
+        match self.entries.get(at) {
+            None => self.accept(entry).map(|()| Vec::new()),
+            Some(here) if *here == entry => Ok(Vec::new()),
+            Some(_)
+                if self.entries[at..]
+                    .iter()
+                    .any(|e| body_kind(&e.submission.body) == Some(Kind::Takeover)) =>
+            {
+                Err(LogError::WithoutTakeover { seq: entry.seq })
+            }
+            Some(_) => {
+                let mut theirs = Self::new(self.first_host);
+                for kept in &self.entries[..at] {
+                    theirs.accept(kept.clone())?;
+                }
+                theirs.accept(entry)?;
+                let dropped = self.entries[at..]
+                    .iter()
+                    .filter(|e| e.submission.author == *mine)
+                    .map(|e| e.submission.clone())
+                    .collect();
+                *self = theirs;
+                Ok(dropped)
+            }
+        }
     }
 
     pub fn entries(&self) -> &[LogEntry] {

@@ -4,8 +4,9 @@ include ../common/starter.txt
 sync lab 2
 cut 90
 m B 26000
-# The connection really dropped and was made again.
-expect reconnected within 120
+# Red was silent to Blue for over ten seconds: Blue, next in join order,
+# took over hosting, and Red joins Blue once the cut ends.
+expect log takeover by Blue within 120
 expect matched within 180
 expect no-errors
 sync done 2

@@ -160,6 +160,12 @@ impl Spectate {
                 .collect();
             *avatars.lock().unwrap_or_else(|e| e.into_inner()) = now;
         }
+        // Streams go through whoever hosts now: after a takeover, the new Host.
+        if let Some(host) = lobbies.host_key()
+            && host != self.hub.host()
+        {
+            self.hub.host_is(host);
+        }
         let own = std::mem::take(&mut *self.outbox.lock().unwrap_or_else(|e| e.into_inner()));
         for chunk in own {
             for out in self.hub.own(chunk) {

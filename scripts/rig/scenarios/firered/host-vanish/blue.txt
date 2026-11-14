@@ -1,0 +1,13 @@
+# The Host vanished at the lab: Blue takes over hosting about ten seconds
+# later, Green dials Blue, and both play on with their Shadow Games matched.
+include ../common/join.txt
+speed 4
+include ../common/starter.txt
+sync lab 3
+m B 1200
+expect log takeover by Blue within 90
+m B 1200
+expect matched within 120
+expect no-errors
+sync done 2
+w 300

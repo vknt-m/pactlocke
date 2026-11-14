@@ -351,3 +351,36 @@ fn after_the_lock_a_player_closed_for_misbehaving_keeps_their_place_in_the_roste
         "a few drops on the new connection don't close it"
     );
 }
+
+/// The Host vanished and Blue, next in join order, hosts the
+/// lobby from now on. The rest of the roster dials Blue by key and is let
+/// in with no invite; the old Host comes back as a Player; nobody else
+/// gets in, and there is no invite to give out.
+#[test]
+fn the_next_player_hosts_the_locked_lobby_and_the_roster_dials_them_by_key() {
+    let run = host_lobby().run().clone();
+    let roster = vec![(HOST, "Red".to_owned()), (GREEN, "Green".to_owned())];
+    let mut net = MemoryNet::new(HostLobby::taken_over(run.clone(), "Blue", VERSION, roster));
+    assert!(net.host.is_locked());
+
+    let green = JoinLobby::rejoin(BLUE, None, "Green", VERSION, Some(FIRERED.into()));
+    assert_eq!(net.connect(GREEN, green), Admission::Admit);
+    let red = JoinLobby::rejoin(BLUE, None, "Red", VERSION, Some(FIRERED.into()));
+    assert_eq!(net.connect(HOST, red), Admission::Admit, "the old Host, as a Player");
+
+    let everyone = [
+        player("Blue", true, RomStatus::Matches),
+        player("Red", false, RomStatus::Matches),
+        player("Green", false, RomStatus::Matches),
+    ];
+    assert_eq!(net.host.players(), everyone);
+    for peer in [GREEN, HOST] {
+        let JoinState::InLobby { run: seen, .. } = net.joiner(peer).state() else {
+            panic!("{peer:?} isn't in the lobby: {:?}", net.joiner(peer).state());
+        };
+        assert_eq!(*seen, run);
+    }
+
+    let stranger = JoinLobby::rejoin(BLUE, None, "Mallory", VERSION, Some(FIRERED.into()));
+    assert_eq!(net.connect(STRANGER, stranger), Admission::Refuse(Refusal::RunStarted));
+}

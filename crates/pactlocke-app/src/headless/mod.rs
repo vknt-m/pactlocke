@@ -207,6 +207,8 @@ impl Headless {
             Step::Shared(dir) => {
                 std::fs::create_dir_all(dir).map_err(|e| format!("{} can't be made: {e}", dir.display()))?;
                 self.shared = Some(dir.clone());
+                // Where a Player who takes over hosting says how to reach them.
+                self.lobbies.addresses = Some(dir.clone());
             }
             Step::Preset(preset) => self.host_setup()?.choose(*preset),
             Step::Rule { rule, on } => {

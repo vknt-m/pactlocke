@@ -8,8 +8,8 @@ use eframe::egui;
 use pactlocke_game::{CapabilityReport, LevelCap, MAX_LEVEL, Rule};
 use pactlocke_net::{APP_VERSION, HostNode, JoinNode, Message, PeerKey, RunAdvert, new_key};
 use pactlocke_run::{
-    Locked, LogBody, LogEntry, PlayerKey, Preset, Ruleset, RunEvent, RunLog, RunSetup, SetupCheck, SetupMessage,
-    SetupPlayer, SetupView, Signer, Submission,
+    Locked, LogBody, LogEntry, LogError, PlayerKey, Presence, Preset, Ruleset, RunEvent, RunLog, RunSetup, SetupCheck,
+    SetupMessage, SetupPlayer, SetupView, Signer, Submission,
 };
 
 /// How often the Host sends setup again, for a Player who reconnected.
@@ -76,9 +76,13 @@ fn rule_on(ruleset: &mut Ruleset, rule: Rule) -> Option<&mut bool> {
     })
 }
 
+/// Why a Host who took over after the lock has no setup to change.
+const TAKEN_OVER: &str = "The Run has started: its Ruleset is locked.";
+
 /// The Host's side: setup, and the log they order.
 pub struct HostCoop {
-    setup: RunSetup,
+    /// Run setup; none for a Player who took over hosting after the lock.
+    setup: Option<RunSetup>,
     log: RunLog,
     signer: Signer,
     rom: Vec<u8>,
@@ -88,6 +92,8 @@ pub struct HostCoop {
     level_caps: Vec<LevelCap>,
     /// The setup last sent to everyone, and when.
     sent: Option<(SetupView, i64)>,
+    /// When the Host last let everyone hear from them, with no setup to send.
+    heartbeat_ms: i64,
     started: bool,
     error: Option<String>,
     /// Input stream messages from Players, for Spectate: from whom, and the bytes.
@@ -115,13 +121,14 @@ impl HostCoop {
         setup.set_sync_gates(rom.sync_gates);
         let mut coop = Self {
             log: RunLog::new(signer.public()),
-            setup,
+            setup: Some(setup),
             signer,
             rom: rom.rom,
             path: rom.path,
             preset,
             level_caps: rom.level_caps,
             sent: None,
+            heartbeat_ms: 0,
             started: false,
             error: None,
             stream_inbox: Vec::new(),
@@ -138,6 +145,37 @@ impl HostCoop {
             },
         );
         coop
+    }
+
+    /// The Player with `key`, next in join order, takes over ordering the
+    /// Run `log` from a Host gone silent, then orders the entries they had
+    /// waiting for the old Host, signed again after the takeover.
+    pub fn take_over(key: [u8; 32], log: RunLog, waiting: Vec<LogBody>, rom_path: PathBuf) -> Self {
+        let mut coop = Self {
+            setup: None,
+            log,
+            signer: Signer::from_secret(key),
+            rom: Vec::new(),
+            path: rom_path,
+            preset: Preset::ClassicNuzlocke,
+            level_caps: Vec::new(),
+            sent: None,
+            heartbeat_ms: 0,
+            started: true,
+            error: None,
+            stream_inbox: Vec::new(),
+        };
+        coop.submit(None, &LogBody::Takeover);
+        for body in waiting {
+            coop.submit(None, &body);
+        }
+        coop
+    }
+
+    /// The Host hands over to a Player who took over hosting: the Run log
+    /// as it is here, and where the Host's ROM is.
+    pub fn into_log(self) -> (RunLog, PathBuf) {
+        (self.log, self.path)
     }
 
     fn me(&self) -> [u8; 32] {
@@ -158,6 +196,12 @@ impl HostCoop {
                     node.send(None, Message::Log(entry.to_bytes()));
                 }
             }
+            // Players send their waiting entries again whenever they connect,
+            // before they have the log: a repeat, or one ahead of a gap they
+            // fill once they have it, is no harm.
+            Err(e @ (LogError::Replayed { .. } | LogError::Skipped { .. })) => {
+                log::debug!("A Run log entry sent again was refused: {e}");
+            }
             Err(e) => self.error = Some(format!("A Run log entry was refused: {e}")),
         }
     }
@@ -167,13 +211,15 @@ impl HostCoop {
     /// once the countdown is over.
     pub fn pump(&mut self, node: &HostNode, now_ms: i64) -> Option<CoopStart> {
         let roster = node.view().roster;
-        let gone: Vec<[u8; 32]> = self.setup.view().players[1..]
-            .iter()
-            .map(|p| p.key)
-            .filter(|key| !roster.iter().any(|(peer, _)| peer.0 == *key))
-            .collect();
-        for key in gone {
-            self.setup.leave(&key);
+        if let Some(setup) = &mut self.setup {
+            let gone: Vec<[u8; 32]> = setup.view().players[1..]
+                .iter()
+                .map(|p| p.key)
+                .filter(|key| !roster.iter().any(|(peer, _)| peer.0 == *key))
+                .collect();
+            for key in gone {
+                setup.leave(&key);
+            }
         }
         for (from, message) in node.take_inbox() {
             match message {
@@ -184,7 +230,9 @@ impl HostCoop {
                     if let SetupMessage::Check(check) = &message {
                         self.player_checks_in(node, from, &roster, check);
                     }
-                    self.setup.receive(&from.0, message);
+                    if let Some(setup) = &mut self.setup {
+                        setup.receive(&from.0, message);
+                    }
                 }
                 Message::Log(bytes) => {
                     if let Some(submission) = Submission::from_bytes(&bytes) {
@@ -201,17 +249,30 @@ impl HostCoop {
         if let Some(player) = self.log.dropout_due() {
             self.submit(Some(node), &LogBody::Dropout { player });
         }
-        let view = self.setup.view();
-        let stale = self
-            .sent
-            .as_ref()
-            .is_none_or(|(sent, at)| *sent != view || now_ms - at >= RESEND_MS);
-        if stale {
-            node.send(
-                None,
-                Message::Setup(SetupMessage::State(Box::new(view.clone())).to_bytes()),
-            );
-            self.sent = Some((view, now_ms));
+        match self.setup.as_ref().map(RunSetup::view) {
+            Some(view) => {
+                let stale = self
+                    .sent
+                    .as_ref()
+                    .is_none_or(|(sent, at)| *sent != view || now_ms - at >= RESEND_MS);
+                if stale {
+                    node.send(
+                        None,
+                        Message::Setup(SetupMessage::State(Box::new(view.clone())).to_bytes()),
+                    );
+                    self.sent = Some((view, now_ms));
+                }
+            }
+            // With no setup to send, the newest entry again, so everyone
+            // keeps hearing from the Host even while no game plays.
+            None => {
+                if now_ms - self.heartbeat_ms >= RESEND_MS
+                    && let Some(last) = self.log.entries().last()
+                {
+                    node.send(None, Message::Log(last.to_bytes()));
+                    self.heartbeat_ms = now_ms;
+                }
+            }
         }
         self.start_when_counted_down(now_ms)
     }
@@ -219,20 +280,22 @@ impl HostCoop {
     /// A Player says what they bring: on their first word (or after a
     /// reconnect) they join setup and get the whole log so far.
     fn player_checks_in(&mut self, node: &HostNode, from: PeerKey, roster: &[(PeerKey, String)], check: &SetupCheck) {
-        let known = self.setup.view().players.iter().any(|p| p.key == from.0);
-        if !known {
-            let name = roster
-                .iter()
-                .find(|(peer, _)| *peer == from)
-                .map_or_else(|| "Player".to_owned(), |(_, name)| name.clone());
-            let joined = self.setup.join(SetupPlayer {
-                key: from.0,
-                name,
-                check: check.clone(),
-                ready_for: None,
-            });
-            if joined.is_err() {
-                return;
+        if let Some(setup) = &mut self.setup {
+            let known = setup.view().players.iter().any(|p| p.key == from.0);
+            if !known {
+                let name = roster
+                    .iter()
+                    .find(|(peer, _)| *peer == from)
+                    .map_or_else(|| "Player".to_owned(), |(_, name)| name.clone());
+                let joined = setup.join(SetupPlayer {
+                    key: from.0,
+                    name,
+                    check: check.clone(),
+                    ready_for: None,
+                });
+                if joined.is_err() {
+                    return;
+                }
             }
         }
         for entry in self.log.entries() {
@@ -277,11 +340,11 @@ impl HostCoop {
 
     /// The setup section of the lobby window.
     pub fn show(&mut self, ui: &mut egui::Ui, node: &HostNode, now_ms: i64) {
-        let view = self.setup.view();
         if let Some(locked) = self.log.locked() {
             locked_section(ui, &locked, &self.log, now_ms);
             return;
         }
+        let view = self.setup_mut().view();
         ui.horizontal(|ui| {
             ui.label("Preset");
             let mut preset = self.preset;
@@ -294,12 +357,12 @@ impl HostCoop {
                 });
             if preset != self.preset {
                 self.preset = preset;
-                let _ = self.setup.choose(preset);
+                let _ = self.setup_mut().choose(preset);
             }
         });
-        let mut ruleset = self.setup.ruleset().clone();
+        let mut ruleset = self.setup_mut().ruleset().clone();
         for (rule, text) in RULES {
-            let unavailable = self.setup.unavailable(rule);
+            let unavailable = self.setup_mut().unavailable(rule);
             let on = rule_on(&mut ruleset, rule).expect("a chosen rule");
             let checkbox = ui.add_enabled(unavailable.is_none(), egui::Checkbox::new(on, text));
             if let Some(reason) = unavailable {
@@ -308,15 +371,15 @@ impl HostCoop {
         }
         let mut caps = ruleset.level_caps.is_some();
         ui.add_enabled(
-            self.setup.unavailable(Rule::LevelCap).is_none(),
+            self.setup_mut().unavailable(Rule::LevelCap).is_none(),
             egui::Checkbox::new(&mut caps, "Level caps"),
         );
         if caps != ruleset.level_caps.is_some() {
             ruleset.level_caps = caps.then(|| self.level_caps.clone());
         }
-        let gates = self.setup.sync_gates().to_vec();
+        let gates = self.setup_mut().sync_gates().to_vec();
         if !gates.is_empty() {
-            let unavailable = self.setup.unavailable(Rule::SyncGates);
+            let unavailable = self.setup_mut().unavailable(Rule::SyncGates);
             ui.collapsing(format!("Sync Gates · {}", ruleset.sync_gates.len()), |ui| {
                 if let Some(reason) = &unavailable {
                     ui.weak(format!("Unavailable: {reason}"));
@@ -357,15 +420,15 @@ impl HostCoop {
                 });
             });
         }
-        if ruleset != *self.setup.ruleset() {
-            let _ = self.setup.edit(|r| *r = ruleset);
+        if ruleset != *self.setup_mut().ruleset() {
+            let _ = self.setup_mut().edit(|r| *r = ruleset);
         }
         ui.separator();
         if let Some(ready) = ready_section(ui, &view, &self.me()) {
             // Ready to the Ruleset as shown, so a change this frame clears it.
             self.set_ready(ready, view.version);
         }
-        let why = self.setup.not_ready();
+        let why = self.setup_mut().not_ready();
         let lock = ui.add_enabled(why.is_empty(), egui::Button::new("Lock and start"));
         if !why.is_empty() {
             lock.on_disabled_hover_text(why.join("\n"));
@@ -380,41 +443,53 @@ impl HostCoop {
     /// The Host's own Ready, to Ruleset `version`.
     fn set_ready(&mut self, ready: bool, version: u64) {
         let me = self.me();
-        self.setup.receive(&me, ready_message(ready, version));
+        if let Some(setup) = &mut self.setup {
+            setup.receive(&me, ready_message(ready, version));
+        }
     }
 
     /// The Host's own Ready, to the Ruleset as it is now.
     pub fn ready(&mut self, ready: bool) {
-        let version = self.setup.view().version;
-        self.set_ready(ready, version);
+        if let Some(version) = self.setup_version() {
+            self.set_ready(ready, version);
+        }
     }
 
     /// Chooses a preset, which resets the rules to it.
     pub fn choose(&mut self, preset: Preset) {
         self.preset = preset;
-        let _ = self.setup.choose(preset);
+        if let Some(setup) = &mut self.setup {
+            let _ = setup.choose(preset);
+        }
     }
 
     /// Changes the Ruleset before the lock. `level_caps` on uses the ROM's own caps.
     pub fn edit(&mut self, change: impl FnOnce(&mut Ruleset, &[LevelCap])) -> Result<(), String> {
-        let mut ruleset = self.setup.ruleset().clone();
+        let setup = self.setup.as_mut().ok_or(TAKEN_OVER)?;
+        let mut ruleset = setup.ruleset().clone();
         change(&mut ruleset, &self.level_caps);
-        self.setup.edit(|r| *r = ruleset).map_err(|e| e.to_string())
+        setup.edit(|r| *r = ruleset).map_err(|e| e.to_string())
     }
 
     /// Why the Run can't lock yet: nothing when everyone is Ready.
     pub fn not_ready(&self) -> Vec<String> {
-        self.setup.not_ready()
+        self.setup
+            .as_ref()
+            .map_or_else(|| vec![TAKEN_OVER.to_owned()], RunSetup::not_ready)
     }
 
     /// The Ruleset's version now: it changes whenever the Host changes it.
-    pub fn setup_version(&self) -> u64 {
-        self.setup.view().version
+    /// None once taken over after the lock.
+    pub fn setup_version(&self) -> Option<u64> {
+        self.setup.as_ref().map(|setup| setup.view().version)
     }
 
-    /// How many Players are in setup, the Host included.
+    /// How many Players are in setup, the Host included; after a takeover,
+    /// how many are still in the Run.
     pub fn players(&self) -> usize {
-        self.setup.view().players.len()
+        self.setup
+            .as_ref()
+            .map_or_else(|| self.log.active().len(), |setup| setup.view().players.len())
     }
 
     /// Locks now, or says why it can't.
@@ -429,13 +504,21 @@ impl HostCoop {
     /// Locks the Ruleset and roster: the lock goes in the log, and the lobby
     /// takes nobody new.
     fn lock(&mut self, node: &HostNode, now_ms: i64) {
-        match self.setup.lock(now_ms) {
+        let Some(setup) = &mut self.setup else {
+            return;
+        };
+        match setup.lock(now_ms) {
             Ok(locked) => {
                 self.submit(Some(node), &LogBody::Locked(locked));
                 node.lock_roster();
             }
             Err(e) => self.error = Some(format!("The Run can't lock: {e}")),
         }
+    }
+
+    /// Run setup, while there is one: always before the lock.
+    fn setup_mut(&mut self) -> &mut RunSetup {
+        self.setup.as_mut().expect("Run setup until the lock")
     }
 }
 
@@ -450,6 +533,8 @@ fn ready_message(ready: bool, version: u64) -> SetupMessage {
 /// A joiner's side: setup as the Host last sent it, and their copy of the log.
 pub struct JoinCoop {
     signer: Signer,
+    /// The Host this joiner's network connects to: the Run log's, or,
+    /// while that Host is silent, another Player who may have taken over.
     host: PlayerKey,
     log: RunLog,
     view: Option<SetupView>,
@@ -463,10 +548,18 @@ pub struct JoinCoop {
     next_counter: u64,
     /// This Player's entries sent to the Host and not in the log yet.
     unordered: Vec<Unordered>,
+    /// When the Host was last heard from.
+    presence: Presence,
     started: bool,
     error: Option<String>,
     /// Input stream messages from the Host, for Spectate.
     stream_inbox: Vec<Vec<u8>>,
+}
+
+/// What one of this Player's waiting entries says.
+fn body_of(entry: &Unordered) -> Option<LogBody> {
+    let submission = Submission::from_bytes(&entry.bytes)?;
+    serde_json::from_slice(&submission.body).ok()
 }
 
 /// One of this Player's entries the Host hasn't put in the log yet.
@@ -479,7 +572,8 @@ struct Unordered {
 }
 
 impl JoinCoop {
-    pub fn new(key: [u8; 32], host: PeerKey, rom: Option<(PathBuf, String)>) -> Self {
+    /// Joining the Run `host` hosts, at `now_ms`.
+    pub fn new(key: [u8; 32], host: PeerKey, rom: Option<(PathBuf, String)>, now_ms: i64) -> Self {
         let signer = Signer::from_secret(key);
         let me = signer.public();
         let log = RunLog::new(host.0);
@@ -497,15 +591,50 @@ impl JoinCoop {
             ready_to: None,
             next_counter,
             unordered: Vec::new(),
+            presence: Presence::new(now_ms),
             started: false,
             error: None,
             stream_inbox: Vec::new(),
         }
     }
 
-    /// The Host's key.
+    /// A Host who lost every Player carries on as a Player of the Run in
+    /// `log`, which they started, dialling `host`: the next Player in join
+    /// order, who will have taken over.
+    pub fn stepped_down(key: [u8; 32], log: RunLog, host: PlayerKey, rom: PathBuf, now_ms: i64) -> Self {
+        let locked = log.locked();
+        let sha1 = locked.as_ref().map(|l| l.game_sha1.clone());
+        let mut coop = Self::new(key, PeerKey(host), None, now_ms);
+        coop.next_counter = log.next_counter(&coop.me());
+        coop.log = log;
+        coop.rom = Some(rom);
+        coop.check.game_sha1 = sha1;
+        coop.ready_to = locked.map(|l| l.ruleset);
+        coop.started = true;
+        coop
+    }
+
+    /// The Host this joiner's network goes through, which streams come from.
     pub fn host(&self) -> PlayerKey {
         self.host
+    }
+
+    /// From now on this joiner's network goes through `host`.
+    pub fn dial(&mut self, host: PlayerKey) {
+        self.host = host;
+    }
+
+    /// Whether the Run's Host has been silent long enough for the next
+    /// Player in join order to take over.
+    pub fn host_gone(&self, now_ms: i64) -> bool {
+        self.log.locked().is_some() && self.presence.host_gone(&self.log.host(), now_ms)
+    }
+
+    /// This Player takes over hosting: their copy of the Run log, the
+    /// entries they had waiting for the old Host, and their ROM.
+    pub fn into_takeover(self) -> (RunLog, Vec<LogBody>, Option<PathBuf>) {
+        let waiting = self.unordered.iter().filter_map(body_of).collect();
+        (self.log, waiting, self.rom)
     }
 
     /// Whether the lobby is connected to the Host now.
@@ -560,16 +689,40 @@ impl JoinCoop {
             }
         }
         self.connected = connected;
-        for message in node.take_inbox() {
+        let inbox = node.take_inbox();
+        let heard = !inbox.is_empty();
+        let mut given_back = Vec::new();
+        for message in inbox {
             match message {
                 Message::Setup(bytes) => {
                     if let Some(SetupMessage::State(view)) = SetupMessage::from_bytes(&bytes) {
                         self.view = Some(*view);
                     }
                 }
-                Message::Log(bytes) => self.accept(&bytes),
+                Message::Log(bytes) => given_back.extend(self.accept(&bytes)),
                 Message::Input(bytes) => self.stream_inbox.push(bytes),
                 _ => {}
+            }
+        }
+        // After any takeover in what arrived, so the new Host is the one
+        // heard; and only from the Host the log names, not another Player tried.
+        if heard && self.host == self.log.host() {
+            self.presence.heard(self.log.host(), now_ms);
+        }
+        // This Player's events the Host's copy of the log doesn't have go to
+        // the Host again, before what was waiting, signed again from the
+        // Host's count: entries only a Host writes are void with their copy.
+        if !given_back.is_empty() {
+            let waiting = std::mem::take(&mut self.unordered);
+            let bodies: Vec<LogBody> = given_back
+                .iter()
+                .filter_map(|s| serde_json::from_slice(&s.body).ok())
+                .filter(|body| matches!(body, LogBody::Event(_)))
+                .chain(waiting.iter().filter_map(body_of))
+                .collect();
+            self.next_counter = self.log.next_counter(&self.me());
+            for body in bodies {
+                self.queue(node, &body, now_ms);
             }
         }
         let ordered = self.log.next_counter(&self.me());
@@ -611,18 +764,26 @@ impl JoinCoop {
         None
     }
 
-    fn accept(&mut self, bytes: &[u8]) {
+    /// An entry of the Host's copy of the log. The whole log comes again
+    /// after a reconnect, and from a new Host: what is here already is
+    /// skipped, and where this copy split from the Host's, the Host's wins.
+    /// Returns this Player's own entries the Host's copy doesn't have.
+    fn accept(&mut self, bytes: &[u8]) -> Vec<Submission> {
         let Some(entry) = LogEntry::from_bytes(bytes) else {
-            return;
+            return Vec::new();
         };
-        // The whole log comes again after a reconnect: what is already here is skipped.
-        if (entry.seq as usize) < self.log.entries().len() {
-            return;
-        }
-        if let Err(e) = self.log.accept(entry) {
+        let me = self.me();
+        self.log.give_way_to(entry, &me).unwrap_or_else(|e| {
+            // A copy without a takeover this one has: this one stays, and
+            // this Player looks on for the Host who took over.
+            if let LogError::WithoutTakeover { .. } = e {
+                log::info!("Kept this copy of the Run log: {e}");
+                return Vec::new();
+            }
             log::warn!("Refused a Run log entry from the Host: {e}");
             self.error = Some(format!("The Host sent a Run log entry that doesn't check out: {e}"));
-        }
+            Vec::new()
+        })
     }
 
     fn start_when_counted_down(&mut self, now_ms: i64) -> Option<CoopStart> {
@@ -673,17 +834,22 @@ impl JoinCoop {
     /// This Player's Run state, signed, to the Host to order.
     pub fn share(&mut self, node: &JoinNode, events: Vec<RunEvent>, now_ms: i64) {
         for event in events {
-            let counter = self.next_counter.max(self.log.next_counter(&self.me()));
-            let submission = self.log.sign(&self.signer, counter, &LogBody::Event(event));
-            let bytes = submission.to_bytes();
-            node.send(Message::Log(bytes.clone()));
-            self.unordered.push(Unordered {
-                counter,
-                sent_ms: now_ms,
-                bytes,
-            });
-            self.next_counter = counter + 1;
+            self.queue(node, &LogBody::Event(event), now_ms);
         }
+    }
+
+    /// One of this Player's entries, signed with their next counter, sent
+    /// to the Host and kept until the Host has put it in the log.
+    fn queue(&mut self, node: &JoinNode, body: &LogBody, now_ms: i64) {
+        let counter = self.next_counter.max(self.log.next_counter(&self.me()));
+        let bytes = self.log.sign(&self.signer, counter, body).to_bytes();
+        node.send(Message::Log(bytes.clone()));
+        self.unordered.push(Unordered {
+            counter,
+            sent_ms: now_ms,
+            bytes,
+        });
+        self.next_counter = counter + 1;
     }
 
     /// The setup section of the lobby window: the Ruleset as the Host has
@@ -850,18 +1016,18 @@ mod tests {
         std::fs::write(&rom_file, [4, 5, 6]).unwrap();
         let lobby = JoinLobby::new(invite.clone(), "Blue", APP_VERSION, Some(FIRERED.into())).unwrap();
         let blue_node = JoinNode::start_with([2; 32], lobby, Relays::Off, host_node.direct_addrs());
-        let mut blue = JoinCoop::new([2; 32], invite.host, Some((rom_file.clone(), FIRERED.into())));
+        let mut blue = JoinCoop::new([2; 32], invite.host, Some((rom_file.clone(), FIRERED.into())), 1_000);
 
         let mut now = 1_000;
         until("Blue in setup, and Blue sees it", || {
             host.pump(&host_node, now);
             blue.pump(&blue_node, now);
-            host.setup.view().players.len() == 2 && blue.view.as_ref().is_some_and(|v| v.players.len() == 2)
+            host.setup_mut().view().players.len() == 2 && blue.view.as_ref().is_some_and(|v| v.players.len() == 2)
         });
         assert!(blue.view.as_ref().unwrap().mismatches.is_empty(), "same build and ROM");
         assert_eq!(blue.log.entries().len(), 1, "Blue has the Genesis entry, checked");
 
-        let version = host.setup.view().version;
+        let version = host.setup_mut().view().version;
         host.set_ready(true, version);
         until("Blue's view of the Ruleset", || {
             host.pump(&host_node, now);
@@ -872,7 +1038,7 @@ mod tests {
         until("everyone Ready", || {
             host.pump(&host_node, now);
             blue.pump(&blue_node, now);
-            host.setup.not_ready().is_empty()
+            host.not_ready().is_empty()
         });
 
         host.lock(&host_node, now);
@@ -991,7 +1157,12 @@ mod tests {
         let blue_key = Signer::from_secret([2; 32]).public();
 
         for (locked_ruleset, starts) in [(agreed.clone(), true), (Preset::Hardcore.ruleset(&[]), false)] {
-            let mut blue = JoinCoop::new([2; 32], PeerKey([0; 32]), Some((rom_file.clone(), FIRERED.into())));
+            let mut blue = JoinCoop::new(
+                [2; 32],
+                PeerKey([0; 32]),
+                Some((rom_file.clone(), FIRERED.into())),
+                1_000,
+            );
             blue.log = RunLog::new(Signer::from_secret([1; 32]).public());
             blue.ready_to = Some(agreed.clone());
             let (entries, start_ms) = locked_log(locked_ruleset, blue_key);

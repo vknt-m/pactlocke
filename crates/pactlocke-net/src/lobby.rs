@@ -91,6 +91,35 @@ impl HostLobby {
         }
     }
 
+    /// The lobby of a Run that has started, hosted by the Player who took
+    /// over from a Host who vanished: locked, with the rest of the `roster`
+    /// (keys and names, in join order, the old Host among them) let back in
+    /// with no invite.
+    pub fn taken_over(run: RunAdvert, host_name: &str, app_version: &str, roster: Vec<(PeerKey, String)>) -> Self {
+        let mut lobby = Self::new(run, host_name, app_version);
+        lobby.locked = true;
+        lobby.members = roster
+            .into_iter()
+            .map(|(key, name)| Member {
+                key,
+                name: Some(name),
+                // Their ROM was checked before the lock.
+                rom: RomStatus::Matches,
+                connected: false,
+                tokens: BURST,
+                input_tokens: INPUT_BURST,
+                last_ms: 0,
+                dropped: 0,
+            })
+            .collect();
+        lobby
+    }
+
+    /// Whether the roster is locked, so nobody new joins.
+    pub fn is_locked(&self) -> bool {
+        self.locked
+    }
+
     /// A new invite for one friend: its secret admits one Player, once.
     pub fn invite(&mut self, host: PeerKey, relay: Option<String>) -> Invite {
         let secret = RunSecret::generate();
@@ -345,6 +374,26 @@ impl JoinLobby {
             state: JoinState::Joining,
             inbox: Vec::new(),
         })
+    }
+
+    /// Dialling the Host of a Run this Player is in the roster of, by the
+    /// Host's key and with no invite: the Host lets the roster in by key.
+    /// `relay` is a relay to try them on.
+    pub fn rejoin(
+        host: PeerKey,
+        relay: Option<String>,
+        name: &str,
+        app_version: &str,
+        rom_sha1: Option<String>,
+    ) -> Self {
+        let invite = Invite {
+            host,
+            relay,
+            // Unused: a key in the roster needs no secret.
+            secret: RunSecret([0; 16]),
+            app_version: app_version.to_owned(),
+        };
+        Self::new(invite, name, app_version, rom_sha1).expect("the same version as this app")
     }
 
     pub fn invite(&self) -> &Invite {

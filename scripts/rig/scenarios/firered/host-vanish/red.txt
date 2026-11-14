@@ -1,0 +1,9 @@
+# The Host plays to the lab with the others, then their machine vanishes.
+include ../common/host.txt
+players 3
+ready
+lock-when 3
+speed 4
+include ../common/starter.txt
+sync lab 3
+vanish

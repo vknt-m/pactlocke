@@ -313,3 +313,97 @@ fn a_host_dropped_from_the_run_is_followed_by_the_next_player_in_join_order() {
     assert_eq!(log.active(), [key(1), key(2)]);
     assert_eq!(log.successor(), Some(key(1)));
 }
+
+/// A Player's copy of the Run log meets the new Host's, which
+/// lacks an entry this Player had from the old Host. The new
+/// Host's copy wins from there on, and this Player's own entries it lacks
+/// come back, in order, to send again.
+#[test]
+fn a_copy_of_the_log_gives_way_to_the_new_hosts_and_its_own_lost_entries_come_back() {
+    use pactlocke_run::{DeathCause, Locked, RosterEntry, RunEvent, RunLog, Signer};
+    let signers: Vec<Signer> = (1..=3).map(|i| Signer::from_secret([i; 32])).collect();
+    let [red, blue, green] = [0, 1, 2].map(|i| signers[i].public());
+    let died = |pid| {
+        LogBody::Event(RunEvent::Died {
+            pid,
+            species: 16,
+            species_name: "PIDGEY".into(),
+            name: "PIDGEY".into(),
+            area: None,
+            cause: DeathCause::Poison,
+        })
+    };
+    let mut host = RunLog::new(red);
+    let submit = |log: &mut RunLog, by: usize, orderer: usize, body: &LogBody| {
+        let counter = log.next_counter(&signers[by].public());
+        let submission = log.sign(&signers[by], counter, body);
+        log.order(&signers[orderer], submission).unwrap()
+    };
+    let genesis = LogBody::Genesis {
+        nonce: [9; 16],
+        run_name: "Kanto".into(),
+        game_name: "FireRed".into(),
+        game_sha1: "00".into(),
+    };
+    submit(&mut host, 0, 0, &genesis);
+    let roster = ["Red", "Blue", "Green"]
+        .iter()
+        .zip([red, blue, green])
+        .map(|(name, key)| RosterEntry {
+            key,
+            name: (*name).into(),
+        })
+        .collect();
+    let locked = Locked {
+        run_name: "Kanto".into(),
+        game_name: "FireRed".into(),
+        game_sha1: "00".into(),
+        ruleset: soul_link(),
+        roster,
+        start_ms: 0,
+    };
+    submit(&mut host, 0, 0, &LogBody::Locked(locked));
+    // Blue, next after Red, has the log this far; Green also has two of
+    // their own deaths, the last entries Red ordered before vanishing.
+    let mut blues = host.clone();
+    submit(&mut host, 2, 0, &died(1));
+    submit(&mut host, 2, 0, &died(2));
+    let mut greens = host.clone();
+    let dropped_by_green: Vec<_> = greens.entries()[2..].iter().map(|e| e.submission.clone()).collect();
+
+    // Blue takes over from the shorter copy, and orders one of their own.
+    let takeover = submit(&mut blues, 1, 1, &LogBody::Takeover);
+    let after = submit(&mut blues, 1, 1, &died(7));
+
+    // Green hears the new Host's copy, entry by entry.
+    for entry in blues.entries().to_vec() {
+        let back = greens.give_way_to(entry, &green).unwrap();
+        if back.is_empty() {
+            continue;
+        }
+        assert_eq!(back, dropped_by_green, "Green's own two deaths, in order");
+    }
+    assert_eq!(greens.entries(), blues.entries());
+    assert_eq!(greens.host(), blue);
+    assert_eq!(greens.entries()[2], takeover);
+    assert_eq!(greens.entries()[3], after);
+
+    // Sent again, the new Host orders them as they were signed.
+    for submission in dropped_by_green {
+        blues.order(&signers[1], submission).unwrap();
+    }
+    assert_eq!(blues.tallies().deaths.get(&green), Some(&2));
+
+    // The same copy again changes nothing.
+    for entry in blues.entries().to_vec() {
+        assert!(greens.give_way_to(entry, &green).unwrap().is_empty());
+    }
+
+    // The old Host's copy, without the takeover, doesn't win over Green's,
+    // which has it: Green keeps theirs.
+    let had = greens.entries().to_vec();
+    let stale = host.entries()[2].clone();
+    let refused = greens.give_way_to(stale, &green).unwrap_err();
+    assert!(refused.to_string().contains("takeover"), "{refused}");
+    assert_eq!(greens.entries(), had);
+}

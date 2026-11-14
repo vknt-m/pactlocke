@@ -368,9 +368,13 @@ async fn host(
     *lock(&addrs) = address.ip_addrs().copied().collect();
     let relay = address.relay_urls().next().map(|url| url.to_string());
     let me = PeerKey(*endpoint.id().as_bytes());
-    let invite = |shared: &Shared| lock(&shared.lobby).invite(me, relay.clone()).link();
+    // A lobby taken over after the lock has no invite: the roster dials by key.
+    let invite = |shared: &Shared| {
+        let mut lobby = lock(&shared.lobby);
+        (!lobby.is_locked()).then(|| lobby.invite(me, relay.clone()).link())
+    };
     let link = invite(&shared);
-    publish(&shared.view, |v| v.invite_link = Some(link));
+    publish(&shared.view, |v| v.invite_link = link);
     let handshakes = Arc::new(Semaphore::new(HANDSHAKES_AT_ONCE));
     let mut next_connection = 0u64;
 
@@ -394,7 +398,7 @@ async fn host(
             command = commands.recv() => match command {
                 Some(HostCommand::NewInvite) => {
                     let link = invite(&shared);
-                    publish(&shared.view, |v| v.invite_link = Some(link));
+                    publish(&shared.view, |v| v.invite_link = link);
                 }
                 Some(HostCommand::Send(to, message)) => {
                     let actions = lock(&shared.lobby).send(to, &message);

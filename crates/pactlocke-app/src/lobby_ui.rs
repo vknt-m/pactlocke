@@ -11,8 +11,8 @@ use pactlocke_run::{Outgoing, PlayerKey, RunClock, RunEvent, SystemRunClock};
 
 use crate::coop::{CoopStart, HostCoop, HostRom, JoinCoop};
 use pactlocke_net::{
-    APP_VERSION, HostLobby, HostNode, Invite, JoinLobby, JoinNode, LobbyView, Message, Relays, RomStatus, RunAdvert,
-    load_or_create_key,
+    APP_VERSION, HostLobby, HostNode, Invite, JoinLobby, JoinNode, LobbyView, Message, PeerKey, Relays, RomStatus,
+    RunAdvert, load_or_create_key,
 };
 
 /// A friend's invite, being filled in.
@@ -30,24 +30,46 @@ pub struct Lobbies {
     pub name: String,
     /// The relays to use, from Settings.
     pub relays: Relays,
+    /// A folder where each Host writes its direct addresses and joiners
+    /// read them, for a test rig with no relay: none in the app.
+    pub addresses: Option<PathBuf>,
     host: Option<(HostNode, HostCoop)>,
     join: Option<(JoinNode, JoinCoop)>,
     prompt: Option<JoinPrompt>,
-    /// How a joiner reconnects to the Host after losing the connection
-    /// mid-Run: the invite and the ROM's SHA-1.
-    rejoin: Option<(Invite, Option<String>)>,
-    /// Addresses to try for the Host beside its relay (the test rig's).
+    /// The SHA-1 of this Player's ROM, told to a Host on every reconnect.
+    rom_sha1: Option<String>,
+    /// A relay to try a Host on beside finding them by key: the one the
+    /// Run's first Host gave in their invite.
+    relay: Option<String>,
+    /// Addresses to try for the Run's first Host beside its relay (the test rig's).
     direct: Vec<std::net::SocketAddr>,
     /// When this joiner's connection to the Host was lost, if it is.
     lost_at: Option<i64>,
+    /// When this joiner last started connecting to a Host.
+    dialled_at: i64,
+    /// Tries at reaching a Host since the Host went silent.
+    redials: u32,
     /// How many times this joiner has started connecting to the Host again after losing it.
     reconnects: u32,
+    /// Since when this Host has had no Player connected, if so.
+    alone_since: Option<i64>,
+    /// Whether this Host's direct addresses are written in `addresses`.
+    addresses_written: bool,
     /// The lobby as last written to the app's log, to note each change once.
     noted: String,
 }
 
 /// How long a joiner waits before reconnecting to the Host.
 const RECONNECT_MS: i64 = 3_000;
+
+/// How long each try at reaching a Host lasts once the Host has gone silent,
+/// between the next Player in join order and the Host.
+const ATTEMPT_MS: i64 = 5_000;
+
+/// How long a Host may have no Player connected before stepping down to
+/// dial the next Player in join order: long enough for every Player still
+/// online to have tried this Host a few times, between their other tries.
+const STEP_DOWN_MS: i64 = 30_000;
 
 impl Lobbies {
     /// `key_file` holds this install's key, its identity on the network.
@@ -61,13 +83,19 @@ impl Lobbies {
             }),
             name: "Player".into(),
             relays: Relays::N0,
+            addresses: None,
             host: None,
             join: None,
             prompt: None,
-            rejoin: None,
+            rom_sha1: None,
+            relay: None,
             direct: Vec::new(),
             lost_at: None,
+            dialled_at: 0,
+            redials: 0,
             reconnects: 0,
+            alone_since: None,
+            addresses_written: false,
             noted: String::new(),
         }
     }
@@ -121,10 +149,9 @@ impl Lobbies {
     /// Leaves the lobby this app is in. The network shuts down on its own
     /// thread, so the window never waits for it.
     fn leave(&mut self) {
-        self.rejoin = None;
         let (host, join) = (self.host.take(), self.join.take());
         if host.is_some() || join.is_some() {
-            std::thread::spawn(move || drop((host, join)));
+            drop_in_background((host, join));
         }
     }
 
@@ -137,6 +164,8 @@ impl Lobbies {
         let coop = HostCoop::new(key, &self.name, &run, rom);
         let lobby = HostLobby::new(run, &self.name, APP_VERSION);
         self.host = Some((HostNode::start(key, lobby, self.relay_choice()), coop));
+        self.relay = None;
+        self.addresses_written = false;
         log::info!("Hosting a new lobby");
     }
 
@@ -153,6 +182,16 @@ impl Lobbies {
     pub fn public_key(&self) -> Option<PlayerKey> {
         let key = self.key.as_ref().ok()?;
         Some(pactlocke_run::Signer::from_secret(*key).public())
+    }
+
+    /// The Player input streams go through: this one while hosting, else
+    /// the Host this joiner's network connects to.
+    pub fn host_key(&self) -> Option<PlayerKey> {
+        match (&self.host, &self.join) {
+            (Some(_), _) => self.public_key(),
+            (None, Some((_, coop))) => Some(coop.host()),
+            (None, None) => None,
+        }
     }
 
     /// Input stream messages from other Players since the last call: from
@@ -194,34 +233,210 @@ impl Lobbies {
         }
     }
 
-    /// A joiner in a Run that has started, whose connection to the Host was
-    /// lost, connects again a few seconds later; their Run carries on.
-    fn reconnect_if_lost(&mut self, now_ms: i64) {
-        let Some((node, coop)) = &self.join else {
+    /// The next Player in join order, once the Run's Host has been silent
+    /// long enough, takes over: their app hosts the lobby on its own
+    /// node, lets the rest of the roster in by key, and orders the Run log.
+    fn take_over_if_due(&mut self, now_ms: i64) {
+        let (Some((_, coop)), Some(me), Ok(key)) = (&self.join, self.public_key(), self.key.clone()) else {
             return;
         };
-        let lost = node.view().error.is_some() && coop.log().locked().is_some();
-        if !lost {
+        if !coop.host_gone(now_ms) || coop.log().successor() != Some(me) {
+            return;
+        }
+        let Some(locked) = coop.log().locked() else {
+            return;
+        };
+        let Some((node, coop)) = self.join.take() else {
+            return;
+        };
+        drop_in_background(node);
+        // Everyone still in the Run, the old Host among them: not a Player dropped.
+        let active = coop.log().active();
+        let roster = locked
+            .roster
+            .iter()
+            .filter(|p| p.key != me && active.contains(&p.key))
+            .map(|p| (PeerKey(p.key), p.name.clone()))
+            .collect();
+        let run = RunAdvert {
+            name: locked.run_name.clone(),
+            game_name: locked.game_name.clone(),
+            game_sha1: locked.game_sha1.clone(),
+        };
+        let (log, waiting, rom) = coop.into_takeover();
+        let lobby = HostLobby::taken_over(run, &self.name, APP_VERSION, roster);
+        let coop = HostCoop::take_over(key, log, waiting, rom.unwrap_or_default());
+        self.host = Some((HostNode::start(key, lobby, self.relay_choice()), coop));
+        self.alone_since = None;
+        self.addresses_written = false;
+        log::info!(
+            "Taking over hosting: the Host has been silent for {} seconds",
+            pactlocke_run::HOST_SILENT_MS / 1000
+        );
+    }
+
+    /// The Run's first Host, with no Player connected for a while, may be
+    /// the one who vanished, and been taken over from: they carry on as a
+    /// Player, dialling the next Player in join order.
+    fn step_down_if_alone(&mut self, now_ms: i64) {
+        let (Some((node, coop)), Some(me)) = (&self.host, self.public_key()) else {
+            return;
+        };
+        let log = coop.log();
+        let alone = node.view().players.len() <= 1;
+        let others = log.active().iter().any(|p| *p != me);
+        let next = log.successor();
+        // A Player who took over hosting stays Host: their copy of the log
+        // has the rightful takeover, so the others come to them.
+        let took_over = log.first_host() != me;
+        if log.locked().is_none() || !alone || !others || took_over {
+            self.alone_since = None;
+            return;
+        }
+        let since = *self.alone_since.get_or_insert(now_ms);
+        let (Some(next), Ok(key)) = (next, self.key.clone()) else {
+            return;
+        };
+        if now_ms - since < STEP_DOWN_MS {
+            return;
+        }
+        let Some((node, coop)) = self.host.take() else {
+            return;
+        };
+        drop_in_background(node);
+        let (log, rom) = coop.into_log();
+        if self.rom_sha1.is_none() {
+            self.rom_sha1 = log.locked().map(|l| l.game_sha1);
+        }
+        let coop = JoinCoop::stepped_down(key, log, next, rom, now_ms);
+        let node = self.dial(key, next);
+        self.join = Some((node, coop));
+        self.dialled_at = now_ms;
+        self.redials = 1;
+        self.alone_since = None;
+        log::info!("No Player is connected: carrying on as a Player, dialling the next Host");
+    }
+
+    /// A joiner in a Run that has started, whose connection to the Host was
+    /// lost, connects again a few seconds later; their Run carries on. Once
+    /// the Host has been silent long enough, they try the next Player in
+    /// join order, the Host and the rest of the Run in turn, until one of
+    /// them answers as Host.
+    fn reconnect_if_lost(&mut self, now_ms: i64) {
+        let (Some((node, coop)), Some(me), Ok(key)) = (&self.join, self.public_key(), self.key.clone()) else {
+            return;
+        };
+        let log = coop.log();
+        let lost = node.view().error.is_some() && log.locked().is_some();
+        let silent = coop.host_gone(now_ms);
+        if !lost && !silent {
             self.lost_at = None;
+            self.redials = 0;
             return;
         }
         let lost_at = *self.lost_at.get_or_insert(now_ms);
-        let (Some((invite, sha1)), Ok(key)) = (self.rejoin.clone(), self.key.clone()) else {
-            return;
+        let due = if silent {
+            now_ms - self.dialled_at >= ATTEMPT_MS
+        } else {
+            now_ms - lost_at >= RECONNECT_MS
         };
-        if now_ms - lost_at < RECONNECT_MS {
+        if !due {
             return;
         }
-        log::info!("Joiner: reconnecting to the Host");
-        if let Ok(lobby) = JoinLobby::new(invite, &self.name, APP_VERSION, sha1) {
-            let fresh = JoinNode::start_with(key, lobby, self.relay_choice(), self.direct.clone());
-            self.reconnects += 1;
-            if let Some((old, _)) = self.join.as_mut() {
-                let old = std::mem::replace(old, fresh);
-                // The old network shuts down on its own thread.
-                std::thread::spawn(move || drop(old));
+        // Silent: the next Player first, then the Host, then anyone else
+        // still in the Run, whoever answers as Host.
+        let mut hosts = Vec::new();
+        if silent {
+            hosts.extend(log.successor());
+        }
+        hosts.push(log.host());
+        if silent {
+            hosts.extend(log.active());
+        }
+        let mut seen = Vec::new();
+        hosts.retain(|host| {
+            *host != me && !seen.contains(host) && {
+                seen.push(*host);
+                true
             }
-            self.lost_at = None;
+        });
+        let Some(&target) = hosts.get(self.redials as usize % hosts.len().max(1)) else {
+            return;
+        };
+        if silent {
+            self.redials += 1;
+        }
+        log::info!("Joiner: connecting to the Host again");
+        let fresh = self.dial(key, target);
+        self.reconnects += 1;
+        if let Some((old, coop)) = self.join.as_mut() {
+            coop.dial(target);
+            let old = std::mem::replace(old, fresh);
+            drop_in_background(old);
+        }
+        self.dialled_at = now_ms;
+        self.lost_at = None;
+    }
+
+    /// A network node connecting to the Host with key `host`, as a Player
+    /// in the Run's roster: by key, with no invite.
+    fn dial(&self, key: [u8; 32], host: PlayerKey) -> JoinNode {
+        let lobby = JoinLobby::rejoin(
+            PeerKey(host),
+            self.relay.clone(),
+            &self.name,
+            APP_VERSION,
+            self.rom_sha1.clone(),
+        );
+        JoinNode::start_with(key, lobby, self.relay_choice(), self.direct_for(host))
+    }
+
+    /// The direct addresses known for the Host with key `host`.
+    fn direct_for(&self, host: PlayerKey) -> Vec<std::net::SocketAddr> {
+        let first = self
+            .join
+            .as_ref()
+            .is_some_and(|(_, coop)| coop.log().first_host() == host);
+        let mut addrs = if first { self.direct.clone() } else { Vec::new() };
+        if let Some(dir) = &self.addresses
+            && let Ok(text) = std::fs::read_to_string(dir.join(addresses_file(host)))
+        {
+            addrs.extend(
+                text.lines()
+                    .filter_map(|line| line.trim().parse::<std::net::SocketAddr>().ok()),
+            );
+        }
+        addrs
+    }
+
+    /// While hosting, writes this Host's direct addresses where joiners
+    /// look for them, if there is such a place; and keeps the relay the
+    /// Host's invite gives, to find a later Host on.
+    fn note_host_addresses(&mut self) {
+        let Some((node, _)) = &self.host else {
+            return;
+        };
+        if self.relay.is_none()
+            && let Some(link) = node.view().invite_link
+            && let Ok(invite) = Invite::parse(&link)
+        {
+            self.relay = invite.relay;
+        }
+        let (Some(dir), Some(me)) = (&self.addresses, self.public_key()) else {
+            return;
+        };
+        let addrs = node.direct_addrs();
+        if self.addresses_written || addrs.is_empty() {
+            return;
+        }
+        let text: Vec<String> = addrs.iter().map(ToString::to_string).collect();
+        let file = dir.join(addresses_file(me));
+        let temp = file.with_extension("tmp");
+        if std::fs::write(&temp, text.join("\n"))
+            .and_then(|()| std::fs::rename(&temp, &file))
+            .is_ok()
+        {
+            self.addresses_written = true;
         }
     }
 
@@ -267,11 +482,15 @@ impl Lobbies {
         start
     }
 
-    /// The lobby's own work, with or without a window: reconnects a lost
+    /// The lobby's own work, with or without a window: moves the lobby to
+    /// the next Player when the Host has gone silent, reconnects a lost
     /// joiner, reads and sends setup and the Run log, and returns the Run
     /// to start when the countdown after the lock is over.
     pub fn pump(&mut self, now_ms: i64) -> Option<CoopStart> {
+        self.take_over_if_due(now_ms);
+        self.step_down_if_alone(now_ms);
         self.reconnect_if_lost(now_ms);
+        self.note_host_addresses();
         let start = match (&mut self.host, &mut self.join) {
             (Some((node, coop)), _) => coop.pump(node, now_ms),
             (None, Some((node, coop))) => coop.pump(node, now_ms),
@@ -296,13 +515,15 @@ impl Lobbies {
         let invite = Invite::parse(link).map_err(|e| format!("{e}."))?;
         let lobby = JoinLobby::new(invite, &self.name, APP_VERSION, sha1.clone())?;
         let key = self.key.clone()?;
-        let coop = JoinCoop::new(key, lobby.invite().host, rom);
-        let rejoin = (lobby.invite().clone(), sha1);
+        let coop = JoinCoop::new(key, lobby.invite().host, rom, SystemRunClock.now_ms());
+        let relay = lobby.invite().relay.clone();
         let node = JoinNode::start_with(key, lobby, self.relay_choice(), direct.clone());
         self.leave();
         self.join = Some((node, coop));
-        self.rejoin = Some(rejoin);
+        self.rom_sha1 = sha1;
+        self.relay = relay;
         self.direct = direct;
+        self.dialled_at = SystemRunClock.now_ms();
         log::info!("Joining a lobby");
         Ok(())
     }
@@ -339,8 +560,9 @@ impl Lobbies {
         coop.map(str::to_owned).or_else(|| self.view()?.error)
     }
 
-    /// How many times this joiner has started connecting to the Host again
-    /// after losing it: 0 for a Host, or a joiner who never lost the Host.
+    /// How many times this joiner has started connecting to a Host again,
+    /// after losing the connection or while the Host was silent: 0 for a
+    /// Host, or a joiner who never lost the Host.
     pub fn reconnects(&self) -> u32 {
         self.reconnects
     }
@@ -348,7 +570,7 @@ impl Lobbies {
     /// The Ruleset's version as this app knows it, once it does.
     pub fn setup_version(&self) -> Option<u64> {
         match (&self.host, &self.join) {
-            (Some((_, coop)), _) => Some(coop.setup_version()),
+            (Some((_, coop)), _) => coop.setup_version(),
             (None, Some((_, coop))) => coop.setup_version(),
             (None, None) => None,
         }
@@ -498,6 +720,7 @@ impl Lobbies {
         }
         if let (Some(rom), Some((join, coop))) = (picked, &mut self.join) {
             join.rom_picked(&rom.sha1);
+            self.rom_sha1 = Some(rom.sha1.clone());
             coop.rom_picked(rom.path, rom.sha1);
         }
         if leave {
@@ -572,4 +795,200 @@ fn pick_rom() -> Option<Result<PickedRom, String>> {
             })
             .map_err(|e| format!("Couldn't read {}: {e}", path.display())),
     )
+}
+
+/// Drops lobbies on their own thread: a network shuts down there, so the
+/// window never waits for it.
+fn drop_in_background(gone: impl Send + 'static) {
+    std::thread::spawn(move || drop(gone));
+}
+
+/// The file a Host's direct addresses are written to, in `Lobbies::addresses`.
+fn addresses_file(host: PlayerKey) -> String {
+    format!("{}.addrs", pactlocke_net::PeerKey(host))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Over real iroh endpoints on this machine: three Players'
+    //! lobbies start a Run, the Host's app goes silent, and the lobby moves
+    //! to the next Player in join order.
+
+    use std::time::{Duration, Instant};
+
+    use pactlocke_game::CapabilityReport;
+    use pactlocke_run::{DeathCause, LogBody};
+
+    use super::*;
+
+    const FIRERED: &str = "41cb23d8dccc8ebd7c649cd8fbb58eeace6e2fdc";
+
+    fn died(pid: u32) -> RunEvent {
+        RunEvent::Died {
+            pid,
+            species: 16,
+            species_name: "PIDGEY".into(),
+            name: "PIDGEY".into(),
+            area: None,
+            cause: DeathCause::Poison,
+        }
+    }
+
+    fn app(dir: &Path, name: &str) -> Lobbies {
+        let mut lobbies = Lobbies::new(&dir.join(format!("{name}.key")));
+        lobbies.name = name.into();
+        lobbies.relays = Relays::Off;
+        lobbies.addresses = Some(dir.to_owned());
+        lobbies
+    }
+
+    /// Pumps every app but the `frozen` ones until `done`, for up to `secs`.
+    #[track_caller]
+    fn until(apps: &mut [Lobbies], frozen: &[usize], secs: u64, what: &str, done: impl Fn(&[Lobbies]) -> bool) {
+        let start = Instant::now();
+        while !done(apps) {
+            assert!(start.elapsed() < Duration::from_secs(secs), "{what}: {}", state(apps));
+            for (i, app) in apps.iter_mut().enumerate() {
+                if !frozen.contains(&i) {
+                    app.pump(SystemRunClock.now_ms());
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn state(apps: &[Lobbies]) -> String {
+        apps.iter()
+            .map(|a| {
+                let log = a.log();
+                format!(
+                    "{}: {} entries {:?}, deaths {:?}, online {}, error {:?}",
+                    a.name,
+                    if a.host.is_some() { "hosts" } else { "joins" },
+                    log.map(|l| l.entries().len()),
+                    log.map(deaths),
+                    a.online(),
+                    a.error()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    fn deaths(log: &pactlocke_run::RunLog) -> Vec<u32> {
+        log.bodies()
+            .filter_map(|(_, body)| match body {
+                LogBody::Event(RunEvent::Died { pid, .. }) => Some(pid),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn same_log(apps: &[Lobbies]) -> bool {
+        let logs: Vec<_> = apps
+            .iter()
+            .filter_map(|a| a.log().map(|l| l.entries().to_vec()))
+            .collect();
+        logs.len() == apps.len() && logs.windows(2).all(|w| w[0] == w[1])
+    }
+
+    #[test]
+    fn when_the_host_goes_silent_the_lobby_moves_to_the_next_player_and_the_old_host_joins_as_a_player() {
+        let dir = std::env::temp_dir().join(format!("pactlocke-takeover-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let rom_file = dir.join("game.gba");
+        std::fs::write(&rom_file, [4, 5, 6]).unwrap();
+        let mut apps = vec![app(&dir, "Red"), app(&dir, "Blue"), app(&dir, "Green")];
+        let [red, blue, green] = [0, 1, 2].map(|i| apps[i].public_key().unwrap());
+
+        // Red hosts; Blue, then Green, join by invite.
+        apps[0].host(
+            RunAdvert {
+                name: "Kanto with friends".into(),
+                game_name: "Pokémon FireRed (USA) 1.0".into(),
+                game_sha1: FIRERED.into(),
+            },
+            HostRom {
+                rom: vec![1, 2, 3],
+                path: "red.gba".into(),
+                capabilities: CapabilityReport::everything_enforceable(),
+                level_caps: Vec::new(),
+                sync_gates: Vec::new(),
+            },
+        );
+        for (joiner, players) in [(1, 2), (2, 3)] {
+            if joiner == 2 {
+                apps[0].new_invite();
+            }
+            let used = apps[0].invite().map(|(link, _)| link);
+            until(&mut apps, &[], 30, "an invite", |apps| {
+                apps[0]
+                    .invite()
+                    .is_some_and(|(link, addrs)| Some(&link) != used.as_ref() || joiner == 1 && !addrs.is_empty())
+            });
+            let (link, addrs) = apps[0].invite().unwrap();
+            apps[joiner]
+                .join(&link, Some((rom_file.clone(), FIRERED.into())), addrs)
+                .unwrap();
+            until(&mut apps, &[], 30, "the joiner in setup", |apps| {
+                apps[0].setup_version().is_some() && apps[0].host.as_ref().unwrap().1.players() == players
+            });
+        }
+
+        // Everyone Ready to the Ruleset as it stands; Red locks; the Run starts.
+        until(&mut apps, &[], 30, "everyone sees the Ruleset", |apps| {
+            apps.iter().all(|a| a.setup_version() == apps[0].setup_version())
+        });
+        for app in &mut apps {
+            app.ready(true);
+        }
+        until(&mut apps, &[], 30, "everyone Ready", |apps| {
+            apps[0].host.as_ref().unwrap().1.not_ready().is_empty()
+        });
+        apps[0].lock(SystemRunClock.now_ms()).unwrap();
+        let mut started = [false; 3];
+        let start = Instant::now();
+        while started.iter().any(|s| !s) {
+            assert!(start.elapsed() < Duration::from_secs(30), "the Run starts for everyone");
+            for (i, app) in apps.iter_mut().enumerate() {
+                started[i] |= app.pump(SystemRunClock.now_ms()).is_some();
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        apps[2].share(vec![died(0xC1)]);
+        until(&mut apps, &[], 30, "one log", |apps| {
+            same_log(apps) && deaths(apps[0].log().unwrap()) == [0xC1]
+        });
+
+        // Red's app goes silent. Green dies meanwhile: it waits for a Host.
+        apps[2].share(vec![died(0xC2)]);
+        until(&mut apps, &[0], 60, "Blue takes over and Green follows", |apps| {
+            apps[1].host.is_some() && same_log(&apps[1..]) && deaths(apps[2].log().unwrap()) == [0xC1, 0xC2]
+        });
+        let log = apps[2].log().unwrap();
+        assert_eq!(log.host(), blue);
+        assert_eq!(apps[2].host_key(), Some(blue), "Green's streams go through Blue");
+        assert!(log.bodies().any(|(by, body)| by == blue && body == LogBody::Takeover));
+
+        // Red, still silent to the others, dies too; then their app is back.
+        apps[0].share(vec![died(0xA1)]);
+        until(
+            &mut apps,
+            &[],
+            60,
+            "Red joins Blue as a Player, and Red's death is in",
+            |apps| apps[0].join.is_some() && same_log(apps) && deaths(apps[1].log().unwrap()).contains(&0xA1),
+        );
+        assert!(apps[0].host.is_none(), "one Host");
+        assert_eq!(apps[0].host_key(), Some(blue));
+        let tallies = apps[0].log().unwrap().tallies();
+        assert_eq!(tallies.deaths.get(&red), Some(&1));
+        assert_eq!(tallies.deaths.get(&green), Some(&2));
+        for (i, app) in apps.iter().enumerate() {
+            assert_eq!(app.error(), None, "{i}");
+        }
+        drop(apps);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
