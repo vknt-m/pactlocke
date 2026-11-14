@@ -192,13 +192,17 @@ fn a_soft_reset_is_a_reload_so_a_dead_pokemon_back_in_the_party_is_no_violation(
         faint_is_dead: true,
         ..Ruleset::default()
     });
-    player.game.party = vec![party_pokemon(PIDGEY, 0xB1BD, "BIRDY")];
+    // A second Pokémon, alive, so the Death isn't a wiped party.
+    player.game.party = vec![
+        party_pokemon(PIDGEY, 0xB1BD, "BIRDY"),
+        party_pokemon(RATTATA, 0xB2, "RATTY"),
+    ];
     player.game.play_time = 5_000;
     player.plays(5);
     let alive = player.game.party.clone();
     player.is_poisoned_to_faint(0xB1BD);
     player.plays(5);
-    assert!(player.party_pids().is_empty(), "moved to the Dead box");
+    assert_eq!(player.party_pids(), [0xB2], "moved to the Dead box");
 
     // A+B+START+SELECT, then CONTINUE: the save from before the Death.
     player.game.pc.clear();
@@ -206,7 +210,7 @@ fn a_soft_reset_is_a_reload_so_a_dead_pokemon_back_in_the_party_is_no_violation(
     player.game.play_time = 4_000;
     player.plays(5);
 
-    assert!(player.party_pids().is_empty(), "moved again");
+    assert_eq!(player.party_pids(), [0xB2], "moved again");
     assert!(
         player.feed(FeedKind::Violation).is_empty(),
         "{:?}",

@@ -83,6 +83,7 @@ impl RunEngine {
                         species: pokemon.species,
                         species_name: species_name.clone(),
                         area: area.clone(),
+                        at_ms: self.clock.now_ms(),
                     },
                 ),
                 None => {
@@ -99,6 +100,7 @@ impl RunEngine {
                         starter: matches!(source, Some(ref s) if s.kind == pactlocke_game::SourceKind::Starter),
                         egg: pokemon.is_egg,
                         source: source.map(SourceRef::from),
+                        at_ms: self.clock.now_ms(),
                     };
                     (origin, event)
                 }
@@ -159,6 +161,7 @@ impl RunEngine {
                     self.record(RunEvent::Released {
                         pid: pokemon.pid,
                         species_name,
+                        at_ms: self.clock.now_ms(),
                     });
                 }
                 Err(e) => {

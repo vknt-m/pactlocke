@@ -190,6 +190,7 @@ fn skipping_a_gift_the_others_took_breaks_its_link_and_kills_their_copies() {
             source: Some(eevee.clone()),
             starter: false,
             egg: false,
+            at_ms: 0,
         }),
     );
     both_play(&mut table, 120);
@@ -241,6 +242,7 @@ fn a_death_the_players_own_game_never_showed_kills_nobody() {
             name: "PIDGEY".into(),
             area: None,
             cause: pactlocke_run::DeathCause::Poison,
+            at_ms: 0,
         }),
     );
     both_play(&mut table, 300);
@@ -312,4 +314,75 @@ fn a_catch_its_players_game_hasnt_shown_yet_is_still_pending() {
     );
     both_play(&mut table, 120);
     assert!(route_1_link(&table, 0).pending(), "{:?}", route_1_link(&table, 0));
+}
+
+fn area(id: u16, name: &str) -> pactlocke_game::Area {
+    pactlocke_game::Area { id, name: name.into() }
+}
+
+/// Player `i` catches a Pidgey with this PID on `area`.
+fn catches_on(table: &mut Table, i: usize, at: pactlocke_game::Area, pid: u32) {
+    table.walks_into(i, at);
+    table.meets_wild(i, PIDGEY);
+    table.catches(i, PIDGEY, pid);
+}
+
+fn party_pids(table: &mut Table, i: usize) -> Vec<u32> {
+    table.game(i).party.iter().map(|p| p.pid).collect()
+}
+
+#[test]
+fn a_catch_waiting_on_its_link_stays_in_a_party_of_fewer_than_six() {
+    let mut table = Table::start(&["Red", "Blue"], soul_link());
+    both_play(&mut table, 100);
+    catches_on(&mut table, 0, route_1(), 0xA1);
+    both_play(&mut table, 200);
+    assert!(route_1_link(&table, 0).pending());
+    assert_eq!(party_pids(&mut table, 0), [0xA1]);
+}
+
+#[test]
+fn at_a_full_party_the_newest_pokemon_waiting_on_its_link_goes_to_the_pc_until_its_link_is_whole() {
+    let mut table = Table::start(&["Red", "Blue"], soul_link());
+    both_play(&mut table, 100);
+    let areas: Vec<_> = (0..6u16)
+        .map(|n| area(0x70 + n, &format!("Route {}", 10 + n)))
+        .collect();
+    // Blue catches on the first four; Red on all six, so two of Red's wait.
+    for (n, at) in areas.iter().enumerate().take(4) {
+        catches_on(&mut table, 1, at.clone(), 0xB0 + n as u32);
+    }
+    for (n, at) in areas.iter().enumerate() {
+        catches_on(&mut table, 0, at.clone(), 0xA0 + n as u32);
+    }
+    both_play(&mut table, 300);
+    assert_eq!(
+        party_pids(&mut table, 0),
+        [0xA0, 0xA1, 0xA2, 0xA3, 0xA4],
+        "the newest waiting one went to the PC; the other waiting one stays in a party of five"
+    );
+    assert!(table.game(0).pc.iter().any(|s| s.pokemon.pid == 0xA5));
+    assert!(
+        feed(&table, 0)
+            .iter()
+            .any(|e| e == "PIDGEY waits in the PC until Blue catches on Route 15: your party is full"),
+        "{:?}",
+        feed(&table, 0)
+    );
+
+    // Blue catches on Route 15, and Red takes that PIDGEY back into the party.
+    catches_on(&mut table, 1, areas[5].clone(), 0xB5);
+    both_play(&mut table, 300);
+    table.happens(0, |g| {
+        let at = g.pc.iter().position(|s| s.pokemon.pid == 0xA5).unwrap();
+        let stored = g.pc.remove(at);
+        g.party.push(stored.pokemon);
+    });
+    both_play(&mut table, 300);
+    let party = party_pids(&mut table, 0);
+    assert!(party.contains(&0xA5), "its Link is whole, so it stays: {party:x?}");
+    assert!(
+        !party.contains(&0xA4),
+        "Route 14's PIDGEY still waits, and the party is full again: {party:x?}"
+    );
 }

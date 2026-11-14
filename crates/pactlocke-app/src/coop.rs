@@ -46,18 +46,18 @@ fn own_check(game_sha1: Option<String>) -> SetupCheck {
     }
 }
 
-/// The rules the Host chooses, with their checkbox text.
-const RULES: [(Rule, &str); 10] = [
-    (Rule::FirstEncounter, "First Encounter"),
-    (Rule::DupesClause, "Dupes clause"),
-    (Rule::Statics, "Statics"),
-    (Rule::Gifts, "Gifts"),
-    (Rule::FaintIsDead, "Faint = Dead"),
-    (Rule::Links, "Links"),
-    (Rule::NoItems, "No items in battle"),
-    (Rule::SetMode, "Set mode"),
-    (Rule::MustNickname, "Must nickname"),
-    (Rule::TypeClause, "Type clause"),
+/// The rules the Host chooses, in the order the setup lists them.
+const RULES: [Rule; 10] = [
+    Rule::FirstEncounter,
+    Rule::DupesClause,
+    Rule::Statics,
+    Rule::Gifts,
+    Rule::FaintIsDead,
+    Rule::Links,
+    Rule::NoItems,
+    Rule::SetMode,
+    Rule::MustNickname,
+    Rule::TypeClause,
 ];
 
 fn rule_on(ruleset: &mut Ruleset, rule: Rule) -> Option<&mut bool> {
@@ -366,7 +366,8 @@ impl HostCoop {
                 .selected_text(preset.name())
                 .show_ui(ui, |ui| {
                     for choice in Preset::ALL {
-                        ui.selectable_value(&mut preset, choice, choice.name());
+                        ui.selectable_value(&mut preset, choice, choice.name())
+                            .on_hover_text(crate::rules_text::preset(choice));
                     }
                 });
             if preset != self.preset {
@@ -374,26 +375,24 @@ impl HostCoop {
                 let _ = self.setup_mut().choose(preset);
             }
         });
+        ui.weak(crate::rules_text::preset(self.preset));
         let mut ruleset = self.setup_mut().ruleset().clone();
-        for (rule, text) in RULES {
+        let shown = ruleset.clone();
+        for rule in RULES {
             let unavailable = self.setup_mut().unavailable(rule);
             let on = rule_on(&mut ruleset, rule).expect("a chosen rule");
-            let checkbox = ui.add_enabled(unavailable.is_none(), egui::Checkbox::new(on, text));
-            if let Some(reason) = unavailable {
-                checkbox.on_disabled_hover_text(format!("Unavailable: {reason}"));
-            }
+            crate::rules_text::rule_row(ui, on, rule, &shown, unavailable);
         }
         let mut caps = ruleset.level_caps.is_some();
-        ui.add_enabled(
-            self.setup_mut().unavailable(Rule::LevelCap).is_none(),
-            egui::Checkbox::new(&mut caps, "Level caps"),
-        );
+        let caps_unavailable = self.setup_mut().unavailable(Rule::LevelCap);
+        crate::rules_text::rule_row(ui, &mut caps, Rule::LevelCap, &shown, caps_unavailable);
         if caps != ruleset.level_caps.is_some() {
             ruleset.level_caps = caps.then(|| self.level_caps.clone());
         }
         let gates = self.setup_mut().sync_gates().to_vec();
         if !gates.is_empty() {
             let unavailable = self.setup_mut().unavailable(Rule::SyncGates);
+            crate::rules_text::description(ui, &crate::rules_text::summary(Rule::SyncGates, &shown), None);
             ui.collapsing(format!("Sync Gates · {}", ruleset.sync_gates.len()), |ui| {
                 if let Some(reason) = &unavailable {
                     ui.weak(format!("Unavailable: {reason}"));
@@ -418,9 +417,9 @@ impl HostCoop {
         }
         ui.horizontal(|ui| {
             ui.label("Retries");
-            ui.add(egui::DragValue::new(&mut ruleset.retries).range(0..=pactlocke_run::MAX_RETRIES))
-                .on_hover_text("A shared pool: each Retry sends everyone back to the latest Run Checkpoint, by everyone's vote. 0 is off.");
+            ui.add(egui::DragValue::new(&mut ruleset.retries).range(0..=pactlocke_run::MAX_RETRIES));
         });
+        crate::rules_text::description(ui, &crate::rules_text::retries(&ruleset), None);
         if let Some(caps) = ruleset.level_caps.as_mut() {
             ui.indent("level caps", |ui| {
                 egui::Grid::new("coop level caps").num_columns(4).show(ui, |ui| {
@@ -916,13 +915,20 @@ impl JoinCoop {
         };
         ui.label(format!("Ruleset (the Host is choosing) · version {}", view.version));
         let mut ruleset = view.ruleset.clone();
-        for (rule, text) in RULES {
+        let shown = ruleset.clone();
+        for rule in RULES {
             let on = rule_on(&mut ruleset, rule).expect("a chosen rule");
-            ui.add_enabled(false, egui::Checkbox::new(on, text));
+            ui.add_enabled(false, egui::Checkbox::new(on, crate::rules_text::name(rule)));
+            crate::rules_text::description(ui, &crate::rules_text::summary(rule, &shown), None);
         }
         let mut caps = ruleset.level_caps.is_some();
-        ui.add_enabled(false, egui::Checkbox::new(&mut caps, "Level caps"));
+        ui.add_enabled(
+            false,
+            egui::Checkbox::new(&mut caps, crate::rules_text::name(Rule::LevelCap)),
+        );
+        crate::rules_text::description(ui, &crate::rules_text::summary(Rule::LevelCap, &shown), None);
         ui.label(format!("Retries: {}", ruleset.retries));
+        crate::rules_text::description(ui, &crate::rules_text::retries(&shown), None);
         if !ruleset.sync_gates.is_empty() {
             ui.label(format!("Sync Gates: {}", ruleset.sync_gates.join(", ")));
         }
@@ -1029,6 +1035,7 @@ mod tests {
             name: "PIDGEY".into(),
             area: None,
             cause: DeathCause::Poison,
+            at_ms: 0,
         }
     }
 

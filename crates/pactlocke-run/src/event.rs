@@ -132,6 +132,10 @@ pub enum RunEvent {
         pid: u32,
         species: u16,
         species_name: String,
+        /// When it happened, in Unix milliseconds: for how long each Pokémon
+        /// survived (0 in logs from before it was kept).
+        #[serde(default)]
+        at_ms: i64,
     },
     /// The dupes clause: a wild battle with a Pokémon from a family the Player
     /// has alive doesn't use the Encounter, and ball throws are refused for it.
@@ -162,6 +166,10 @@ pub enum RunEvent {
         /// An egg; one no catalogue lists was bred at the Day Care.
         #[serde(default)]
         egg: bool,
+        /// When it happened, in Unix milliseconds: for how long each Pokémon
+        /// survived (0 in logs from before it was kept).
+        #[serde(default)]
+        at_ms: i64,
     },
     /// An in-game trade: the Player gave `gave` and received this Pokémon, a Gift.
     Traded {
@@ -170,6 +178,9 @@ pub enum RunEvent {
         species: u16,
         species_name: String,
         area: Option<AreaRef>,
+        /// When it happened, in Unix milliseconds (0 in logs from before it was kept).
+        #[serde(default)]
+        at_ms: i64,
     },
     /// The Ruleset doesn't let the Player keep this Gift, so it is to be released.
     GiftDeclined {
@@ -178,7 +189,13 @@ pub enum RunEvent {
         reason: DeclineReason,
     },
     /// A declined Gift was released.
-    Released { pid: u32, species_name: String },
+    Released {
+        pid: u32,
+        species_name: String,
+        /// When it happened, in Unix milliseconds (0 in logs from before it was kept).
+        #[serde(default)]
+        at_ms: i64,
+    },
     /// A Violation: a declined Gift couldn't be released.
     ReleaseFailed {
         pid: u32,
@@ -208,6 +225,23 @@ pub enum RunEvent {
         name: String,
         area: Option<AreaRef>,
         cause: DeathCause,
+        /// When it happened, in Unix milliseconds: for how long each Pokémon
+        /// survived (0 in logs from before it was kept).
+        #[serde(default)]
+        at_ms: i64,
+    },
+    /// Faint = Dead: every Pokémon in the Player's party is Dead, the last
+    /// being `last`, where and how it died. A Retry is offered if one is
+    /// left; otherwise it is a game over.
+    PartyWiped { last: crate::LastDeath },
+    /// The Run is lost: `how` it ended, and each Player's Pokémon that
+    /// survived the longest.
+    GameOver {
+        how: String,
+        longest: Vec<crate::Survivor>,
+        /// This Player's play time by their game's own clock, in milliseconds.
+        #[serde(default)]
+        play_ms: i64,
     },
     /// A Dead Pokémon was moved from the party to the Dead box.
     MovedToDeadBox { pid: u32, name: String, box_number: u8 },
@@ -264,6 +298,16 @@ pub enum RunEvent {
         type_name: String,
         box_number: u8,
     },
+    /// Links: a Pokémon waiting on its Link went to the PC, as the party is
+    /// full. `until` finishes the sentence: "until Blue catches on Route 1".
+    WaitsForLink {
+        pid: u32,
+        name: String,
+        until: String,
+        box_number: u8,
+    },
+    /// Links: a Pokémon waiting on its Link couldn't be moved out of a full party.
+    LinkWaitFailed { pid: u32, name: String, reason: String },
     /// A Violation: the type clause couldn't move a Pokémon out of the party.
     TypeClauseFailed {
         pid: u32,
@@ -320,6 +364,7 @@ impl RunEvent {
                 | RunEvent::Traded { .. }
                 | RunEvent::Released { .. }
                 | RunEvent::Died { .. }
+                | RunEvent::PartyWiped { .. }
                 | RunEvent::RetryVote { .. }
                 | RunEvent::DropoutVote { .. }
                 | RunEvent::FlagVote { .. }

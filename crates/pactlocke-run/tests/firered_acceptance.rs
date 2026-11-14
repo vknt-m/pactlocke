@@ -550,8 +550,12 @@ fn a_closed_route_1_refuses_the_ball_and_keeps_it_and_running_still_works() {
     }
 }
 
+/// The starter, the party's only Pokémon, faints to the rival.
+/// Under Faint = Dead that wipes the party: the game over comes at that
+/// Death, the game stops there, and it never runs on with an empty party
+/// (the playtest's softlock: the nurse waiting for a party of none).
 #[test]
-fn a_starter_that_faints_to_the_rival_goes_to_the_dead_box_and_stays_there() {
+fn the_party_s_last_pokemon_dying_to_the_rival_is_a_game_over_and_the_party_is_never_empty() {
     let Some(rom) = firered_rom() else {
         eprintln!("skipped: set PACTLOCKE_ROMS to a folder with your own {FIRERED_FILE}, or PACTLOCKE_ROM to it");
         return;
@@ -576,59 +580,49 @@ w 60",
     d.game.write(PARTY + PARTY_HP, &1u16.to_le_bytes());
     d.game.write(BATTLE_MONS + BATTLE_MON_HP, &1u16.to_le_bytes());
     let starter = d.game.game_mut().party()[0].clone();
-    let starter_bytes = d.read(PARTY, PARTY_SLOT_SIZE);
-    d.until_battle_over(Keys::A, 6000);
+    for i in 0..6000 {
+        if d.game.engine().view().game_over.is_some() {
+            break;
+        }
+        d.frame(if i % 16 < 3 { Keys::A } else { Keys::NONE });
+    }
 
-    let deaths = d.feed(FeedKind::Death);
-    assert_eq!(deaths.len(), 1, "a Death, recorded in the battle: {deaths:?}");
+    let over = d
+        .game
+        .engine()
+        .view()
+        .game_over
+        .clone()
+        .expect("a game over at the Death");
     assert!(
-        deaths[0].contains("fainted against a trainer's") && deaths[0].ends_with("is Dead"),
-        "{deaths:?}"
+        over.how.starts_with("Your party was wiped in ") && over.how.contains("fainted against a trainer's"),
+        "{}",
+        over.how
+    );
+    assert_eq!(
+        over.longest.len(),
+        1,
+        "the starter survived longest: {:?}",
+        over.longest
     );
     let graveyard = d.game.engine().view().graveyard.clone();
     assert_eq!(graveyard.len(), 1);
-    assert!(graveyard[0].killed_by.starts_with("a trainer's"), "{graveyard:?}");
+    assert_eq!(graveyard[0].pid, starter.pid);
 
-    // Back on the overworld, before anything can heal it: off to box 14.
-    d.play("m B 600");
-    let deaths = d.feed(FeedKind::Death);
-    assert_eq!(
-        deaths[0],
-        format!(
-            "Moved {} to box 14, the Dead box: Dead Pokémon can't be used again",
-            starter.nickname
-        )
+    // The game goes no further: nothing it does can reach an empty party.
+    let stopped_at = d.game.engine().frames_run();
+    d.play(
+        "m A 600
+m B 600",
     );
-    assert_eq!(d.read(PARTY_COUNT, 1)[0], 0, "the party count is fixed");
-    assert!(d.game.game_mut().party().is_empty());
-    let dead_box: Vec<u32> = d
-        .game
-        .game_mut()
-        .pc()
-        .into_iter()
-        .filter(|s| s.box_number == 14)
-        .map(|s| s.pokemon.pid)
-        .collect();
-    assert_eq!(dead_box, [starter.pid]);
-    dump_screen(&d.game, "after-dead-box");
-
-    // Withdrawn by hand (test setup: what the PC's WITHDRAW does to memory): back it goes, in red.
-    let box_14_slot_1 = d.u32(PC_STORAGE_POINTER) + 4 + 13 * 30 * BOX_SLOT_SIZE;
-    d.game.write(box_14_slot_1, &[0; BOX_SLOT_SIZE as usize]);
-    d.game.write(PARTY, &starter_bytes);
-    d.game.write(PARTY_COUNT, &[1]);
-    d.play("w 30");
-    assert_eq!(
-        d.feed(FeedKind::Violation),
-        [format!(
-            "Violation: {} is Dead but was back in the party, so it went back to box 14",
-            starter.nickname
-        )]
+    assert_eq!(d.game.engine().frames_run(), stopped_at, "the game has stopped");
+    assert_eq!(d.read(PARTY_COUNT, 1)[0], 1, "the starter is still in the party");
+    assert!(
+        d.feed(FeedKind::Death).iter().all(|e| !e.starts_with("Moved")),
+        "nothing was moved to the Dead box: {:?}",
+        d.feed(FeedKind::Death)
     );
-    assert_eq!(d.read(PARTY_COUNT, 1)[0], 0);
-    for entry in d.game.engine().view().feed.iter().rev() {
-        eprintln!("feed: {}", entry.text);
-    }
+    dump_screen(&d.game, "game-over");
 }
 
 #[test]
@@ -836,6 +830,22 @@ fn rival_battle_with_two_pokemon_each(d: &mut Driver) {
     let starter = d.read(PARTY, PARTY_SLOT_SIZE);
     d.game.write(PARTY + PARTY_SLOT_SIZE as u32, &starter);
     d.game.write(PARTY_COUNT, &[2]);
+}
+
+/// A second Pokémon in the party, so a Death isn't a wiped party (test
+/// setup): a copy of the starter under a PID of its own. Its data is
+/// encrypted with PID xor OT ID and ordered by PID mod 24, so the PID moves
+/// by 24 and the OT ID by the same xor, and the copy decrypts exactly as
+/// the starter does, checksum and all.
+fn second_pokemon_in_the_party(d: &mut Driver) {
+    let mut copy = d.read(PARTY, PARTY_SLOT_SIZE);
+    let pid = u32::from_le_bytes(copy[0..4].try_into().unwrap());
+    let ot_id = u32::from_le_bytes(copy[4..8].try_into().unwrap());
+    let new_pid = pid.wrapping_add(24);
+    copy[0..4].copy_from_slice(&new_pid.to_le_bytes());
+    copy[4..8].copy_from_slice(&(ot_id ^ pid ^ new_pid).to_le_bytes());
+    d.write(PARTY + PARTY_SLOT_SIZE as u32, &copy);
+    d.write(PARTY_COUNT, &[2]);
 }
 
 /// Leaves the rival's Pokémon out in battle on 1 HP (test setup).
@@ -1466,6 +1476,7 @@ fn a_link_mates_death_faints_the_starter_mid_battle_through_the_games_own_faint(
     d.fast_text();
     d.play("h D 64\nw 60");
     d.until_action_menu(Keys::A, 3000);
+    second_pokemon_in_the_party(&mut d);
     let starter = d.game.game_mut().party()[0].clone();
     assert!(d.read(BATTLE_MONS + BATTLE_MON_HP, 2) != [0, 0]);
 
@@ -1497,6 +1508,28 @@ fn a_link_mates_death_faints_the_starter_mid_battle_through_the_games_own_faint(
         d.play("p A 20");
     }
     assert_eq!(d.read(BATTLE_MONS + BATTLE_MON_HP, 2), [0, 0], "fainted in battle");
+    assert!(d.game.engine().view().wipe.is_none(), "the second Pokémon lives on");
+    // The second Pokémon goes out (the party menu opens on the fainted
+    // starter: down to the next, SEND OUT), and beats the rival's on 1 HP
+    // (test setup).
+    for _ in 0..60 {
+        if d.read(BATTLE_MONS + BATTLE_MON_HP, 2) != [0, 0] {
+            break;
+        }
+        d.play(
+            "p B 20
+p B 20
+p D 20
+p A 30
+p A 120",
+        );
+    }
+    assert_ne!(
+        d.read(BATTLE_MONS + BATTLE_MON_HP, 2),
+        [0, 0],
+        "the second Pokémon is out"
+    );
+    rivals_pokemon_on_1_hp(&mut d);
     d.until_battle_over(Keys::A, 6000);
     d.play("m B 900");
     let shadow = &d.watcher.as_ref().unwrap().shadow;

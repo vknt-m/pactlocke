@@ -5,6 +5,7 @@
 //! Lobby. Before a Run with friends starts, the panel is the Lobby alone.
 
 use eframe::egui;
+use pactlocke_game::Rule;
 use std::collections::BTreeSet;
 
 use pactlocke_run::{
@@ -15,7 +16,7 @@ use pactlocke_run::{
 use crate::lobby_ui::Lobbies;
 use crate::spectate::{DropoutAsk, Spectate};
 use crate::theme::{self, Icons};
-use crate::{player_strip, run_panel};
+use crate::{player_strip, rules_text, run_panel};
 
 /// The side panel's tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -540,54 +541,51 @@ fn party(ui: &mut egui::Ui, run: &RunPanel<'_>, players: &[Who], links: &[Link],
 fn ruleset_tab(ui: &mut egui::Ui, run: &RunPanel<'_>, lobbies: &Lobbies) -> Option<RunCommand> {
     let mut command = None;
     let r = run.ruleset;
-    egui::Grid::new("ruleset facts")
-        .num_columns(2)
-        .spacing([12.0, 4.0])
-        .show(ui, |ui| {
-            ui.weak("Preset");
-            ui.label(preset_name(r));
-            ui.end_row();
-            if let Some(locked) = lobbies
-                .log()
-                .and_then(|l| l.locked())
-                .filter(|_| run.spectate.is_some())
-            {
-                ui.weak("Locked");
-                ui.label(run_panel::ago(SystemRunClock.now_ms() - locked.start_ms));
-                ui.end_row();
+    // Each fact wraps to the panel's width, however narrow.
+    let fact = |ui: &mut egui::Ui, name: &str, value: String| {
+        ui.horizontal_wrapped(|ui| {
+            ui.weak(name);
+            ui.label(value);
+        })
+        .response
+    };
+    fact(ui, "Preset", preset_name(r).to_string());
+    if let Some(locked) = lobbies
+        .log()
+        .and_then(|l| l.locked())
+        .filter(|_| run.spectate.is_some())
+    {
+        fact(ui, "Locked", run_panel::ago(SystemRunClock.now_ms() - locked.start_ms));
+    }
+    let cap = match &run.view.level_cap {
+        Some(cap) => {
+            let soft = if cap.soft { " (soft)" } else { "" };
+            match &cap.next {
+                Some(next) => format!("{} until {next}{soft}", cap.level),
+                None => "every cap passed".to_owned(),
             }
-            ui.weak("Level cap");
-            match &run.view.level_cap {
-                Some(cap) => {
-                    let soft = if cap.soft { " (soft)" } else { "" };
-                    match &cap.next {
-                        Some(next) => ui.label(format!("{} until {next}{soft}", cap.level)),
-                        None => ui.label("every cap passed"),
-                    };
-                }
-                None => {
-                    ui.label("off");
-                }
-            }
-            ui.end_row();
-            ui.weak("Retries");
-            match run.view.retries_left {
-                Some(left) => ui.label(format!("{left} of {} left", r.retries)),
-                None => ui.label("off"),
-            };
-            ui.end_row();
-            if !r.sync_gates.is_empty() {
-                ui.weak("Sync Gates");
-                ui.label(format!("{}: {}", r.sync_gates.len(), r.sync_gates.join(", ")));
-                ui.end_row();
-            }
-            if let Some(caps) = r.level_caps.as_ref().filter(|c| !c.is_empty()) {
-                ui.weak("Level caps");
-                let caps: Vec<String> = caps.iter().map(|c| format!("{} {}", c.name, c.level)).collect();
-                ui.label(caps.join(" · "));
-                ui.end_row();
-            }
-        });
+        }
+        None => "off".to_owned(),
+    };
+    fact(ui, "Level cap", cap).on_hover_text(rules_text::detail(Rule::LevelCap, r));
+    let retries = match run.view.retries_left {
+        Some(left) => format!("{left} of {} left", r.retries),
+        None if r.retries > 0 => format!("{} in the shared pool", r.retries),
+        None => "off".to_owned(),
+    };
+    fact(ui, "Retries", retries).on_hover_text(rules_text::retries(r));
+    if !r.sync_gates.is_empty() {
+        fact(
+            ui,
+            "Sync Gates",
+            format!("{}: {}", r.sync_gates.len(), r.sync_gates.join(", ")),
+        )
+        .on_hover_text(rules_text::detail(Rule::SyncGates, r));
+    }
+    if let Some(caps) = r.level_caps.as_ref().filter(|c| !c.is_empty()) {
+        let caps: Vec<String> = caps.iter().map(|c| format!("{} {}", c.name, c.level)).collect();
+        fact(ui, "Level caps", caps.join(" · "));
+    }
     if run.spectate.is_none()
         && let Some(left) = run.view.retries_left
     {
@@ -605,29 +603,36 @@ fn ruleset_tab(ui: &mut egui::Ui, run: &RunPanel<'_>, lobbies: &Lobbies) -> Opti
     }
     ui.add_space(6.0);
     ui.strong("Rules");
+    ui.add(egui::Label::new(egui::RichText::new("Hover over a rule for the details.").weak().small()).wrap());
     let rules = [
-        ("First Encounter", r.first_encounter),
-        ("Faint = Dead", r.faint_is_dead),
-        ("Dupes clause", r.dupes_clause),
-        ("Gifts", r.gifts),
-        ("Statics", r.statics),
-        ("Level caps", r.level_caps.is_some()),
-        ("No items", r.no_items),
-        ("Set mode", r.set_mode),
-        ("Must nickname", r.must_nickname),
-        ("Type clause", r.type_clause),
-        ("Links", r.links),
+        (Rule::FirstEncounter, r.first_encounter),
+        (Rule::FaintIsDead, r.faint_is_dead),
+        (Rule::DupesClause, r.dupes_clause),
+        (Rule::Gifts, r.gifts),
+        (Rule::Statics, r.statics),
+        (Rule::LevelCap, r.level_caps.is_some()),
+        (Rule::NoItems, r.no_items),
+        (Rule::SetMode, r.set_mode),
+        (Rule::MustNickname, r.must_nickname),
+        (Rule::TypeClause, r.type_clause),
+        (Rule::Links, r.links),
     ];
-    for (name, on) in rules {
-        ui.horizontal(|ui| {
+    for (rule, on) in rules {
+        let row = ui.horizontal_wrapped(|ui| {
             if on {
                 ui.label("✔");
-                ui.label(name);
+                ui.label(rules_text::name(rule));
             } else {
                 ui.weak("–");
-                ui.weak(name);
+                ui.weak(rules_text::name(rule));
             }
         });
+        let help = if on {
+            rules_text::detail(rule, r)
+        } else {
+            format!("Off in this Run. When on: {}", rules_text::summary(rule, r))
+        };
+        row.response.on_hover_text(help);
     }
     ui.add_space(6.0);
     egui::CollapsingHeader::new(format!("Encounters used · {}", run.view.closed_areas.len()))

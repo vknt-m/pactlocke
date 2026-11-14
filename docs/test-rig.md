@@ -36,7 +36,7 @@ Each scenario is a folder in `scripts/rig/scenarios/<game>/`. `rig.env` names th
 | Scenario | Players | What it checks |
 |---|---|---|
 | `shadow-sync` | 3 | Three Players play from power-on to the lab, and every Shadow Game stays matched. |
-| `link-death` | 2 | The starters are one Link. Red's faints to the rival with Faint = Dead, and Blue's dies with it, judged from Red's Shadow Game. |
+| `link-death` | 2 | The starters are one Link. Red's faints to the rival with Faint = Dead, and Blue's dies with it, judged from Red's Shadow Game. Each starter is its Player's whole party, so the Run log has the wipe and both games stop: a game over. |
 | `sync-gate` | 2 | The lab rival as a test-only Sync Gate holds each Player with its message until both are Ready there, then opens with a Run Checkpoint every Player is captured in. The battle itself isn't played: the lab's walk-in trigger can't run again after a hold. |
 | `retry` | 2 | After the gate's Run Checkpoint, both walk out of the lab and vote for a Retry. Both games go back as a new boot, and each Shadow Game follows it and matches. |
 | `disconnect` | 2 | Blue's network is cut for 90 seconds, long enough for the connection to drop, while they play on. With Red silent, Blue takes over hosting; once the cut ends Red joins Blue as a Player, each stream catches up, and each Shadow Game matches. |

@@ -932,6 +932,7 @@ mod tests {
             name: "PIDGEY".into(),
             area: None,
             cause: DeathCause::Poison,
+            at_ms: 0,
         }
     }
 

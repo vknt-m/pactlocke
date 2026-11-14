@@ -127,6 +127,8 @@ pub struct RunSummary {
     pub with_friends: bool,
     /// For a solo copy, the Run with friends it was copied from, and when.
     pub copied_from: Option<CopiedFrom>,
+    /// How it ended, if it is lost: it can't be resumed.
+    pub game_over: Option<crate::GameOverView>,
 }
 
 /// The Run with friends a solo copy was made from: its name, and when.
@@ -300,9 +302,26 @@ fn summary(path: &Path) -> Option<RunSummary> {
             })
         })
         .ok();
+    let game_over = db
+        .query_row(
+            "SELECT at_ms, event FROM events WHERE event LIKE '%\"kind\":\"game_over\"%' ORDER BY seq DESC LIMIT 1",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .ok()
+        .and_then(|(at_ms, event)| match serde_json::from_str(&event).ok()? {
+            crate::RunEvent::GameOver { how, longest, play_ms } => Some(crate::GameOverView {
+                how,
+                longest,
+                at_ms,
+                play_ms,
+            }),
+            _ => None,
+        });
     Some(RunSummary {
         id,
         deaths,
+        game_over,
         with_friends,
         copied_from,
         last_played_ms: last_event.unwrap_or(info.created_ms),

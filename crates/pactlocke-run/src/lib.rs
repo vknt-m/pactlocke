@@ -10,6 +10,7 @@ mod avatars;
 mod boot;
 mod cheats;
 mod clock;
+mod ending;
 mod engine;
 mod event;
 mod families;
@@ -31,10 +32,11 @@ pub use avatars::{Painter, PartnerAvatar};
 pub use boot::{BootPlan, Booted, boot_core};
 pub use cheats::{Cheat, CheatWatch, FAST_BURST_FRAMES, Flag};
 pub use clock::{RunClock, SystemRunClock};
+pub use ending::{LastDeath, Survivor, survivors};
 pub use engine::{RunEngine, SUSPEND_SLOT_EVERY_MS};
 pub use event::{AreaRef, CheckpointReason, DeathCause, Recorded, ResumedFrom, RunEvent, SourceRef};
 pub use file::{CopiedFrom, RunFile, RunId, RunLibrary, RunSummary};
-pub use links::{Judge, Link, LinkKeeper, Member, links};
+pub use links::{Judge, Link, LinkKeeper, LinkStanding, Member, WaitingOnLink, links};
 pub use live::{LiveGame, PlayedGame};
 pub use presence::{DROPOUT_OFFER_MS, HOST_SILENT_MS, OFFLINE_MS, Presence};
 pub use running::{RetryTo, RunCommand, RunningGame};
@@ -49,14 +51,16 @@ pub use shadow::{
 pub use shadow_runner::{ShadowRunner, ShadowStatus};
 pub use shared_log::{
     Call, DROPOUT_MIN_PLAYERS, FlagVote, GamePoint, LogBody, LogEntry, LogError, LogFollower, Part, ReadyCheck, RunLog,
-    Signer, Submission, Tallies, Vote,
+    Signer, Submission, Tallies, Vote, Wiped,
 };
 pub use storage::{InputBatch, MemoryStorage, RunInfo, RunStorage, Stamped, StorageError, StoredCheckpoint, StoredRun};
 pub use stream::{
     Added, CHUNK_FRAMES, FrameHash, HASH_EVERY, InputChunk, Mark, Outgoing, PlayerKey, Received, Rewrite, StreamHub,
     StreamMessage, StreamOut, StreamStore, StreamWant,
 };
-pub use view::{Doing, FeedEntry, FeedIcon, FeedKind, Grave, LevelCapView, NicknameWanted, RunView};
+pub use view::{
+    Doing, FeedEntry, FeedIcon, FeedKind, GameOverView, Grave, LevelCapView, NicknameWanted, RunView, WipeView,
+};
 
 use pactlocke_game::LevelCap;
 use serde::{Deserialize, Serialize};
@@ -119,6 +123,9 @@ pub struct Ruleset {
 
 /// The most Retries a Ruleset's pool may hold.
 pub const MAX_RETRIES: u8 = 10;
+
+/// The most Pokémon a party holds. A full party keeps its slots for linked Pokémon.
+pub const PARTY_SIZE: usize = 6;
 
 fn allowed() -> bool {
     true

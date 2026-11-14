@@ -348,7 +348,9 @@ impl<G: PlayedGame> ShadowGame<G> {
         self.game.core_mut().run_frame(keys);
         self.last_keys = keys;
         self.confirmed += 1;
-        if self.confirmed.is_multiple_of(LOOK_EVERY) {
+        // Also at the newest frame received: a game that stopped there (a
+        // wiped party) is seen as it stopped, Deaths and all.
+        if self.confirmed.is_multiple_of(LOOK_EVERY) || self.keys.is_empty() {
             self.look();
         }
         if self.confirmed.is_multiple_of(AVATAR_EVERY) {

@@ -104,11 +104,19 @@ fn a_dead_pokemon_is_moved_even_if_healed_before_the_overworld() {
     let mut player = player_with_two();
     player.meets_trainer(CHARMANDER);
     player.faints(STARTER);
-    player.faints(CAUGHT);
-    player.blacks_out();
+    // The game heals the party before the Player is back on the overworld
+    // (the whole party fainting is a game over: see game_over.rs).
+    player.game.battle = None;
+    player.game.safe_point = false;
+    player.plays(10);
+    for pokemon in &mut player.game.party {
+        pokemon.stats.as_mut().expect("a party Pokémon").hp = 20;
+    }
+    player.game.safe_point = true;
+    player.plays(10);
 
-    assert_eq!(player.party_pids(), Vec::<u32>::new());
-    assert_eq!(player.dead_box_pids(), [STARTER, CAUGHT]);
+    assert_eq!(player.party_pids(), [CAUGHT]);
+    assert_eq!(player.dead_box_pids(), [STARTER]);
     assert_eq!(player.feed(FeedKind::Violation), Vec::<String>::new());
 }
 

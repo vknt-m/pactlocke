@@ -93,6 +93,8 @@ fn a_dead_pokemons_family_can_be_caught_again() {
         faint_is_dead: true,
         ..dupes_clause()
     });
+    // A second Pokémon, alive, so the Death isn't a wiped party.
+    player.game.party.push(party_pokemon(RATTATA, 0x5151, "RATTY"));
     player.walks_into(route_2());
     player.meets_wild(RATTATA);
     player.faints(OWNED_PIDGEY);
@@ -118,6 +120,8 @@ fn a_dead_pokemon_not_yet_moved_from_the_party_makes_no_dupe() {
         faint_is_dead: true,
         ..dupes_clause()
     });
+    // A second Pokémon, alive, so the Death isn't a wiped party.
+    player.game.party.push(party_pokemon(RATTATA, 0x5151, "RATTY"));
     player.walks_into(route_2());
     player.meets_wild(RATTATA);
     player.faints(OWNED_PIDGEY);

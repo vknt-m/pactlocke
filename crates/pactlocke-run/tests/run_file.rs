@@ -142,7 +142,11 @@ fn a_run_resumed_from_its_file_keeps_its_dead_and_graveyard() {
         ..Ruleset::default()
     };
     let mut player = Player::starts_a_run_in(Box::new(library.create().unwrap()), clock.clone(), ruleset.clone());
-    player.game.party = vec![party_pokemon(PIDGEY, 0x0000_BEEF, "BIRDY")];
+    // A second Pokémon, alive, so the Death isn't a wiped party.
+    player.game.party = vec![
+        party_pokemon(PIDGEY, 0x0000_BEEF, "BIRDY"),
+        party_pokemon(RATTATA, 0x5151, "RATTY"),
+    ];
     player.walks_into(route_1());
     player.meets_wild(RATTATA);
     player.faints(0x0000_BEEF);
@@ -376,7 +380,11 @@ fn a_solo_copy_of_a_run_with_friends_goes_on_alone_from_there_and_the_run_with_f
     player.engine.take_checkpoint(core_checkpoint(0));
     let host = pactlocke_run::Signer::from_secret([7; 32]);
     player.engine.keep_log(0, friends_log(&host, &ruleset).entries());
-    player.game.party = vec![party_pokemon(PIDGEY, 0x0000_BEEF, "BIRDY")];
+    // A second Pokémon, alive, so the Death isn't a wiped party.
+    player.game.party = vec![
+        party_pokemon(PIDGEY, 0x0000_BEEF, "BIRDY"),
+        party_pokemon(RATTATA, 0x5151, "RATTY"),
+    ];
     player.walks_into(route_1());
     player.meets_wild(RATTATA);
     player.faints(0x0000_BEEF);
@@ -423,4 +431,29 @@ fn a_solo_copy_of_a_run_with_friends_goes_on_alone_from_there_and_the_run_with_f
     assert_eq!(player.engine.view().graveyard.len(), 1);
     assert_eq!(player.engine.view().closed_areas, ["Route 1"]);
     assert!(player.engine.kept_log().is_empty(), "alone");
+}
+
+#[test]
+fn a_run_lost_to_a_game_over_is_listed_so_with_how_it_ended() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = RunLibrary::open(dir.path()).unwrap();
+    let clock = TestClock::at(START_MS);
+    let ruleset = Ruleset {
+        faint_is_dead: true,
+        ..Ruleset::default()
+    };
+    let mut player = Player::starts_a_run_in(Box::new(library.create().unwrap()), clock.clone(), ruleset);
+    player.game.party = vec![party_pokemon(PIDGEY, 0x0000_BEEF, "BIRDY")];
+    player.walks_into(route_1());
+    player.meets_wild(RATTATA);
+    player.faints(0x0000_BEEF);
+    drop(player);
+
+    let run = &library.list()[0];
+    let over = run.game_over.as_ref().expect("listed as a game over");
+    assert_eq!(
+        over.how,
+        "Your party was wiped on Route 1: BIRDY fainted against a wild RATTATA"
+    );
+    assert!(over.at_ms >= START_MS);
 }

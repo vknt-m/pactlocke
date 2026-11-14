@@ -1,6 +1,8 @@
 mod caps;
+mod game_over;
 mod gates;
 mod gifts;
+mod links_party;
 mod nicknames_and_types;
 mod no_items_and_set_mode;
 
@@ -102,6 +104,22 @@ pub struct RunEngine {
     /// Every Pokémon the Run log says the Player got, so one back from the
     /// Day Care after a reboot isn't taken for a Gift.
     logged_pids: BTreeSet<u32>,
+    /// The Player's Pokémon in the order the Run log says they got them.
+    got_order: Vec<u32>,
+    /// Links: where the Player's Pokémon stand in their Links, as last told.
+    link_standing: crate::LinkStanding,
+    /// The Player's Pokémon from an Encounter or a Gift with a source: each
+    /// is a member of a Link once the Links are worked out.
+    link_members: BTreeSet<u32>,
+    /// Pokémon waiting on their Link that couldn't be moved out of a full
+    /// party since the game was booted; they aren't tried again until then.
+    link_wait_failed: BTreeSet<u32>,
+    /// The standing catches, Gifts and Deaths, for the Pokémon that survived longest.
+    lives: Vec<RunEvent>,
+    /// The newest Death: who, where and how, for a wiped party's line.
+    last_death: Option<crate::LastDeath>,
+    /// When the party was wiped: the end of the Run for its survivors.
+    wiped_at_ms: Option<i64>,
     /// Run state recorded since it was last taken, for the shared Run log.
     shared: Vec<RunEvent>,
     /// Each Run Checkpoint's event, by the checkpoint's hash, and the newest one's hash.
@@ -590,6 +608,13 @@ impl RunEngine {
             suspended: false,
             last_play_time: None,
             logged_pids: BTreeSet::new(),
+            got_order: Vec::new(),
+            lives: Vec::new(),
+            last_death: None,
+            wiped_at_ms: None,
+            link_standing: crate::LinkStanding::default(),
+            link_members: BTreeSet::new(),
+            link_wait_failed: BTreeSet::new(),
             shared: Vec::new(),
             run_checkpoints: BTreeMap::new(),
             latest_run_checkpoint: None,
@@ -730,9 +755,8 @@ impl RunEngine {
             self.check_nicknames(game);
             self.write_names_given(game);
             self.keep_type_clause(game);
+            self.keep_party_for_links(game);
         }
-
-        self.resumed_mid_game = false;
 
         self.resumed_mid_game = false;
 
@@ -1019,6 +1043,7 @@ impl RunEngine {
                     pid: pokemon.pid,
                     species: pokemon.species,
                     species_name,
+                    at_ms: self.clock.now_ms(),
                 });
             }
         }
@@ -1070,7 +1095,9 @@ impl RunEngine {
             species_name,
             area,
             cause: DeathCause::Link { why },
+            at_ms: self.clock.now_ms(),
         });
+        self.check_wipe(game);
     }
 
     /// Links: another Player missed, skipped or lost this source's
@@ -1117,13 +1144,19 @@ impl RunEngine {
                 species_name,
                 area: area.clone(),
                 cause: cause.clone(),
+                at_ms: self.clock.now_ms(),
             });
         }
+        self.check_wipe(game);
     }
 
     /// Moves every Dead Pokémon in the party to the Dead box, one at a time,
-    /// since each move compacts the party.
+    /// since each move compacts the party. A wiped party stays as it is:
+    /// the game has stopped, and an empty party would softlock it.
     fn move_the_dead(&mut self, game: &mut impl LiveGame) {
+        if self.view.wipe.is_some() {
+            return;
+        }
         loop {
             let party = game.party();
             let Some((slot, pokemon, why)) = party.into_iter().enumerate().find_map(|(slot, p)| {
@@ -1229,7 +1262,19 @@ impl RunEngine {
             &recorded.event
         {
             self.logged_pids.insert(*pid);
+            self.got_order.retain(|p| p != pid);
+            self.got_order.push(*pid);
         }
+        match &recorded.event {
+            RunEvent::EncounterOver { pid: Some(pid), .. }
+            | RunEvent::Gift {
+                pid, source: Some(_), ..
+            } => {
+                self.link_members.insert(*pid);
+            }
+            _ => {}
+        }
+        self.take_in_ending(recorded);
         if let RunEvent::Encounter { area, .. } = &recorded.event {
             self.view.closed_areas.push(area.name.clone());
         }

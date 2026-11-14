@@ -449,6 +449,12 @@ impl StreamOut {
         closed
     }
 
+    /// The chunk so far, if it has any frames, even if not full: a game that
+    /// has stopped sends the frames it ran up to there.
+    pub fn flush(&mut self) -> Option<InputChunk> {
+        (!self.open.keys.is_empty()).then(|| self.close())
+    }
+
     /// The chunk so far, even if not full; the next starts after it.
     /// What is at the boundary after its last frame (changes, a checkpoint)
     /// goes on with the next chunk, with the frame it comes before.

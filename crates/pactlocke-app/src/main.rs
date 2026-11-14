@@ -14,6 +14,7 @@
 mod audio;
 mod coop;
 mod data_dir;
+mod game_over;
 mod gamepad;
 mod headless;
 mod links_panel;
@@ -22,6 +23,7 @@ mod logger;
 mod player_strip;
 mod resume;
 mod rom_report;
+mod rules_text;
 mod run_panel;
 mod settings;
 mod settings_ui;
@@ -218,24 +220,24 @@ fn unavailable_reason(capability: &Capability) -> Option<String> {
     }
 }
 
-/// A rule's checkbox, greyed out with the reason on hover when it can't be chosen.
-fn rule_checkbox(ui: &mut egui::Ui, on: &mut bool, text: &str, unavailable: Option<String>) {
+/// A rule's checkbox with what it does under it, off and greyed out with
+/// the reason when it can't be chosen.
+fn rule_checkbox(ui: &mut egui::Ui, on: &mut bool, rule: Rule, shown: &Ruleset, unavailable: Option<String>) {
     if unavailable.is_some() {
         *on = false;
     }
-    let checkbox = ui.add_enabled(unavailable.is_none(), egui::Checkbox::new(on, text));
-    if let Some(reason) = unavailable {
-        checkbox.on_disabled_hover_text(format!("Unavailable: {reason}"));
-    }
+    rules_text::rule_row(ui, on, rule, shown, unavailable);
 }
 
 /// The level caps checkbox and, while it is on, each stage's cap to edit.
 fn level_caps_editor(ui: &mut egui::Ui, draft: &mut NewRunDraft) {
+    let shown = draft.ruleset.clone();
     if draft.level_caps.is_empty() {
         rule_checkbox(
             ui,
             &mut draft.level_caps_on,
-            "Level caps",
+            Rule::LevelCap,
+            &shown,
             Some("this Game Profile lists no gym leaders or Elite Four for caps yet".to_owned()),
         );
         return;
@@ -248,6 +250,7 @@ fn level_caps_editor(ui: &mut egui::Ui, draft: &mut NewRunDraft) {
     if let Some(reason) = &draft.soft_cap {
         checkbox.on_hover_text(format!("The game can't be stopped at the cap on this ROM: {reason}"));
     }
+    rules_text::description(ui, &rules_text::summary(Rule::LevelCap, &shown), None);
     if !draft.level_caps_on {
         return;
     }
@@ -320,6 +323,8 @@ struct PactlockeApp {
     deleting: Option<RunSummary>,
     /// A Run with friends waiting for Continue as solo… to be confirmed.
     copying: Option<RunSummary>,
+    /// A lost Run's summary, opened from the Runs list.
+    lost: Option<RunSummary>,
     about: bool,
     /// Paused from Emulation ▸ Pause.
     paused: bool,
@@ -367,6 +372,7 @@ impl PactlockeApp {
             name_draft: String::new(),
             deleting: None,
             copying: None,
+            lost: None,
             about: false,
             paused: false,
             fast_forward: false,
@@ -630,6 +636,10 @@ impl PactlockeApp {
     }
 
     fn resume_run(&mut self, summary: &RunSummary) {
+        if summary.game_over.is_some() {
+            self.error = Some("This Run is over: a game over can't be resumed.".to_owned());
+            return;
+        }
         self.close_run();
         if summary.with_friends {
             self.resume_coop_run(summary);
@@ -903,7 +913,11 @@ impl PactlockeApp {
                     .selected_text(preset_name(&draft.ruleset))
                     .show_ui(ui, |ui| {
                         for preset in Preset::ALL {
-                            if ui.selectable_label(false, preset.name()).clicked() {
+                            if ui
+                                .selectable_label(false, preset.name())
+                                .on_hover_text(rules_text::preset(preset))
+                                .clicked()
+                            {
                                 let mut ruleset = preset.ruleset(&draft.level_caps);
                                 // Alone there are no Links; rules this ROM can't enforce stay off.
                                 ruleset.links = false;
@@ -928,12 +942,16 @@ impl PactlockeApp {
                         }
                     });
             });
-            ui.weak("With friends, every rule can still be changed in the Lobby before the lock.");
+            ui.weak("A preset fills in the rules below. With friends, every rule can still be changed in the Lobby before the lock.");
+            let rules_height = (ui.ctx().content_rect().height() * 0.55).max(200.0);
+            egui::ScrollArea::vertical().max_height(rules_height).show(ui, |ui| {
+            let shown = draft.ruleset.clone();
             let ruleset = &mut draft.ruleset;
             rule_checkbox(
                 ui,
                 &mut ruleset.first_encounter,
-                "First Encounter: only the first wild battle in each Area can be caught",
+                Rule::FirstEncounter,
+                &shown,
                 draft.unavailable.get(&Rule::FirstEncounter).cloned(),
             );
             let needs_first_encounter = |available: bool, rule: Rule| {
@@ -948,60 +966,64 @@ impl PactlockeApp {
             rule_checkbox(
                 ui,
                 &mut ruleset.dupes_clause,
-                "Dupes clause: a wild Pokémon from a family you have alive doesn't count",
+                Rule::DupesClause,
+                &shown,
                 dupes_unavailable,
             );
             rule_checkbox(
                 ui,
                 &mut ruleset.statics,
-                "Statics: a legendary or other Static is a bonus Encounter of its own",
+                Rule::Statics,
+                &shown,
                 statics_unavailable,
             );
-            let gifts = ui.add_enabled(
-                !draft.unavailable.contains_key(&Rule::Gifts),
-                egui::Checkbox::new(
-                    &mut ruleset.gifts,
-                    "Gifts: keep Gifts besides the starter (when off, they are released)",
-                ),
-            );
-            if let Some(reason) = draft.unavailable.get(&Rule::Gifts) {
-                gifts.on_disabled_hover_text(format!("Every Gift is kept: {reason}"));
-            }
+            // Gifts that can't be released are all kept: the box stays as it is.
+            let gifts_unavailable = draft
+                .unavailable
+                .get(&Rule::Gifts)
+                .map(|reason| format!("{reason}, so every Gift is kept"));
+            rules_text::rule_row(ui, &mut ruleset.gifts, Rule::Gifts, &shown, gifts_unavailable);
             rule_checkbox(
                 ui,
                 &mut ruleset.faint_is_dead,
-                "Faint = Dead: fainted Pokémon go to the Dead box",
+                Rule::FaintIsDead,
+                &shown,
                 draft.unavailable.get(&Rule::FaintIsDead).cloned(),
             );
             rule_checkbox(
                 ui,
                 &mut ruleset.no_items,
-                "No items: the Bag is refused in trainer battles, and only Poké Balls work in wild battles",
+                Rule::NoItems,
+                &shown,
                 draft.unavailable.get(&Rule::NoItems).cloned(),
             );
             rule_checkbox(
                 ui,
                 &mut ruleset.set_mode,
-                "Set mode: the battle style is kept on Set",
+                Rule::SetMode,
+                &shown,
                 draft.unavailable.get(&Rule::SetMode).cloned(),
             );
             rule_checkbox(
                 ui,
                 &mut ruleset.must_nickname,
-                "Must nickname: every catch and Gift gets a nickname",
+                Rule::MustNickname,
+                &shown,
                 draft.unavailable.get(&Rule::MustNickname).cloned(),
             );
             rule_checkbox(
                 ui,
                 &mut ruleset.type_clause,
-                "Type clause: one Pokémon of each primary type in your party",
+                Rule::TypeClause,
+                &shown,
                 draft.unavailable.get(&Rule::TypeClause).cloned(),
             );
             level_caps_editor(ui, draft);
             ui.horizontal(|ui| {
                 ui.label("Retries");
-                ui.add(egui::DragValue::new(&mut draft.ruleset.retries).range(0..=pactlocke_run::MAX_RETRIES))
-                    .on_hover_text("Each sends you back to your latest in-game save, undoing everything since. 0 is off.");
+                ui.add(egui::DragValue::new(&mut draft.ruleset.retries).range(0..=pactlocke_run::MAX_RETRIES));
+            });
+            rules_text::description(ui, &rules_text::retries(&draft.ruleset), None);
             });
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -1387,10 +1409,19 @@ impl PactlockeApp {
                             ui.label(summary.deaths.to_string());
                             ui.label(run_panel::ago(now - summary.last_played_ms));
                             ui.horizontal(|ui| {
-                                if ui.button("Resume").clicked() {
+                                if let Some(over) = &summary.game_over {
+                                    ui.colored_label(
+                                        ui.visuals().error_fg_color,
+                                        format!("Game over · {}", logger::date(over.at_ms)),
+                                    );
+                                    if ui.button("Summary").clicked() {
+                                        self.lost = Some(summary.clone());
+                                    }
+                                } else if ui.button("Resume").clicked() {
                                     resume = Some(summary.clone());
                                 }
                                 if summary.with_friends
+                                    && summary.game_over.is_none()
                                     && ui
                                         .button("Continue as solo…")
                                         .on_hover_text("A new solo Run from where you left this one")
@@ -1409,6 +1440,35 @@ impl PactlockeApp {
         });
         if let Some(summary) = resume {
             self.resume_run(&summary);
+        }
+    }
+
+    /// A lost Run's summary, from the Runs list.
+    fn lost_summary(&mut self, ctx: &egui::Context) {
+        let Some(summary) = &self.lost else {
+            return;
+        };
+        let Some(over) = &summary.game_over else {
+            return;
+        };
+        let mut close = false;
+        let modal = egui::Modal::new(egui::Id::unique("lost run")).show(ctx, |ui| {
+            ui.heading(format!("{}: game over", summary.name));
+            ui.weak(format!("{} · {}", summary.game_name, logger::date(over.at_ms)));
+            ui.add_space(6.0);
+            ui.label(&over.how);
+            ui.add_space(6.0);
+            game_over::survivors(ui, &over.longest);
+            ui.label(format!(
+                "Deaths: {} · play time {}",
+                summary.deaths,
+                game_over::duration(over.play_ms)
+            ));
+            ui.add_space(6.0);
+            close = ui.button("Close").clicked();
+        });
+        if close || modal.should_close() {
+            self.lost = None;
         }
     }
 
@@ -1602,6 +1662,28 @@ impl PactlockeApp {
             self.home_screen(ui);
             return;
         };
+
+        // Faint = Dead: a game over replaces the game; a wiped party waits
+        // on a Retry over the stopped game.
+        if let Some(view) = playing.view() {
+            let me = self.lobbies.public_key();
+            if let Some(over) = &view.game_over {
+                game_over::screen(ui, over, &view, self.lobbies.log(), me);
+                return;
+            }
+            if let Some(wipe) = game_over::wipe_of(&view, self.lobbies.log(), me) {
+                let online = self.lobbies.online();
+                match game_over::wipe_bar(ui, &wipe, self.lobbies.log(), me, online) {
+                    Some(game_over::WipeAnswer::Command(command)) => {
+                        if let Play::Run { commands, .. } = &playing.play {
+                            let _ = commands.send(command);
+                        }
+                    }
+                    Some(game_over::WipeAnswer::Vote(vote)) => self.lobbies.share(vec![vote]),
+                    None => {}
+                }
+            }
+        }
 
         // Spectate: the watched Player's Shadow Game, with a way back.
         let watched = playing.spectate.as_ref().and_then(|s| s.watched()).map(|shadow| {
@@ -2057,6 +2139,7 @@ impl eframe::App for PactlockeApp {
         egui::CentralPanel::default_margins().show(ui, |ui| self.game_screen(ui));
         self.new_run_prompt(&ctx);
         self.delete_prompt(&ctx);
+        self.lost_summary(&ctx);
         self.solo_copy_prompt(&ctx);
         self.settings_window(&ctx);
         self.about(&ctx);

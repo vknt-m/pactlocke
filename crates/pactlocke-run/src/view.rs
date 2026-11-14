@@ -26,6 +26,32 @@ pub struct RunView {
     /// Where the Player is and what they are doing, for the Player strip.
     pub area: Option<String>,
     pub doing: Doing,
+    /// Faint = Dead: this Player's party is wiped, and the game has stopped.
+    pub wipe: Option<WipeView>,
+    /// The Run is lost.
+    pub game_over: Option<GameOverView>,
+}
+
+/// This Player's party is wiped: the game waits on a Retry or the game over.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WipeView {
+    /// "Your party was wiped on Route 2: …".
+    pub how: String,
+    /// Alone, with a Retry left and a Run Checkpoint to go back to: the
+    /// Player may Retry. With friends, the Run log's Retry vote decides.
+    pub retry_offered: bool,
+}
+
+/// How a lost Run ended, for the game over screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameOverView {
+    pub how: String,
+    /// Each Player's longest survivor, in join order.
+    pub longest: Vec<crate::Survivor>,
+    /// Unix time in milliseconds.
+    pub at_ms: i64,
+    /// This Player's play time by their game's own clock, in milliseconds.
+    pub play_ms: i64,
 }
 
 /// What a Player is doing, as the Player strip shows it.
@@ -127,6 +153,15 @@ fn at(area: Option<&AreaRef>, text: String) -> String {
     }
 }
 
+/// "on Route 1", "on Cycling Road", but "in Pallet Town" and "in Viridian Forest".
+pub(crate) fn place(area: &AreaRef) -> String {
+    if area.name.starts_with("Route") || area.name.ends_with("Road") {
+        format!("on {}", area.name)
+    } else {
+        format!("in {}", area.name)
+    }
+}
+
 fn killed_by(cause: &DeathCause, area: Option<&AreaRef>) -> String {
     let what = match cause {
         DeathCause::Wild { foe } => format!("a wild {foe}"),
@@ -136,11 +171,7 @@ fn killed_by(cause: &DeathCause, area: Option<&AreaRef>) -> String {
         DeathCause::Link { why } => return format!("its Link: {why}"),
     };
     match area {
-        // "on Route 1", "on Cycling Road", but "in Pallet Town" and "in Viridian Forest".
-        Some(area) if area.name.starts_with("Route") || area.name.ends_with("Road") => {
-            format!("{what} on {}", area.name)
-        }
-        Some(area) => format!("{what} in {}", area.name),
+        Some(area) => format!("{what} {}", place(area)),
         None => what,
     }
 }
@@ -534,6 +565,16 @@ impl FeedEntry {
                 format!(
                     "Type clause: your {holder} is the {type_name} type in your party, so {name} went to box {box_number}"
                 ),
+            ),
+            RunEvent::PartyWiped { last } => (FeedKind::Death, last.wipe_line("Your")),
+            RunEvent::GameOver { how, .. } => (FeedKind::Run, format!("Game over. {how}")),
+            RunEvent::WaitsForLink { name, until, .. } => (
+                FeedKind::Block,
+                format!("{name} waits in the PC {until}: your party is full"),
+            ),
+            RunEvent::LinkWaitFailed { name, reason, .. } => (
+                FeedKind::Problem,
+                format!("{name} waits on its Link but couldn't be moved out of your full party: {reason}"),
             ),
             RunEvent::TypeClauseFailed {
                 name,

@@ -346,6 +346,7 @@ fn a_copy_of_the_log_gives_way_to_the_new_hosts_and_its_own_lost_entries_come_ba
             name: "PIDGEY".into(),
             area: None,
             cause: DeathCause::Poison,
+            at_ms: 0,
         })
     };
     let mut host = RunLog::new(red);

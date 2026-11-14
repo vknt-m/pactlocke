@@ -646,6 +646,69 @@ impl RunLog {
             .then_some(leaving)
     }
 
+    /// The first party wiped under Faint = Dead that stands (a Retry undoes
+    /// one), if any.
+    pub fn wiped(&self) -> Option<Wiped> {
+        self.standing_events()
+            .into_iter()
+            .find_map(|(player, event)| match event {
+                RunEvent::PartyWiped { last } => Some(Wiped { player, last }),
+                _ => None,
+            })
+    }
+
+    /// Whether the Run is lost: a party is wiped, and no Retry can save it.
+    /// None is left, there is no Run Checkpoint to go back to, or a Player
+    /// voted No after the wipe.
+    pub fn game_over(&self) -> Option<Wiped> {
+        let wiped = self.wiped()?;
+        if self.retries_left() == 0 || self.latest_complete().is_none() {
+            return Some(wiped);
+        }
+        let declined = self
+            .standing_events()
+            .into_iter()
+            .skip_while(|(_, e)| !matches!(e, RunEvent::PartyWiped { .. }))
+            .any(|(_, e)| matches!(e, RunEvent::RetryVote { yes: false, .. }));
+        declined.then_some(wiped)
+    }
+
+    /// A Player's name in the Run, from the lock ("A Player" for a key the
+    /// roster doesn't have).
+    pub fn name_of(&self, player: &PlayerKey) -> String {
+        self.locked()
+            .and_then(|l| l.roster.into_iter().find(|p| p.key == *player))
+            .map_or_else(|| "A Player".to_owned(), |p| p.name)
+    }
+
+    /// How a lost Run ended, as `me` reads it, and each Player's longest
+    /// survivor up to the last Death (`me`'s without a name), for the game
+    /// over screen.
+    pub fn ending(&self, me: &PlayerKey) -> Option<(String, Vec<crate::Survivor>)> {
+        let wiped = self.game_over()?;
+        let how = wiped.last.wipe_line(&self.whose(&wiped.player, me));
+        let events = self.standing_events();
+        let end_ms = events
+            .iter()
+            .filter_map(|(_, e)| match e {
+                RunEvent::Died { at_ms, .. } => Some(*at_ms),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        let named = events.iter().map(|(p, e)| ((p != me).then(|| self.name_of(p)), e));
+        Some((how, crate::survivors(named, end_ms)))
+    }
+
+    /// "Your" for `me`, or "Red's".
+    pub fn whose(&self, player: &PlayerKey, me: &PlayerKey) -> String {
+        if player == me {
+            "Your".to_owned()
+        } else {
+            format!("{}'s", self.name_of(player))
+        }
+    }
+
     /// The Run Checkpoint a Retry should go back to now: the open vote's,
     /// once every Player said Yes and a Retry is left. The Host records it;
     /// every Player checks it.
@@ -965,6 +1028,14 @@ pub struct Part {
     pub hash: String,
 }
 
+/// A Player's party wiped under Faint = Dead, as the Run log has it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Wiped {
+    pub player: PlayerKey,
+    /// The last of their Pokémon to die, where and how.
+    pub last: crate::LastDeath,
+}
+
 /// An open Retry vote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Vote {
@@ -1176,6 +1247,10 @@ impl LogFollower {
             }
         }
         self.seen = log.entries().len();
+        // The Run engine ends the Run once, however often this says so.
+        if let Some((how, longest)) = log.ending(&self.me) {
+            commands.push(crate::RunCommand::GameOver { how, longest });
+        }
         let cleared = log.cleared_flags();
         for flag in cleared.iter().skip(self.cleared) {
             let player = if flag.player == self.me {

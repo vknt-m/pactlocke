@@ -205,7 +205,7 @@ struct SecondOfAType {
 
 /// Moves a party Pokémon to the first PC box with room, counting from box 1
 /// and passing over the Dead box, which is for the Dead.
-fn move_to_the_first_box_with_room(
+pub(super) fn move_to_the_first_box_with_room(
     game: &mut impl LiveGame,
     slot: u8,
 ) -> Result<(Vec<pactlocke_game::Change>, u8), GameError> {

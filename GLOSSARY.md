@@ -7,7 +7,7 @@ A co-op challenge app where up to three Players play their own copies of the sam
 ### Runs and Players
 
 **Run**:
-One co-op playthrough shared by up to three Players, from the moment the Ruleset is locked until it is won or abandoned.
+One co-op playthrough shared by up to three Players, from the moment the Ruleset is locked until it is won, lost or abandoned.
 _Avoid_: Session, game, playthrough
 
 **Player**:
@@ -49,7 +49,7 @@ A scripted, one-off battle with a specific Pokémon, such as a legendary, Kecleo
 _Avoid_: Special encounter, legendary (too narrow)
 
 **Link**:
-The set of each Player's Encounter from the same source: the same Area, the same Gift, or the same Static. If any member faints, every member of the Link dies. If any Player misses, skips or loses their Encounter from a source, that source is closed to everyone.
+The set of each Player's Encounter from the same source: the same Area, the same Gift, or the same Static. If any member faints, every member of the Link dies. If any Player misses, skips or loses their Encounter from a source, that source is closed to everyone. Only Pokémon whose Link is whole may be in a party: one still waiting on another Player's catch goes to the PC when the party is full.
 _Avoid_: Pair (Links can have three members), soul link (that is the name of the challenge)
 
 ### Playing together
@@ -117,6 +117,10 @@ _Avoid_: Fork, split, leaving the Run
 **Suspend slot**:
 The one place a Player's game is kept so the Run resumes exactly there. Suspend and quit fills it, and in a Run with friends it is kept up to date all along, so leaving in any way resumes where the Player stopped. It is used up on resume.
 _Avoid_: Save state, quicksave
+
+**Game over**:
+A Run lost because a Player has no usable Pokémon: under Faint = Dead, every Pokémon in their party is Dead (their party is wiped). A Retry is offered first if one is left. With friends, one Player's wiped party ends the Run for everyone.
+_Avoid_: Loss, defeat, whiteout (the game's own, which heals the party)
 
 **Retry**:
 An optional Ruleset rule: a small shared number of times the group may vote to send every Player back to the latest Run Checkpoint, undoing everything since.

@@ -29,6 +29,14 @@ pub enum RunCommand {
     Retry { to: RetryTo },
     /// Links: this Pokémon dies with its Link (`why` says how it broke).
     LinkDeath { pid: u32, why: String },
+    /// Alone, after a wipe: the Player declines the Retry, and the Run is over.
+    EndRun,
+    /// With friends: the Run log says the Run is lost, `how`, with each
+    /// Player's longest survivor.
+    GameOver { how: String, longest: Vec<crate::Survivor> },
+    /// Links: where this Player's Pokémon stand in their Links now. A full
+    /// party keeps its slots for linked Pokémon.
+    LinkStanding(crate::LinkStanding),
     /// Links: this source's Link broke elsewhere, so it is closed here too.
     CloseSource { source: crate::SourceRef, why: String },
     /// The Player skips this Gift, breaking its Link for everyone.
@@ -215,6 +223,9 @@ impl<G: PlayedGame> RunningGame<G> {
                 RunCommand::OutOfSync { player, frame } => self.engine.out_of_sync(player, frame),
                 RunCommand::JoinCheckpoint { call } => self.engine.join_checkpoint(call),
                 RunCommand::LinkDeath { pid, why } => self.engine.link_death(pid, why, &mut self.game),
+                RunCommand::LinkStanding(standing) => self.engine.link_standing(standing),
+                RunCommand::EndRun => self.engine.end_run(),
+                RunCommand::GameOver { how, longest } => self.engine.game_over(how, longest),
                 RunCommand::CloseSource { source, why } => self.engine.close_source(source, why),
                 RunCommand::Skip { source } => self.engine.skip(source),
                 RunCommand::OpenGate { gate, checkpoint } => self.engine.open_gate(&gate, checkpoint, &mut self.game),
@@ -331,6 +342,20 @@ impl<G: PlayedGame> RunningGame<G> {
         self.game.core_mut()
     }
 
+    /// Hands the Run state recorded to the shared log, and shows the view if it changed.
+    fn publish(&mut self) {
+        let events = self.engine.take_shared();
+        if let Some(shared) = &self.shared
+            && !events.is_empty()
+        {
+            shared.lock().unwrap_or_else(|e| e.into_inner()).extend(events);
+        }
+        if self.engine.view_version() != self.published_version {
+            self.published_version = self.engine.view_version();
+            *self.view.lock().unwrap_or_else(|e| e.into_inner()) = self.engine.view().clone();
+        }
+    }
+
     fn check_save_memory(&mut self) {
         let save = self.game.core_mut().save_memory();
         self.engine.save_memory_seen(&save);
@@ -359,6 +384,17 @@ impl<G: PlayedGame> CoreAdapter for RunningGame<G> {
 
     fn run_frame(&mut self, keys: Keys) {
         self.take_commands();
+        // A wiped party or a lost Run: the game stops where it is, and the
+        // others' Shadow Games of it are sent every frame up to there.
+        if self.engine.halted() {
+            if let Some((out, outbox)) = self.stream.as_mut()
+                && let Some(chunk) = out.flush()
+            {
+                outbox.lock().unwrap_or_else(|e| e.into_inner()).push(chunk);
+            }
+            self.publish();
+            return;
+        }
         let keys = self.engine.keys_for_frame(keys, &mut self.game);
         if self.stream.is_some() {
             // Everything stamped at this boundary, then its hash if one is due.
@@ -384,12 +420,6 @@ impl<G: PlayedGame> CoreAdapter for RunningGame<G> {
                 outbox.lock().unwrap_or_else(|e| e.into_inner()).push(chunk);
             }
         }
-        let events = self.engine.take_shared();
-        if let Some(shared) = &self.shared
-            && !events.is_empty()
-        {
-            shared.lock().unwrap_or_else(|e| e.into_inner()).extend(events);
-        }
         if let Some((painter, partners)) = self.avatars.as_mut() {
             let avatars = partners.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let now = self.engine.now_ms();
@@ -400,10 +430,7 @@ impl<G: PlayedGame> CoreAdapter for RunningGame<G> {
             self.check_save_memory();
         }
         self.checkpoint_if_wanted();
-        if self.engine.view_version() != self.published_version {
-            self.published_version = self.engine.view_version();
-            *self.view.lock().unwrap_or_else(|e| e.into_inner()) = self.engine.view().clone();
-        }
+        self.publish();
     }
 
     fn read(&mut self, addr: u32, buf: &mut [u8]) {

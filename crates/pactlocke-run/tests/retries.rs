@@ -312,6 +312,7 @@ fn an_entry_sent_from_before_a_players_game_went_back_is_void_too() {
             name: "PIDGEY".into(),
             area: None,
             cause: pactlocke_run::DeathCause::Poison,
+            at_ms: 0,
         }),
     );
     both_play(&mut table, 100);

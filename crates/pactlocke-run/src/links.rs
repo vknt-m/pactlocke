@@ -58,6 +58,23 @@ impl Link {
     }
 }
 
+/// One of this Player's Pokémon whose Link waits on another Player's catch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitingOnLink {
+    pub pid: u32,
+    /// What it waits for, to finish a sentence: "until Blue catches on Route 1".
+    pub until: String,
+}
+
+/// Where this Player's Pokémon stand in their Links, as the Run log has them now.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LinkStanding {
+    /// Every one of this Player's Pokémon in a Link, whole, waiting or broken.
+    pub linked: Vec<u32>,
+    /// Those whose Link waits on another Player's catch.
+    pub waiting: Vec<WaitingOnLink>,
+}
+
 /// What another Player's Shadow Game here has shown, for judging their claims.
 pub trait Judge {
     /// Whether `player`'s game has shown this Pokémon in their party or PC.
@@ -222,7 +239,18 @@ impl LinkKeeper {
         if !log.locked().is_some_and(|l| l.ruleset.links) {
             return Vec::new();
         }
-        let mut commands = Vec::new();
+        let linked = links
+            .iter()
+            .filter_map(|link| match link.member(&self.me) {
+                Some(Member::Caught { pid, .. }) => Some(*pid),
+                _ => None,
+            })
+            .collect();
+        let standing = LinkStanding {
+            linked,
+            waiting: self.waiting(links, log),
+        };
+        let mut commands = vec![RunCommand::LinkStanding(standing)];
         for link in links {
             let Some(why) = &link.broken else { continue };
             match link.member(&self.me) {
@@ -240,5 +268,40 @@ impl LinkKeeper {
             }
         }
         commands
+    }
+
+    /// This Player's living Pokémon whose Link is still waiting on another
+    /// Player's catch, and on whom.
+    fn waiting(&self, links: &[Link], log: &RunLog) -> Vec<WaitingOnLink> {
+        links
+            .iter()
+            .filter(|link| link.pending())
+            .filter_map(|link| {
+                let Some(Member::Caught { pid, dead: false, .. }) = link.member(&self.me) else {
+                    return None;
+                };
+                let others: Vec<String> = link
+                    .members
+                    .iter()
+                    .filter(|(player, member)| {
+                        *player != self.me && matches!(member, Member::Pending | Member::Caught { judged: false, .. })
+                    })
+                    .map(|(player, _)| log.name_of(player))
+                    .collect();
+                let one = others.len() == 1;
+                let who = match others.split_last() {
+                    Some((last, [])) => last.clone(),
+                    Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+                    None => return None,
+                };
+                let until = match (link.source.area_id(), one) {
+                    (Some(_), true) => format!("until {who} catches on {}", link.source.name),
+                    (Some(_), false) => format!("until {who} catch on {}", link.source.name),
+                    (None, true) => format!("until {who} gets theirs from {}", link.source.name),
+                    (None, false) => format!("until {who} get theirs from {}", link.source.name),
+                };
+                Some(WaitingOnLink { pid: *pid, until })
+            })
+            .collect()
     }
 }
