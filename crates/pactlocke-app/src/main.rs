@@ -20,6 +20,7 @@ mod links_panel;
 mod lobby_ui;
 mod logger;
 mod player_strip;
+mod resume;
 mod rom_report;
 mod run_panel;
 mod settings;
@@ -41,8 +42,8 @@ use pactlocke_game::{
 };
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
-    InputChunk, Locked, NewRun, Outgoing, Preset, Ruleset, RunClock, RunCommand, RunEngine, RunEvent, RunLibrary,
-    RunLog, RunSummary, RunView, RunningGame, StreamMessage, StreamWant, SystemRunClock,
+    Locked, NewRun, Preset, Ruleset, RunClock, RunCommand, RunEngine, RunEvent, RunLibrary, RunLog, RunSummary,
+    RunView, RunningGame, SystemRunClock,
 };
 use settings::Settings;
 use settings_ui::{Category, SettingsDialog};
@@ -282,24 +283,13 @@ struct NewRunDraft {
     local_profile: bool,
 }
 
-/// How long a Run with friends resumed after a crash waits for its Host
-/// before booting without the presses the Host may have.
-const TAKE_BACK_WAIT_MS: i64 = 15_000;
-/// How long it waits for the Host's answer, once asked.
-const TAKE_BACK_ANSWER_MS: i64 = 3_000;
-
-/// A Run with friends opened with Resume, its game not booted yet.
+/// A Run with friends opened with Resume, its game not booted yet, and what
+/// it boots on.
 struct Resuming {
-    engine: RunEngine,
+    resume: resume::Resuming,
     profile: Arc<GameProfile>,
     rom: Vec<u8>,
     identity: RomIdentity,
-    locked: Locked,
-    /// This Player's copy of the Run log, as the Run file kept it.
-    log: RunLog,
-    since_ms: i64,
-    /// When the Host was asked for this Player's lost presses.
-    asked_ms: Option<i64>,
 }
 
 struct PactlockeApp {
@@ -414,7 +404,7 @@ impl PactlockeApp {
 
     /// Plays a ROM on its own, outside any Run.
     fn open_rom(&mut self, path: &Path) {
-        self.stop_playing();
+        self.close_run();
         self.settings.opened(path);
         let result = self.read_rom(path).and_then(|(rom, identity)| {
             let core = self.boot(&rom).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -504,7 +494,7 @@ impl PactlockeApp {
     /// Invite friends: a Lobby for this New Run, with an invite link. A game
     /// being played closes: the Lobby takes its place.
     fn host_lobby(&mut self, draft: &NewRunDraft) {
-        self.stop_playing();
+        self.close_run();
         let run = pactlocke_net::RunAdvert {
             name: draft.name.trim().to_owned(),
             game_name: draft.profile.name.clone(),
@@ -576,7 +566,7 @@ impl PactlockeApp {
     }
 
     fn start_run(&mut self, mut draft: NewRunDraft) {
-        self.stop_playing();
+        self.close_run();
         draft.ruleset.level_caps = draft.level_caps_on.then(|| draft.level_caps.clone());
         let result = self.run_library().and_then(|library| {
             // Load first, so a ROM the core refuses leaves no Run behind.
@@ -640,7 +630,7 @@ impl PactlockeApp {
     }
 
     fn resume_run(&mut self, summary: &RunSummary) {
-        self.stop_playing();
+        self.close_run();
         if summary.with_friends {
             self.resume_coop_run(summary);
             return;
@@ -661,9 +651,8 @@ impl PactlockeApp {
     }
 
     /// Resume for a Run with friends, never as a solo game: the Run's
-    /// network opens from this Player's copy of its Run log, by the Host's
-    /// key, and the game boots once the Host has given back any presses a
-    /// crash lost (see [`Self::finish_resuming`]).
+    /// network opens from this Player's copy of its Run log, and the game
+    /// boots once [`resume::Resuming::ready_to_boot`] says so.
     fn resume_coop_run(&mut self, summary: &RunSummary) {
         self.resuming = None;
         let result = self.find_rom(summary).and_then(|(rom, identity, path)| {
@@ -673,23 +662,14 @@ impl PactlockeApp {
             let profile = profile.clone();
             let file = self.run_library()?.open_run(&summary.id).map_err(|e| e.to_string())?;
             let engine = RunEngine::resume(Box::new(file), Box::new(SystemRunClock)).map_err(|e| e.to_string())?;
-            let log = RunLog::from_kept(engine.kept_log().to_vec())
-                .map_err(|e| format!("This Run's log in its Run file can't be read: {e}."))?;
-            let locked = log
-                .locked()
-                .ok_or("This Run's log has no lock, so it can't be resumed.")?;
-            self.lobbies.resume(log.clone(), engine.kept_waiting().to_vec(), path)?;
+            let resume = resume::Resuming::begin(engine, path, &mut self.lobbies, SystemRunClock.now_ms())?;
             self.panel_shown = true;
             self.panel_tab = side_panel::Tab::Lobby;
             Ok(Resuming {
-                engine,
+                resume,
                 profile,
                 rom,
                 identity,
-                locked,
-                log,
-                since_ms: SystemRunClock.now_ms(),
-                asked_ms: None,
             })
         });
         match result {
@@ -698,70 +678,33 @@ impl PactlockeApp {
         }
     }
 
-    /// A Run with friends resumed after a crash is rebuilt through the
-    /// presses its Run file kept; the Host may have more of them, from this
-    /// Player's stream, which must be played again before the game goes on.
-    /// Boots the game once they are back, or once there is no Host to ask:
-    /// this Player hosts, or none answered in time.
+    /// Boots a resumed Run with friends' game once it can.
     fn finish_resuming(&mut self) {
+        let now = SystemRunClock.now_ms();
         let Some(resuming) = self.resuming.as_mut() else {
             return;
         };
-        let now = SystemRunClock.now_ms();
-        let me = self.lobbies.public_key();
-        let host = self.lobbies.host_key().filter(|h| Some(*h) != me);
-        let lost = match resuming.engine.boot_plan() {
-            pactlocke_run::BootPlan::Rebuild { from, keys, .. } => Some(pactlocke_run::GamePoint {
-                boot: from.boot,
-                frame: from.frame + keys.len() as u64,
-            }),
-            _ => None,
-        };
-        let waited = now - resuming.since_ms >= TAKE_BACK_WAIT_MS;
-        if let (Some(lost), Some(host), Some(me), false) = (lost, host, me, waited) {
-            if !self.lobbies.online() {
-                return;
-            }
-            match resuming.asked_ms {
-                None => {
-                    let want = StreamWant {
-                        player: me,
-                        boot: lost.boot,
-                        from_frame: lost.frame,
-                    };
-                    self.lobbies.send_stream(Outgoing::To(host, StreamMessage::Want(want)));
-                    resuming.asked_ms = Some(now);
-                    return;
-                }
-                Some(asked) => {
-                    let mine: Vec<InputChunk> = self
-                        .lobbies
-                        .take_stream()
-                        .into_iter()
-                        .filter_map(|(_, bytes)| match StreamMessage::from_bytes(&bytes) {
-                            Some(StreamMessage::Chunk(chunk)) if chunk.player == me => Some(chunk),
-                            _ => None,
-                        })
-                        .collect();
-                    if mine.is_empty() && now - asked < TAKE_BACK_ANSWER_MS {
-                        return;
-                    }
-                    resuming.engine.take_back_presses(&mine);
-                }
-            }
+        if !resuming.resume.ready_to_boot(&mut self.lobbies, now) {
+            return;
         }
-        let Some(resuming) = self.resuming.take() else {
+        let Some(Resuming {
+            resume,
+            profile,
+            rom,
+            identity,
+        }) = self.resuming.take()
+        else {
             return;
         };
-        let result = Self::core_with_rom(&resuming.rom).and_then(|core| {
+        let result = Self::core_with_rom(&rom).and_then(|core| {
             self.play_run(
-                resuming.engine,
+                resume.engine,
                 core,
-                resuming.profile,
-                resuming.rom,
-                resuming.identity,
+                profile,
+                rom,
+                identity,
                 now,
-                Some((&resuming.locked, Some(&resuming.log))),
+                Some((&resume.locked, Some(&resume.log))),
             )
         });
         self.show_result(result);
@@ -904,7 +847,12 @@ impl PactlockeApp {
     }
 
     /// Suspend and quit: the Run resumes exactly here next time.
+    /// A Run with friends is closed as by Close Run, which suspends it too.
     fn suspend_and_quit(&mut self) {
+        if self.playing.as_ref().is_some_and(|p| p.spectate.is_some()) {
+            self.close_run();
+            return;
+        }
         if let Some(Playing {
             play: Play::Run { emulator, .. },
             ..
@@ -1644,7 +1592,7 @@ impl PactlockeApp {
             ui.centered_and_justified(|ui| {
                 ui.label(format!(
                     "Resuming {}: getting your last moves back from your Host…",
-                    resuming.locked.run_name
+                    resuming.resume.locked.run_name
                 ));
             });
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
@@ -1981,10 +1929,10 @@ fn panel_contents(
 }
 
 impl eframe::App for PactlockeApp {
-    /// The window's close button or Exit: a Run with friends is suspended,
-    /// so Resume goes on exactly where the Player stopped.
+    /// The window's close button or Exit: a Run with friends is suspended
+    /// and its network left, so Resume goes on exactly where the Player stopped.
     fn on_exit(&mut self) {
-        self.stop_playing();
+        self.close_run();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

@@ -132,6 +132,13 @@ pub trait RunStorage: Send {
     fn checkpoint(&mut self, event_seq: u64) -> Option<StoredCheckpoint>;
 }
 
+impl StoredRun {
+    /// Whether it is a Run with friends: its Run file keeps a Run log.
+    pub fn with_friends(&self) -> bool {
+        !self.log.is_empty()
+    }
+}
+
 impl StoredCheckpoint {
     /// Its SHA-1 over everything a restore puts back: the save memory, the
     /// savestate and the patch set, as hex.

@@ -354,11 +354,11 @@ impl StreamOut {
         }
     }
 
-    /// `player`'s stream for this boot of their game, going on from frame
-    /// `frame`: a Run with friends resumed where the Player left it.
-    pub fn from_frame(player: PlayerKey, boot: u32, frame: u64) -> Self {
-        let mut out = Self::new(player, boot);
-        out.open.first_frame = frame;
+    /// `player`'s stream going on from `at` in their game: a Run with
+    /// friends resumed where the Player left it.
+    pub fn going_on_from(player: PlayerKey, at: crate::GamePoint) -> Self {
+        let mut out = Self::new(player, at.boot);
+        out.open.first_frame = at.frame;
         out
     }
 
@@ -370,7 +370,13 @@ impl StreamOut {
         let Some(first) = batches.first() else {
             return Vec::new();
         };
-        let mut out = Self::from_frame(player, first.boot, first.first_frame);
+        let mut out = Self::going_on_from(
+            player,
+            crate::GamePoint {
+                boot: first.boot,
+                frame: first.first_frame,
+            },
+        );
         let mut chunks = Vec::new();
         for batch in batches {
             for (n, &keys) in batch.keys.iter().enumerate() {
@@ -632,14 +638,14 @@ impl StreamStore {
         Added::New(new)
     }
 
-    /// A Player's stream here starts at this boot and frame: a Shadow Game
+    /// A Player's stream here starts at `at` in their game: a Shadow Game
     /// restored from its checkpoint needs nothing from before it.
-    pub fn starts_at(&mut self, player: PlayerKey, boot: u32, frame: u64) {
+    pub fn starts_at(&mut self, player: PlayerKey, at: crate::GamePoint) {
         self.players.insert(
             player,
             PlayerStream {
-                boot,
-                start: frame,
+                boot: at.boot,
+                start: at.frame,
                 ..PlayerStream::default()
             },
         );
@@ -753,10 +759,10 @@ impl StreamHub {
             .collect()
     }
 
-    /// Another Player's stream here starts at this boot and frame, where
+    /// Another Player's stream here starts at `at` in their game, where
     /// this app's Shadow Game of them was restored from its checkpoint.
-    pub fn starts_at(&mut self, player: PlayerKey, boot: u32, frame: u64) {
-        self.store.starts_at(player, boot, frame);
+    pub fn starts_at(&mut self, player: PlayerKey, at: crate::GamePoint) {
+        self.store.starts_at(player, at);
     }
 
     /// Chunks of this Player's own stream sent before this app started (a

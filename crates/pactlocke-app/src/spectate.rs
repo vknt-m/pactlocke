@@ -104,7 +104,7 @@ impl Spectate {
             let game = ProfileGame::new(profile.clone(), rom.clone(), core);
             let shadow = match kept.iter().find(|(p, _)| *p == player.key) {
                 Some((_, checkpoint)) => {
-                    hub.starts_at(player.key, checkpoint.boot, checkpoint.frame);
+                    hub.starts_at(player.key, checkpoint.at);
                     ShadowGame::from_checkpoint(game, locked.start_ms, checkpoint)
                         .map_err(|e| format!("The Shadow Game of {} couldn't be restored: {e}", player.name))?
                 }

@@ -1,0 +1,15 @@
+include ../common/join.txt
+speed 4
+include ../common/starter.txt
+sync lab 2
+m B 600
+leave
+away 20
+resume
+sync back 2
+m B 3000
+expect connected within 60
+expect matched within 180
+expect no-errors
+sync done 2
+w 300

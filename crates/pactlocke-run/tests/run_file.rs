@@ -302,8 +302,7 @@ fn a_run_with_friends_keeps_its_run_log_in_the_run_file_and_is_listed_so() {
     player.engine.keep_waiting(std::slice::from_ref(&waiting));
     // This app's Shadow Game of another Player, as it stood when the app left.
     let shadow = |frame: u64| pactlocke_run::ShadowCheckpoint {
-        boot: 1,
-        frame,
+        at: pactlocke_run::GamePoint { boot: 1, frame },
         core: core_checkpoint(0x33),
         patches: vec![(0x0800_1000, vec![1, 2, 3])],
         owned: vec![0xB1, 0xB2],

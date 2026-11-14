@@ -211,6 +211,11 @@ pub struct Tallies {
 /// The fewest Players still in a Run for a Dropout vote: with two, one would decide alone.
 pub const DROPOUT_MIN_PLAYERS: usize = 3;
 
+/// Whether a Dropout can be voted with this many Players still in the Run.
+fn dropout_allowed_with(players: usize) -> bool {
+    players >= DROPOUT_MIN_PLAYERS
+}
+
 /// One copy of the Run log: the Host's, or a Player's, each checked entry by entry.
 #[derive(Debug, Clone)]
 pub struct RunLog {
@@ -262,7 +267,7 @@ impl RunLog {
     /// Whether a Dropout can be voted now: only with three Players or more
     /// still in the Run, since with two one Player would decide alone.
     pub fn dropout_allowed(&self) -> bool {
-        self.active().len() >= DROPOUT_MIN_PLAYERS
+        dropout_allowed_with(self.active().len())
     }
 
     /// Who takes over ordering the log if the Host goes silent: the next
@@ -438,9 +443,20 @@ impl RunLog {
     /// there on, and the submissions of `mine` this copy drops come back, in
     /// order, to send again. Unless this copy has a takeover from there on:
     /// the copy with the rightful takeover wins, so this one stays.
-    /// An entry already here changes nothing.
+    /// An entry already here changes nothing, and one further along the
+    /// Host's copy than what has come of it here (past this copy's end, or
+    /// not following this copy's entry before it) waits for the entries
+    /// leading to it: a Host sends its newest entry on its own to be heard.
     pub fn give_way_to(&mut self, entry: LogEntry, mine: &PlayerKey) -> Result<Vec<Submission>, LogError> {
         let at = entry.seq as usize;
+        let follows = at == 0
+            || self
+                .entries
+                .get(at - 1)
+                .is_some_and(|before| before.hash() == entry.prev);
+        if at > self.entries.len() || !follows {
+            return Ok(Vec::new());
+        }
         match self.entries.get(at) {
             None => self.accept(entry).map(|()| Vec::new()),
             Some(here) if *here == entry => Ok(Vec::new()),
@@ -601,7 +617,7 @@ impl RunLog {
                     if author == player
                         || gone.contains(&player)
                         || !self.roster.as_ref().is_some_and(|r| r.contains(&player))
-                        || roster - gone.len() < DROPOUT_MIN_PLAYERS => {}
+                        || !dropout_allowed_with(roster - gone.len()) => {}
                 LogBody::Event(RunEvent::DropoutVote { player, yes }) => match &mut open {
                     None if yes => open = Some((player, BTreeSet::from([author]))),
                     Some((leaving, yes_votes)) if *leaving == player && yes => {
@@ -988,6 +1004,8 @@ impl LogFollower {
         }
         self.kept.truncate(from);
         self.kept.extend(entries[from..].iter().map(LogEntry::hash));
+        // The winning copy's entries from there on are new to this Player's game.
+        self.seen = self.seen.min(from);
         Some(crate::RunCommand::KeepLog {
             from: from as u64,
             entries: entries[from..].to_vec(),

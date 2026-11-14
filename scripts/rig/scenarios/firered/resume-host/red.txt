@@ -1,0 +1,22 @@
+# The Host closes the app. Blue, next in join order, takes over
+# about ten seconds later and plays on. Red comes back with Resume: their
+# log still names them Host, so they host alone, step down, and join Blue
+# as a Player. Every Shadow Game matches.
+include ../common/host.txt
+players 2
+ready
+lock-when 2
+speed 4
+include ../common/starter.txt
+sync lab 2
+m B 600
+leave
+away 40
+resume
+m B 3000
+expect log takeover by Blue within 120
+expect connected within 120
+expect matched within 180
+expect no-errors
+sync done 2
+w 300

@@ -291,6 +291,14 @@ impl Headless {
                 self.shot(path)?;
             }
             Step::Vanish => return Ok(false),
+            Step::Leave => self.leave(),
+            Step::Away { secs } => {
+                let until = Instant::now() + Duration::from_secs(*secs);
+                while Instant::now() < until {
+                    self.tick(Keys::NONE);
+                }
+            }
+            Step::Resume => self.resume()?,
         }
         Ok(true)
     }
@@ -461,9 +469,6 @@ impl Headless {
     /// game, as the windowed app starts it.
     fn start(&mut self, start: CoopStart) -> Result<(), String> {
         let locked = start.locked;
-        let (profile, _) = self.profiled(&start.rom)?;
-        let mut core = MgbaCore::new();
-        core.load_rom(&start.rom).map_err(|e| e.to_string())?;
         let file = self.library.create().map_err(|e| e.to_string())?;
         let new = NewRun {
             name: locked.run_name.clone(),
@@ -473,21 +478,40 @@ impl Headless {
             ruleset: locked.ruleset.clone(),
         };
         let engine = RunEngine::start(new, Box::new(file), Box::new(SystemRunClock)).map_err(|e| e.to_string())?;
-        let rom: Arc<[u8]> = start.rom.into();
-        let mut running = RunningGame::boot(
-            ProfileGame::new(profile.clone(), rom.clone(), core),
-            engine,
-            locked.start_ms,
-        )
-        .map_err(|e| format!("the Run's game couldn't be booted: {e}"))?;
+        let start_ms = locked.start_ms;
+        self.play(engine, start.rom, &locked, start_ms, None)?;
+        log::info!("The Run started: {} on {}", locked.run_name, locked.game_name);
+        Ok(())
+    }
+
+    /// Plays the Run `engine` is the engine of, booted as it planned on
+    /// `rom`, with Shadow Games of the others; a resumed Run comes with its
+    /// log as its Run file kept it.
+    fn play(
+        &mut self,
+        engine: RunEngine,
+        rom: Vec<u8>,
+        locked: &pactlocke_run::Locked,
+        clock_ms: i64,
+        resumed: Option<&pactlocke_run::RunLog>,
+    ) -> Result<(), String> {
+        let (profile, _) = self.profiled(&rom)?;
+        let mut core = MgbaCore::new();
+        core.load_rom(&rom).map_err(|e| e.to_string())?;
+        let rom: Arc<[u8]> = rom.into();
+        let mut running = RunningGame::boot(ProfileGame::new(profile.clone(), rom.clone(), core), engine, clock_ms)
+            .map_err(|e| format!("the Run's game couldn't be booted: {e}"))?;
         let commands = running.commands();
         let shared = running.share();
         let me = self.lobbies.public_key().ok_or("no network key")?;
         let outbox = running.stream_as(me);
-        let mut spectate = Spectate::new(me, &locked, &rom, &profile, outbox, &commands, &[])?;
+        let kept = running.engine().kept_shadows().to_vec();
+        let mut spectate = Spectate::new(me, locked, &rom, &profile, outbox, &commands, &kept)?;
+        if let Some(log) = resumed {
+            spectate.resumed(log, running.streamed_before());
+        }
         spectate.draw_partner_avatars(running.draw_partner_avatars());
         let _ = commands.send(RunCommand::Speed(self.speed));
-        log::info!("The Run started: {} on {}", locked.run_name, locked.game_name);
         self.game = Some(Game {
             running,
             commands,
@@ -495,6 +519,42 @@ impl Headless {
             spectate,
         });
         self.next_frame = Instant::now();
+        Ok(())
+    }
+
+    /// Close Run, as the windowed app closes a Run with friends: each
+    /// Shadow Game's checkpoint is kept, the game suspended, the network left.
+    fn leave(&mut self) {
+        if let Some(game) = self.game.take() {
+            game.spectate.keep_checkpoints(true);
+            game.running.suspend();
+        }
+        self.lobbies.leave_run();
+        log::info!("Left the Run");
+    }
+
+    /// Resume, as the windowed app resumes a Run with friends: the newest
+    /// one in this app's Runs, on the ROM it was played on.
+    fn resume(&mut self) -> Result<(), String> {
+        let summary = self
+            .library
+            .list()
+            .into_iter()
+            .find(|r| r.with_friends)
+            .ok_or("there is no Run with friends to resume")?;
+        let path = PathBuf::from(summary.rom_path.clone().ok_or("the Run has no ROM path")?);
+        let rom = std::fs::read(&path).map_err(|e| format!("{} can't be read: {e}", path.display()))?;
+        let file = self.library.open_run(&summary.id).map_err(|e| e.to_string())?;
+        let engine = RunEngine::resume(Box::new(file), Box::new(SystemRunClock)).map_err(|e| e.to_string())?;
+        let mut resuming = crate::resume::Resuming::begin(engine, path, &mut self.lobbies, SystemRunClock.now_ms())?;
+        while !resuming.ready_to_boot(&mut self.lobbies, SystemRunClock.now_ms()) {
+            self.tick(Keys::NONE);
+        }
+        let crate::resume::Resuming {
+            engine, locked, log, ..
+        } = resuming;
+        self.play(engine, rom, &locked, SystemRunClock.now_ms(), Some(&log))?;
+        log::info!("Resumed the Run {}", locked.run_name);
         Ok(())
     }
 

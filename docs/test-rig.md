@@ -42,6 +42,10 @@ Each scenario is a folder in `scripts/rig/scenarios/<game>/`. `rig.env` names th
 | `disconnect` | 2 | Blue's network is cut for 90 seconds, long enough for the connection to drop, while they play on. With Red silent, Blue takes over hosting; once the cut ends Red joins Blue as a Player, each stream catches up, and each Shadow Game matches. |
 | `host-vanish` | 3 | The Host vanishes at the lab. Blue, next in join order, hosts from then on, Green dials Blue, and both Shadow Games of the Players who stayed match. |
 | `savestate-cheat` | 2 | Blue's game goes back to its Run Checkpoint with no Retry in the log, and Red's app flags it as a savestate load. |
+| `resume-joiner` | 2 | Blue closes the app mid-Run and comes back with Resume: their game goes on from the frame it left, and Red's Shadow Game of Blue carries on and matches. |
+| `resume-host` | 2 | Red, the Host, closes the app. Blue takes over and plays on; Red comes back with Resume and joins Blue as a Player. Every Shadow Game matches. |
+| `apart-then-together` | 2 | Both leave. Red comes back alone and hosts, changing speed; then Blue comes back alone and, with Red silent, takes over, changing speed too. When they meet, Blue's copy wins and Red's entry is sent again: the same Run log on both with both events, every Shadow Game matched. |
+| `back-in-another-order` | 3 | Everyone leaves, then comes back in another order, the Host last: Green plays alone, Blue takes over and Green finds them, then Red joins Blue as a Player. Every Shadow Game matches. |
 
 Emerald scenarios wait for Emerald's Game Profile: the app won't start a Run on a game it has no profile for.
 
@@ -81,6 +85,9 @@ A script has one step a line; `#` starts a comment. `include FILE` reads another
 | `cut SECS` | The rig drops every packet this container sends for SECS while the game plays on. The step fails if the cut can't be made. |
 | `shot FILE` | Saves the game's screen as a PNG. |
 | `vanish` | Stops at once, as a machine that vanished does. |
+| `leave` | Close Run: the Run with friends is suspended, each Shadow Game's checkpoint kept, and the network left. |
+| `away SECS` | Stays out of the Run for SECS, the app still running. |
+| `resume` | Resume: the Run with friends this app left, from its Run file, by the Host's key. |
 
 **Checks** (each waits, playing on, `within SECS`: 30 by default)
 

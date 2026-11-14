@@ -1,0 +1,17 @@
+# A joiner closes the app mid-Run and comes back with Resume:
+# Red plays on meanwhile. Blue's game goes on from the frame it left, so
+# Red's Shadow Game of Blue carries on and matches.
+include ../common/host.txt
+players 2
+ready
+lock-when 2
+speed 4
+include ../common/starter.txt
+sync lab 2
+m B 3000
+sync back 2
+m B 3000
+expect matched within 180
+expect no-errors
+sync done 2
+w 300

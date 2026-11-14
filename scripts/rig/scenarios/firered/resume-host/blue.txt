@@ -1,0 +1,12 @@
+include ../common/join.txt
+speed 4
+include ../common/starter.txt
+sync lab 2
+m B 3000
+expect log takeover by Blue within 60
+m B 3000
+expect connected within 180
+expect matched within 180
+expect no-errors
+sync done 2
+w 300

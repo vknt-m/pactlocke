@@ -1,0 +1,30 @@
+# Players host alone on different days, then meet.
+# Both leave; Red comes back alone and hosts; then Blue comes back alone and,
+# with Red silent, takes over. When they meet, Blue's copy of the log has the
+# rightful takeover and wins; Red's entry comes back and is sent again. The
+# same Run log on both, every event kept, every Shadow Game matched.
+include ../common/host.txt
+players 2
+ready
+lock-when 2
+speed 4
+include ../common/starter.txt
+sync lab 2
+m B 600
+leave
+sync apart 2
+resume
+speed 3
+m B 1200
+leave
+sync red-alone 2
+sync blue-alone 2
+resume
+m B 3000
+expect log event speed_changed speed=3 by Red within 180
+expect log event speed_changed speed=2 by Blue within 60
+expect connected within 120
+expect matched within 180
+expect no-errors
+sync done 2
+w 300

@@ -250,7 +250,11 @@ impl<G: PlayedGame> RunningGame<G> {
     pub fn stream_as(&mut self, player: PlayerKey) -> Arc<Mutex<Vec<InputChunk>>> {
         let outbox: Arc<Mutex<Vec<InputChunk>>> = Arc::default();
         let start = self.engine.frames_run();
-        let mut out = StreamOut::from_frame(player, self.engine.boot(), start);
+        let at = crate::GamePoint {
+            boot: self.engine.boot(),
+            frame: start,
+        };
+        let mut out = StreamOut::going_on_from(player, at);
         let now: Vec<Stamped> = self
             .engine
             .stamped()

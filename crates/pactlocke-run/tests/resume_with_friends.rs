@@ -141,3 +141,59 @@ fn a_resumed_app_restarts_each_shadow_game_from_its_checkpoint_in_the_run_file()
     }
     assert_eq!(table.apps[0].log.flags(), []);
 }
+
+/// The old Host played on alone, and the Player who took over
+/// orders a shorter copy. The new Host's newest entry can come first (it is
+/// what a Host sends to be heard); it waits for the entries leading to it,
+/// and then the copy with the takeover wins and the old Host's own entries
+/// come back to send again.
+#[test]
+fn two_copies_of_the_log_meet_and_the_takeovers_wins_whatever_order_its_entries_come_in() {
+    use pactlocke_run::{LogBody, RunEvent, RunLog, Signer};
+    let red = Signer::from_secret([1; 32]);
+    let blue = Signer::from_secret([2; 32]);
+    let mut table = Table::start(&["Red", "Blue"], first_encounter());
+    everyone_plays(&mut table, 20);
+    let shared = table.apps[0].log.clone();
+    let speed = |speed| LogBody::Event(RunEvent::SpeedChanged { speed });
+    let submit = |log: &mut RunLog, by: &Signer, orderer: &Signer, body: &LogBody| {
+        let counter = log.next_counter(&by.public());
+        let submission = log.sign(by, counter, body);
+        log.order(orderer, submission).unwrap()
+    };
+
+    // Red, the Host, plays on alone; Blue takes over a shorter copy.
+    let mut reds = shared.clone();
+    for n in 1..=3 {
+        submit(&mut reds, &red, &red, &speed(n));
+    }
+    let mut blues = shared.clone();
+    submit(&mut blues, &blue, &blue, &LogBody::Takeover);
+    submit(&mut blues, &blue, &blue, &speed(4));
+    assert!(reds.entries().len() > blues.entries().len());
+
+    // Blue's newest entry first: Red's copy waits for what leads to it.
+    let had = reds.entries().to_vec();
+    let newest = blues.entries().last().unwrap().clone();
+    assert_eq!(reds.give_way_to(newest, &red.public()), Ok(Vec::new()));
+    assert_eq!(reds.entries(), had, "nothing changed yet");
+
+    // Then the whole copy: the takeover's wins, and Red's own come back.
+    let mut back = Vec::new();
+    for entry in blues.entries().to_vec() {
+        back.extend(reds.give_way_to(entry, &red.public()).unwrap());
+    }
+    assert_eq!(reds.entries(), blues.entries());
+    assert_eq!(back.len(), 3, "Red's three entries, to send again");
+    for submission in back {
+        blues.order(&blue, submission).unwrap();
+    }
+    let speeds: Vec<u8> = blues
+        .bodies()
+        .filter_map(|(_, body)| match body {
+            LogBody::Event(RunEvent::SpeedChanged { speed }) => Some(speed),
+            _ => None,
+        })
+        .collect();
+    assert!(speeds.ends_with(&[4, 1, 2, 3]), "every event kept: {speeds:?}");
+}

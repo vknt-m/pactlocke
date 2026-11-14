@@ -141,14 +141,14 @@ impl<G: PlayedGame> ShadowGame<G> {
             shadow.game.core_mut().patch_rom(*addr, bytes);
             shadow.patches.insert(*addr, bytes.clone());
         }
-        shadow.boot = from.boot;
-        shadow.confirmed = from.frame;
-        shadow.received = from.frame;
+        shadow.boot = from.at.boot;
+        shadow.confirmed = from.at.frame;
+        shadow.received = from.at.frame;
         shadow.seen.owned = from.owned.iter().copied().collect();
         shadow.seen.fainted = from.fainted.iter().copied().collect();
         shadow.checkpoints.push_back(Kept {
-            boot: from.boot,
-            frame: from.frame,
+            boot: from.at.boot,
+            frame: from.at.frame,
             core: from.core.clone(),
             patches: shadow.patches.clone(),
         });
@@ -170,8 +170,10 @@ impl<G: PlayedGame> ShadowGame<G> {
             }
         }
         Some(ShadowCheckpoint {
-            boot: self.boot,
-            frame: self.confirmed,
+            at: crate::GamePoint {
+                boot: self.boot,
+                frame: self.confirmed,
+            },
             core: self.game.core_mut().checkpoint(),
             patches: self.patches.iter().map(|(a, b)| (*a, b.clone())).collect(),
             owned: self.seen.owned.iter().copied().collect(),
@@ -607,9 +609,8 @@ enum Item {
 /// of the Player's Pokémon it had seen owned and fainted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShadowCheckpoint {
-    pub boot: u32,
-    /// The frame boundary it was taken at: frames of that boot run before it.
-    pub frame: u64,
+    /// The boot and frame boundary of the Player's game it was taken at.
+    pub at: crate::GamePoint,
     pub core: Checkpoint,
     pub patches: Vec<(u32, Vec<u8>)>,
     pub owned: Vec<u32>,

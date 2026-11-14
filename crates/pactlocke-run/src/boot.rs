@@ -101,13 +101,11 @@ fn apply<C: CoreAdapter>(core: &mut C, change: &Change, patches: &mut BTreeMap<u
 /// How a resumed Run's game is booted, from the last boot whose game got
 /// going (took its boot checkpoint; a boot that failed is passed over). One
 /// that ended suspended resumes from the suspend slot; one that ended in a
-/// crash is rebuilt from its last checkpoint; otherwise the game boots from
-/// its last in-game save.
+/// crash is rebuilt; otherwise the game boots from its last in-game save.
 ///
-/// A Run with friends never boots from an in-game save while it has a
-/// checkpoint of its last boot: the others' Shadow Games would see a
-/// savestate load. It goes on from the newest of the suspend slot and its
-/// last checkpoint, rebuilt through the presses recorded after it.
+/// A crash is rebuilt from the newest of the suspend slot and the last
+/// checkpoint, so a Run with friends never boots from an older in-game save
+/// while it has one: the others' Shadow Games would see a savestate load.
 pub(crate) fn plan(stored: &StoredRun) -> (BootPlan, ResumedFrom) {
     let from_save = || match &stored.save_memory {
         Some(save) => (BootPlan::FromSave(save.clone()), ResumedFrom::Save),
@@ -126,17 +124,13 @@ pub(crate) fn plan(stored: &StoredRun) -> (BootPlan, ResumedFrom) {
         .rev()
         .find(|e| e.boot == last_boot)
         .map(|e| &e.event);
-    let with_friends = !stored.log.is_empty();
-    if with_friends && !matches!(ended, Some(RunEvent::Suspended)) {
-        let newest = [&stored.suspended, &stored.latest_checkpoint]
-            .into_iter()
-            .flatten()
-            .filter(|from| from.boot == last_boot)
-            .max_by_key(|from| from.frame);
-        if let Some(plan) = newest.and_then(|from| rebuild(from, stored, last_boot)) {
-            return plan;
-        }
-    }
+    // After a crash: the newest of the suspend slot (a Run with friends
+    // keeps it up to date, and so does its solo copy) and the last checkpoint.
+    let newest = [&stored.suspended, &stored.latest_checkpoint]
+        .into_iter()
+        .flatten()
+        .filter(|from| from.boot == last_boot)
+        .max_by_key(|from| from.frame);
     match ended {
         Some(RunEvent::Suspended) => match &stored.suspended {
             Some(from) => (BootPlan::Suspended(from.clone()), ResumedFrom::Suspend),
@@ -144,10 +138,7 @@ pub(crate) fn plan(stored: &StoredRun) -> (BootPlan, ResumedFrom) {
         },
         // A Retry that never got its new boot going: as after a clean close.
         Some(RunEvent::Closed | RunEvent::Retried { .. }) | None => from_save(),
-        Some(_) => stored
-            .latest_checkpoint
-            .as_ref()
-            .filter(|from| from.boot == last_boot)
+        Some(_) => newest
             .and_then(|from| rebuild(from, stored, last_boot))
             .unwrap_or_else(from_save),
     }

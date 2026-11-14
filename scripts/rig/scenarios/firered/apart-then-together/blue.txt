@@ -1,0 +1,23 @@
+include ../common/join.txt
+speed 4
+include ../common/starter.txt
+sync lab 2
+m B 600
+leave
+sync apart 2
+sync red-alone 2
+resume
+speed 2
+m B 1200
+expect log takeover by Blue within 60
+leave
+sync blue-alone 2
+resume
+m B 3000
+expect log event speed_changed speed=3 by Red within 180
+expect log event speed_changed speed=2 by Blue within 60
+expect connected within 120
+expect matched within 180
+expect no-errors
+sync done 2
+w 300

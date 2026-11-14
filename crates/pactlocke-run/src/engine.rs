@@ -122,15 +122,16 @@ pub struct RunEngine {
     /// Whether this is a Run with friends: its Run log is kept in the Run file.
     with_friends: bool,
     /// In a Run with friends: the suspend slot should be filled at this
-    /// frame boundary (a big event happened), and when it last was.
+    /// frame boundary, as a big event happened.
     suspend_slot_due: bool,
+    /// When the suspend slot was last filled as the game went on.
     suspend_slot_kept_ms: i64,
     /// In a Run with friends, this Player's copy of the Run log as the Run
     /// file kept it when the Run was opened again.
     kept_log: Vec<crate::LogEntry>,
-    /// And this Player's entries that were waiting for a Host then, and the
-    /// newest checkpoint of each of this app's Shadow Games.
+    /// And this Player's entries that were waiting for a Host then.
     kept_waiting: Vec<crate::Submission>,
+    /// And the newest checkpoint of each of this app's Shadow Games then.
     kept_shadows: Vec<(crate::PlayerKey, crate::ShadowCheckpoint)>,
     /// This boot's input stream from before this session: a Run with friends
     /// resumes by going on with the boot it left, so the others' Shadow
@@ -181,7 +182,7 @@ impl RunEngine {
         let stored = storage.load()?;
         let mut engine = Self::reopened(&stored, storage, clock);
         let (plan, from) = crate::boot::plan(&stored);
-        engine.with_friends = !stored.log.is_empty();
+        engine.with_friends = stored.with_friends();
         engine.kept_log = stored.log.clone();
         engine.kept_waiting = stored.waiting.clone();
         engine.kept_shadows = stored.shadows.clone();

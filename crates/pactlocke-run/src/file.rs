@@ -762,8 +762,8 @@ fn keep_shadow(db: &Connection, player: &PlayerKey, checkpoint: &ShadowCheckpoin
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             &player[..],
-            checkpoint.boot,
-            checkpoint.frame as i64,
+            checkpoint.at.boot,
+            checkpoint.at.frame as i64,
             encode_patches(&checkpoint.patches),
             seen,
             core
@@ -800,8 +800,10 @@ fn read_shadows(db: &Connection) -> Result<Vec<(PlayerKey, ShadowCheckpoint)>, S
             Ok((
                 player,
                 ShadowCheckpoint {
-                    boot,
-                    frame: frame as u64,
+                    at: crate::GamePoint {
+                        boot,
+                        frame: frame as u64,
+                    },
                     core: decode_core(&core).ok_or_else(broken)?,
                     patches: decode_patches(&patches).ok_or_else(broken)?,
                     owned,

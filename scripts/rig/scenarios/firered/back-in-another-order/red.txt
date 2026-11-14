@@ -1,0 +1,23 @@
+# Everyone away, then back in another order, the Host last:
+# Green first, playing alone; then Blue, who takes over with Red silent and
+# whom Green finds; then Red, who joins Blue as a Player.
+include ../common/host.txt
+players 3
+ready
+lock-when 3
+speed 4
+include ../common/starter.txt
+sync lab 3
+leave
+sync away 3
+sync green-back 3
+sync blue-back 3
+away 20
+resume
+m B 3000
+expect log takeover by Blue within 120
+expect connected within 120
+expect matched within 180
+expect no-errors
+sync done 3
+w 300

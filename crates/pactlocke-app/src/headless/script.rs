@@ -77,6 +77,12 @@ pub enum Step {
     Shot(PathBuf),
     /// Stops at once, as if the app's machine vanished.
     Vanish,
+    /// Close Run: the Run with friends is suspended and its network left.
+    Leave,
+    /// Stays away from the Run for this many seconds, the app still running.
+    Away { secs: u64 },
+    /// Resume: the Run with friends this app left, from its Run file.
+    Resume,
 }
 
 /// Which relays a headless app uses.
@@ -322,6 +328,11 @@ fn step(words: &[&str]) -> Result<Step, String> {
         ["expect", rest @ ..] => expect(rest)?,
         ["shot", path @ ..] if !path.is_empty() => Step::Shot(path.join(" ").into()),
         ["vanish"] => Step::Vanish,
+        ["leave"] => Step::Leave,
+        ["away", secs] => Step::Away {
+            secs: number(secs)?.into(),
+        },
+        ["resume"] => Step::Resume,
         _ => return Err("not a step".into()),
     })
 }

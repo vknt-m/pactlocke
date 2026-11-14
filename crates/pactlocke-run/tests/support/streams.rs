@@ -375,7 +375,7 @@ impl Table {
             .map(|(player, game)| {
                 let shadow = match kept_shadows.iter().find(|(p, _)| *p == player) {
                     Some((_, checkpoint)) => {
-                        app.hub.starts_at(player, checkpoint.boot, checkpoint.frame);
+                        app.hub.starts_at(player, checkpoint.at);
                         ShadowGame::from_checkpoint(game, START_MS, checkpoint).unwrap()
                     }
                     None => ShadowGame::power_on(game, START_MS),
