@@ -1386,3 +1386,76 @@ fn must_nickname_names_a_catch_and_the_type_clause_boxes_a_second_of_a_type() {
     d.print_feed();
     d.assert_shadow_matched(20);
 }
+
+/// Runs the gate's battle script from its real `trainerbattle` (test setup,
+/// in place of walking up to the leader and talking to them).
+fn talk_to_the_leader(d: &mut Driver, site: u32) {
+    let mut script = vec![GOTO];
+    script.extend(site.to_le_bytes());
+    d.run_script(&script);
+}
+
+#[test]
+fn a_held_sync_gate_readies_the_player_up_and_once_everyone_is_ready_the_real_battle_runs() {
+    let rom = rom_or_skip!();
+    let gates: Vec<(String, u32)> = profiled(&rom).sync_gates.as_ref().expect("gates").gates[..2]
+        .iter()
+        .map(|g| (g.name.clone(), g.sites[0].at))
+        .collect();
+    let hold = profiled(&rom).sync_gates.as_ref().unwrap().hold;
+    let (first, site) = gates[0].clone();
+    let mut d = run_with(
+        rom,
+        Ruleset {
+            sync_gates: gates.iter().map(|g| g.0.clone()).collect(),
+            ..Ruleset::default()
+        },
+    );
+    d.watched();
+    to_the_starter(&mut d);
+    win_the_first_battle(&mut d);
+    let clean = d.rom[(site - 0x0800_0000) as usize..][..5].to_vec();
+    for (name, at) in &gates {
+        assert_eq!(d.read(*at, 1), [GOTO], "{name}'s battle is held");
+    }
+
+    // At the held gate: the hold message, no battle, and the Player is Ready there.
+    talk_to_the_leader(&mut d, site);
+    let partners = pactlocke_game::encode_text("partners", 8).unwrap();
+    let mut saw_message = false;
+    for _ in 0..40 {
+        saw_message |= showing(&mut d, &partners, hold);
+        d.play("p A 30");
+    }
+    dump_screen(&d.game, "gate-held");
+    assert!(saw_message, "\"Waiting for your partners to be ready...\" on screen");
+    assert!(!d.in_battle(), "no battle while the gate holds");
+    d.until_idle(Keys::B, 1200);
+    let run = d.feed(FeedKind::Run);
+    let ready = format!("Ready at {first}: waiting for your partners to be ready");
+    assert!(run.contains(&ready), "{run:?}");
+
+    // Everyone is Ready: the gate is let go, and the next gate still holds.
+    d.game
+        .commands()
+        .send(RunCommand::OpenGate {
+            gate: first.clone(),
+            checkpoint: true,
+        })
+        .unwrap();
+    d.play("w 30");
+    assert_eq!(d.read(site, 5), clean, "let go: the ROM's own bytes");
+    assert_eq!(d.read(gates[1].1, 1), [GOTO], "{} is still held", gates[1].0);
+    let run = d.feed(FeedKind::Run);
+    let on = format!("Everyone is Ready at {first}: the battle is on");
+    assert!(run.contains(&on), "{run:?}");
+
+    // The leader's own battle now runs.
+    talk_to_the_leader(&mut d, site);
+    d.until_action_menu(Keys::A, 6000);
+    let battle = d.game.game_mut().battle().expect("the leader's battle");
+    assert_eq!(battle.kind, pactlocke_game::BattleKind::Trainer);
+    dump_screen(&d.game, "gate-battle");
+    d.print_feed();
+    d.assert_shadow_matched(20);
+}
