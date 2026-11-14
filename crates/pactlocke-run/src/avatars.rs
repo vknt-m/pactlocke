@@ -1,6 +1,7 @@
 //! Partner Avatars and Followers: every Player but this one, drawn walking
 //! around in this Player's game, their lead Pokémon's party icon following
-//! them, and this Player's own lead following them too. Where they stand and
+//! them, and this Player's own lead following them too. Followers are off
+//! for now (see `FOLLOWERS`). Where they stand and
 //! how they look come from their Shadow Games (about half a second behind),
 //! and they walk from tile to tile on wall-clock time, so a Player at 4x
 //! still walks at a walk.
@@ -28,6 +29,10 @@ const MAX_AVATARS: usize = 2;
 /// Every sprite slot takes this many 4bpp tiles: a 32x32 sprite's.
 const SLOT_TILES: u16 = 16;
 const SCREEN: (i32, i32) = (240, 160);
+/// Whether Followers are drawn. Off until they can walk like HGSS's, from
+/// the Player's own HeartGold or SoulSilver ROM: a FireRed party icon
+/// sliding a tile behind looked wrong. Partner Avatars are drawn either way.
+const FOLLOWERS: bool = false;
 
 /// Another Player's Partner Avatar, as their Shadow Game shows them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,8 +208,12 @@ fn standing(room: &AvatarRoom, camera: (f64, f64), drawn: (f64, f64), image: Spr
     })
 }
 
-/// A Follower's party icon, a tile behind its walker, feet on that tile.
+/// A Follower's party icon, a tile behind its walker, feet on that tile;
+/// nothing while Followers are off.
 fn follower(room: &AvatarRoom, camera: (f64, f64), behind: Option<Tile>, icon: Option<SpriteImage>) -> Option<Drawn> {
+    if !FOLLOWERS {
+        return None;
+    }
     standing(room, camera, pixels(behind?), icon?)
 }
 

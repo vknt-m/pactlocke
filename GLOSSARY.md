@@ -75,7 +75,7 @@ Another Player's character, shown walking around inside your own game.
 _Avoid_: Ghost, other player
 
 **Follower**:
-The lead Pokémon in a Player's party, shown walking behind that Player's character in their own game and on their Partner Avatar in others' games.
+The lead Pokémon in a Player's party, shown walking behind that Player's character in their own game and on their Partner Avatar in others' games. Off for now.
 _Avoid_: Walking Pokémon, pet
 
 **Dead**:

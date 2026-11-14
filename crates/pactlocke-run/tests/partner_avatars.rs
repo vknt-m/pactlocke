@@ -144,8 +144,11 @@ fn a_partner_walks_from_tile_to_tile_on_wall_clock_time() {
     );
 }
 
+/// Followers are off until they can walk like HGSS's, from a Player's own
+/// HeartGold or SoulSilver ROM: a party icon sliding behind looked wrong.
+/// Partner Avatars still walk; no Follower is drawn behind anyone.
 #[test]
-fn followers_walk_a_tile_behind_their_players() {
+fn followers_are_off_and_partner_avatars_still_walk() {
     let mut table = Table::start(&["Red", "Blue"], Ruleset::default());
     table.draw_partner_avatars();
     stands(&mut table, 0, PALLET, 10, 10);
@@ -154,11 +157,11 @@ fn followers_walk_a_tile_behind_their_players() {
     table.happens(0, |g| g.whereabouts.as_mut().unwrap().x = 11);
     table.happens(1, |g| g.whereabouts.as_mut().unwrap().x = 15);
     both_play(&mut table, 300);
-    // Red's own Follower (the last slot) stands on (10, 10): a tile left of
-    // Red, 32x32 and centred on the tile.
-    assert_eq!(screen(entry(&mut table, 0, 4)), Some((112 - 16 - 8, 56)));
-    // Blue's, on (14, 10): 3 tiles right of Red.
-    assert_eq!(screen(entry(&mut table, 0, 1)), Some((112 + 48 - 8, 56)));
+    // Blue's Partner Avatar, on (15, 10): 4 tiles right of Red.
+    assert_eq!(screen(entry(&mut table, 0, 0)), Some((112 + 64, 56)));
+    // No Follower: not Blue's (slot 1), nor Red's own (the last slot).
+    assert_eq!(screen(entry(&mut table, 0, 1)), None);
+    assert_eq!(screen(entry(&mut table, 0, 4)), None);
 }
 
 #[test]
