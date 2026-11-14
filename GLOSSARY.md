@@ -90,6 +90,10 @@ _Avoid_: Strike, cheat (cheating is tampering with the game, not breaking a rule
 Where the Players of a Run with friends gather: the Host invites them, sets the Ruleset, and everyone says Ready before the lock. It stays open for the whole Run, as the Players' connection to each other.
 _Avoid_: Room, session
 
+**Invite**:
+What lets one friend into a Run's Lobby before the lock: a link the Host copies and sends. It is used up when that friend joins.
+_Avoid_: Ticket, room link, join code
+
 **Host**:
 The Player whose app puts the Run's events in order. Hosting passes to the next Player who joined if the Host leaves. The Host cannot change or invent other Players' events.
 _Avoid_: Server, admin, owner
