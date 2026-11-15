@@ -13,7 +13,7 @@ impl RunEngine {
     /// defeat flags when the Player goes in again. Where the game can't be
     /// patched it is a soft cap, said once.
     pub(super) fn keep_level_cap(&mut self, game: &mut impl LiveGame) {
-        if self.info.ruleset.level_caps.is_none() {
+        if self.info.ruleset.level_caps.is_none() || self.is_native(pactlocke_game::Rule::LevelCap) {
             return;
         }
         let stage = game.cap_stage().max(self.rules.cap_stage().unwrap_or(0));

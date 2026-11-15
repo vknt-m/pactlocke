@@ -88,9 +88,12 @@ pub fn rules_panel(ui: &mut egui::Ui, identity: &RomIdentity) {
                     ui.strong(rule.name());
                     ui.label("enforced by Pactlocke");
                 }
-                Capability::NativeOption { name, menu, value } => {
+                Capability::NativeOption(native) => {
                     ui.strong(rule.name());
-                    ui.label(format!("the game's own option: set {name} to {value} ({menu})"));
+                    ui.label(format!(
+                        "the game's own option: Pactlocke sets {} to {} ({})",
+                        native.name, native.value, native.menu
+                    ));
                 }
                 Capability::GreyedOut { reason } => {
                     ui.weak(rule.name());

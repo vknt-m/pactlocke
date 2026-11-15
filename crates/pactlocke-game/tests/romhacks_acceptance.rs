@@ -1,5 +1,5 @@
-//! Local only: the tested Romhacks and Untested play on the
-//! developer's own ROMs. The tested-hack tests read every `.gba` under the
+//! Local only: the tested Romhacks and Untested play on
+//! the developer's own ROMs. The tested-hack tests read every `.gba` under the
 //! folder `PACTLOCKE_ROMHACKS` names (the six launch hacks, patched); the
 //! Untested test reads FireRed from the folder `PACTLOCKE_ROMS` names. Each
 //! skips without its folder. Never run in CI; the ROMs are only read.
@@ -19,8 +19,11 @@ fn gba_files(dir: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
+/// The tested Romhacks with a bundled Game Profile.
+const PROFILED: [&str; 2] = ["Gaia", "Glazed"];
+
 #[test]
-fn each_patched_launch_romhack_is_named_and_waits_for_its_game_profile() {
+fn each_patched_launch_romhack_is_named_and_profiled_or_waits_for_its_game_profile() {
     let Some(dir) = std::env::var_os("PACTLOCKE_ROMHACKS") else {
         eprintln!("skipped: set PACTLOCKE_ROMHACKS to a folder with your patched Romhacks");
         return;
@@ -31,7 +34,20 @@ fn each_patched_launch_romhack_is_named_and_waits_for_its_game_profile() {
     let mut named = Vec::new();
     for file in &files {
         let rom = std::fs::read(file).unwrap();
+        let hack = store.tested_romhack(&sha1_hex(&rom)).expect("a tested Romhack").clone();
         let identity = store.identify(&rom);
+        if PROFILED.contains(&hack.name.as_str()) {
+            let RomIdentity::Profiled { profile, capabilities } = identity else {
+                panic!("{} has its Game Profile: {identity:?}", hack.name);
+            };
+            eprintln!("{}: {}", file.display(), profile.name);
+            assert_eq!(profile.status, SupportStatus::Supported, "{}", hack.name);
+            for (rule, capability) in capabilities.iter() {
+                assert_eq!(capability, &Capability::Enforceable, "{}: {rule:?}", hack.name);
+            }
+            named.push(hack.name);
+            continue;
+        }
         let RomIdentity::Unprofiled {
             verdict: Unprofiled::ProfileComing(hack),
             ..

@@ -273,6 +273,17 @@ pub enum RunEvent {
     SetModeForced { again: bool },
     /// Set mode couldn't be forced on this game. Said once per Run.
     SetModeFailed { reason: String },
+    /// A rule the game does through its own option: the option was set for
+    /// the rule (said once per Run), or set back (`again`) after the Player
+    /// changed a watched one.
+    NativeOptionSet {
+        rule: String,
+        name: String,
+        value: String,
+        again: bool,
+    },
+    /// The option couldn't be set. Said once per Run for each option.
+    NativeOptionFailed { rule: String, name: String, reason: String },
     /// Must nickname: a Pokémon was left with its species name, so the side
     /// panel asks the Player for one.
     NicknameWanted { pid: u32, species_name: String },

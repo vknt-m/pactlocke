@@ -27,6 +27,8 @@ const ACCEPTANCE: &[(&str, &str)] = &[
     ("emerald-usa-1.0", "emerald_acceptance"),
     ("ruby-usa-1.0", "ruby_acceptance"),
     ("sapphire-usa-1.0", "sapphire_acceptance"),
+    ("glazed-9.2.0", "glazed_acceptance"),
+    ("gaia-3.2", "gaia_acceptance"),
 ];
 
 fn main() -> ExitCode {

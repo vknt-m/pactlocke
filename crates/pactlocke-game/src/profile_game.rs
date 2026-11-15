@@ -481,7 +481,10 @@ impl<M: Memory> Game for ProfileGame<M> {
     fn holds_poke_balls(&mut self) -> bool {
         let layout = &self.profile.layout;
         let (offset, slots) = (layout.balls_pocket, layout.balls_pocket_slots);
-        let pocket = self.save_block(1) + offset;
+        let pocket = match self.profile.symbols.balls_pocket {
+            Some(at) => at,
+            None => self.save_block(1) + offset,
+        };
         // The game empties a slot's item when its last ball is used.
         (0..u32::from(slots)).any(|slot| self.u16(pocket + slot * 4) != 0)
     }
@@ -695,6 +698,10 @@ impl<M: Memory> Game for ProfileGame<M> {
             addr,
             bytes: vec![(current & !def.mask) | setting],
         }])
+    }
+
+    fn native_options(&mut self) -> Vec<crate::NativeOption> {
+        self.profile.native_options()
     }
 
     fn whereabouts(&mut self) -> Option<Whereabouts> {

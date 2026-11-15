@@ -58,13 +58,66 @@ impl Rule {
     }
 }
 
+/// A rule the game's own option does, as its Game Profile lists it:
+/// Pactlocke sets the option at the start of every boot and, when it is
+/// watched, sets it back whenever the Player changes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeOption {
+    /// The Pactlocke rule the option does.
+    pub rule: Rule,
+    /// The option's key in the Game Profile.
+    pub option: String,
+    /// Its in-game name: "BATTLE STYLE".
+    pub name: String,
+    /// Where it is in the game's menus: "OPTIONS ▸ BATTLE STYLE".
+    pub menu: String,
+    /// The setting the rule needs.
+    pub value: String,
+    /// Whether a change mid-Run is set back, or the option only set at each boot.
+    pub watched: bool,
+}
+
+impl GameProfile {
+    /// Every rule this game does through its own option.
+    pub fn native_options(&self) -> Vec<NativeOption> {
+        let methods = &self.rules;
+        let mut found: Vec<NativeOption> = Vec::new();
+        for (rule, method) in [
+            (Rule::FirstEncounter, &methods.catch_block),
+            (Rule::LevelCap, &methods.level_cap),
+            (Rule::NoItems, &methods.no_items_trainer),
+            (Rule::NoItems, &methods.no_items_wild),
+            (Rule::MustNickname, &methods.must_nickname),
+            (Rule::SetMode, &methods.set_mode),
+        ] {
+            let Some(Method::Native { option, value }) = method else {
+                continue;
+            };
+            if found.iter().any(|n| n.rule == rule && n.option == *option) {
+                continue;
+            }
+            // The store checked the option exists.
+            let def = &self.options[option];
+            found.push(NativeOption {
+                rule,
+                option: option.clone(),
+                name: def.name.clone(),
+                menu: def.menu.clone(),
+                value: value.clone(),
+                watched: def.watched,
+            });
+        }
+        found
+    }
+}
+
 /// How one rule can be applied on this ROM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Capability {
     /// Pactlocke enforces it.
     Enforceable,
-    /// The game's own option does it; each Player turns it on.
-    NativeOption { name: String, menu: String, value: String },
+    /// The game's own option does it; Pactlocke sets the option.
+    NativeOption(NativeOption),
     /// It can't be used on this ROM.
     GreyedOut { reason: String },
 }
@@ -190,15 +243,16 @@ fn method_capability(profile: &GameProfile, method: Option<&Method>, rom: &[u8])
                 })
             })
             .map_or(Capability::Enforceable, |reason| Capability::GreyedOut { reason }),
-        Some(Method::Native { option, value }) => {
-            // The store checked the option exists.
-            let def = &profile.options[option];
-            Capability::NativeOption {
-                name: def.name.clone(),
-                menu: def.menu.clone(),
-                value: value.clone(),
-            }
-        }
+        Some(Method::Native { option, value }) => profile
+            .native_options()
+            .into_iter()
+            .find(|native| native.option == *option && native.value == *value)
+            .map_or(
+                Capability::GreyedOut {
+                    reason: format!("the Game Profile has no native option {option:?}"),
+                },
+                Capability::NativeOption,
+            ),
         Some(Method::KeyFilter {
             command_table, command, ..
         }) => {

@@ -154,6 +154,35 @@ pub fn rule_row(ui: &mut egui::Ui, on: &mut bool, rule: Rule, ruleset: &Ruleset,
     description(ui, &summary(rule, ruleset), unavailable.as_deref());
 }
 
+/// The game's own options the chosen rules are done with, and where each
+/// is in the game's menus: Pactlocke sets them in every Player's game.
+pub fn native_options(ui: &mut egui::Ui, settings: &[pactlocke_run::NativeOptionView]) {
+    if settings.is_empty() {
+        return;
+    }
+    ui.add_space(4.0);
+    ui.strong("The game's own options");
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(
+                "This game does these rules itself. Pactlocke sets each option in every Player's game, and sets a watched one back if it is changed.",
+            )
+            .weak()
+            .small(),
+        )
+        .wrap(),
+    );
+    for setting in settings {
+        ui.add(
+            egui::Label::new(format!(
+                "{}: {} set to {} ({})",
+                setting.rule, setting.name, setting.value, setting.menu
+            ))
+            .wrap(),
+        );
+    }
+}
+
 /// A rule's description, indented under its checkbox and wrapped to the
 /// width there is; with the reason it can't be chosen, when it can't.
 pub fn description(ui: &mut egui::Ui, text: &str, unavailable: Option<&str>) {

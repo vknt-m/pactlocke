@@ -61,6 +61,8 @@ pub struct FakeGame {
     pub options: BTreeMap<String, String>,
     /// The settings each option has.
     pub option_values: BTreeMap<String, Vec<String>>,
+    /// The rules the game does through its own options: none by default.
+    pub native_options: Vec<crate::NativeOption>,
     pub trainer_id: u32,
     /// The game's play time in frames.
     pub play_time: u32,
@@ -126,6 +128,7 @@ impl Default for FakeGame {
             type_names: BTreeMap::new(),
             options: BTreeMap::from([("battle_style".to_owned(), "shift".to_owned())]),
             option_values: BTreeMap::from([("battle_style".to_owned(), vec!["shift".to_owned(), "set".to_owned()])]),
+            native_options: Vec::new(),
             trainer_id: 0,
             play_time: 0,
             primary_types: BTreeMap::new(),
@@ -456,6 +459,10 @@ impl Game for FakeGame {
             return Err(GameError::UnknownOption(format!("{name} = {value}")));
         }
         Ok(vec![fake_write(SET_OPTION, format!("{name}={value}").into_bytes())])
+    }
+
+    fn native_options(&mut self) -> Vec<crate::NativeOption> {
+        self.native_options.clone()
     }
 
     fn whereabouts(&mut self) -> Option<crate::Whereabouts> {

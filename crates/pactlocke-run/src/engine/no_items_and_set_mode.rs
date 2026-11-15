@@ -2,6 +2,8 @@
 //! battle. The item patches only bite in battle, so they stay on for the
 //! whole boot; the battle style is written back whenever it isn't Set.
 
+use pactlocke_game::Rule;
+
 use super::RunEngine;
 use crate::{LiveGame, RunEvent};
 
@@ -9,7 +11,7 @@ impl RunEngine {
     /// Refuses the Bag in trainer battles and bans every item but Poké Balls
     /// in wild battles, once per boot (ROM patches don't survive one).
     pub(super) fn keep_items_banned(&mut self, game: &mut impl LiveGame) {
-        if !self.rules.no_items() || self.items_patched {
+        if !self.rules.no_items() || self.items_patched || self.is_native(Rule::NoItems) {
             return;
         }
         self.items_patched = true;
@@ -33,7 +35,7 @@ impl RunEngine {
 
     /// Writes the battle style back to Set whenever it isn't.
     pub(super) fn keep_set_mode(&mut self, game: &mut impl LiveGame) {
-        if !self.rules.set_mode() {
+        if !self.rules.set_mode() || self.is_native(Rule::SetMode) {
             return;
         }
         match game.force_set_mode() {

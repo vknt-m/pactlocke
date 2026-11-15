@@ -1,0 +1,737 @@
+# Pokémon Gaia 3.2 by Spherical Ice, a binary hack of FireRed (USA) 1.0.
+# It keeps FireRed's battle RAM, party, save blocks, event flags and most
+# patch sites (checked by `cargo dev scan`), but stores Pokémon unencrypted in a fixed order, keeps the Bag in RAM
+# outside the save blocks, has 935 species with moved species tables, and
+# refuses the Bag in battle by its own flag 0x280 instead of FireRed's mask.
+# Its Areas, Gifts, Statics and leaders are its own, read from this ROM.
+
+schema = 1
+id = "gaia-3.2"
+name = "Pokémon Gaia 3.2"
+game_code = "BPRE"
+family = "FRLG"
+sha1 = "d5b1e77975fcda831e0e9a7b527906bf3f40ecd0"
+status = "supported"
+
+[symbols]
+party = 0x02024284
+party_count = 0x02024029
+enemy_party = 0x0202402C              # gEnemyParty
+pc_storage = { pointer = 0x03005010 }
+save_block_1 = { pointer = 0x03005008 }
+save_block_2 = { pointer = 0x0300500C }
+region_map_section = 0x02036E10        # gMapHeader.regionMapSectionId
+main_callback2 = 0x030030F4            # gMain.callback2
+overworld_callback = 0x080565B4        # CB2_Overworld
+in_battle = { at = 0x03003529, mask = 0x02 }   # gMain.inBattle
+battle_type_flags = 0x02022B4C
+battle_mons = 0x02023BE4
+battler_party_indexes = 0x02023BCE
+battler_statuses3 = 0x02023DFC
+disable_structs = 0x02023E0C
+script_context_status = 0x03000EA8     # 0 running, 1 waiting, 2 idle
+script_context = 0x03000EB0
+species_info = 0x08ACD000
+species_names = 0x08745850              # gSpeciesNames
+evolution_table = 0x08A9556C            # gEvolutionTable
+items = 0x083DB028
+trainers = 0x0823EAC8                   # gTrainers
+type_names = 0x087FFE00                 # gTypeNames
+message_buffer = 0x02021D18             # gStringVar4
+# Gaia keeps the Bag in RAM, outside save block 1 (its SetBagPocketsPointers).
+balls_pocket = 0x0203C8C0
+
+[layout]
+# How a Pokémon is stored (pret's struct Pokemon / BoxPokemon).
+party_slot_size = 100
+box_slot_size = 80
+encrypted = false
+ot_id = 0x04
+nickname = 0x08
+nickname_length = 10
+flags = 0x13
+egg_mask = 0x04
+has_species_mask = 0x02
+checksum = 0x1C
+substructures = 0x20
+level = 0x54
+hp = 0x56
+max_hp = 0x58
+battle_mon_size = 0x58
+battle_mon_hp = 0x28
+battle_type_trainer = 0x08
+# BATTLE_TYPE_OLD_MAN_TUTORIAL, _GHOST and _POKEDUDE: the catching demo, the
+# Pokémon Tower ghost and the Pokédude's demos, which nobody can catch in.
+battle_type_uncatchable = 0x18200
+battle_type_double = 0x01
+perish_song_status3 = 0x20
+disable_struct_size = 0x1C
+perish_timer = 0x0F
+script_context_stack_depth = 0x00
+script_context_stack = 0x0C
+script_context_pointer = 0x08
+species_info_size = 28
+species_name_length = 11
+species_count = 935                     # NUM_SPECIES
+evolutions_per_species = 16              # EVOS_PER_MON
+evolution_size = 8                      # struct Evolution
+evolution_target = 4
+primary_type = 6
+item_size = 44
+item_count = 375
+item_pocket = 26
+item_battle_usage = 32
+ball_pocket = 3
+pc_boxes = 14
+pc_box_slots = 30
+pc_boxes_offset = 4
+trainer_id = 0x0A                      # in save block 2
+play_time = 0x0E                       # in save block 2: hours, minutes, seconds, frames
+badge_flags = 0x820                    # FLAG_BADGE01_GET: eight flags, one per badge
+event_flags = 0xEE0                    # in save block 1
+# pret's struct Trainer (40 bytes) and its party entries; the party flags say
+# whether entries carry custom moves (16 bytes) or not (8 bytes).
+trainer_size = 40
+trainer_party_flags = 0
+trainer_party_size = 32
+trainer_party = 36
+trainer_mon_level = 2
+trainer_mon_sizes = [8, 16, 8, 16]
+type_name_length = 7
+balls_pocket = 0x430                   # in save block 1: gBagPockets' Poké Balls
+balls_pocket_slots = 28
+dead_box = 14
+
+[options.battle_style]
+name = "Battle style"
+menu = "OPTION > BATTLE STYLE"
+save_block = 2
+offset = 0x15
+mask = 0x02
+values = { shift = 0x00, set = 0x02 }
+
+# Closes an Area: the ball is refused in the Bag with Oak's "time and place" line.
+[rules.catch_block]
+method = "patch"
+sites = [
+  { at = 0x08040F6C, expect = "10 B5 00 24", write = "01 20 70 47" },  # IsPlayerPartyAndPokemonStorageFull -> TRUE
+  { at = 0x080A1E5C, expect = "31 66 41 08", write = "25 64 41 08" },  # gText_BoxFull -> "This isn't the time to use that!"
+]
+
+# The level-100 checks after `movs r1, #0x38` (MON_DATA_LEVEL); the first byte is the cap.
+[rules.level_cap]
+method = "patch"
+sites = [
+  { at = 0x08021FB6, expect = "64 28" },  # Cmd_getexp
+  { at = 0x08041834, expect = "64 28" },  # PokemonUseItemEffects (Rare Candy)
+  { at = 0x0804274E, expect = "64 28" },  # PokemonItemUseNoEffect
+]
+
+# BATTLE_TYPE_TRAINER added to the "items can't be used" mask in HandleTurnActionSelectionState.
+[rules.no_items_trainer]
+method = "patch"
+sites = [
+  # FlagGet(0x280), Gaia's own "no items" flag -> gBattleTypeFlags & BATTLE_TYPE_TRAINER, as FireRed tests its mask
+  { at = 0x080143D4, expect = "0E 48 5A F0 7B F9 25 D0 C0 46 C0 46", write = "0E 48 00 68 08 21 08 40 24 D0 C0 46" },
+  { at = 0x08014410, expect = "80 02 00 00", write = "4C 2B 02 02" },  # its literal: 0x280 -> gBattleTypeFlags
+]
+
+# Only Poké Balls keep a battle use in wild battles.
+[rules.no_items_wild]
+method = "zero_table_field"
+
+[rules.set_mode]
+method = "option_bit"
+option = "battle_style"
+value = "set"
+
+# "Give a nickname?" is answered Yes: B and Down are dropped while the battle script waits on
+# trygivecaughtmonnick and its Yes/No box is up.
+[rules.must_nickname]
+method = "key_filter"
+battle_script_pointer = 0x02023D74   # gBattlescriptCurrInstr
+command_table = 0x0825011C           # gBattleScriptingCommandsTable
+command = 0x0802DD39                 # Cmd_trygivecaughtmonnick
+battle_communication = 0x02023E82
+# On the overworld (a Gift's "Do you want to give a nickname…?"): the shared MSGBOX_YESNO script
+# waits here, just after its yesnobox, while its box is up. "give a nickname" leaves out the
+# Name Rater's "rate the nicknames".
+field_yes_no = [0x081A4E65]
+question = "give a nickname"
+
+# Gaia's region-map sections (from 0x58) and their names, read from its sMapNames.
+[areas]
+0x58 = "Celanto Town"
+0x59 = "Archan Town"
+0x5A = "Seros Village"
+0x5B = "Aerous City"
+0x5C = "Nestpine Town"
+0x5D = "Windmist City"
+0x5E = "Sabulo Island"
+0x5F = "Valoon Town"
+0x60 = "Telmurk City"
+0x61 = "Precimos Island"
+0x62 = "Edashore Town"
+0x63 = "Atsail City"
+0x64 = "Loamas Town"
+0x65 = "Celanto Path"
+0x66 = "Reliquia Ruins"
+0x67 = "Aerous Road"
+0x68 = "Windmist Summit"
+0x69 = "Ignis Roost"
+0x6A = "Sabulo Cross"
+0x6B = "Celanto Grove"
+0x6C = "Seros Path"
+0x6D = "Sharpgust Span"
+0x6E = "Southsea Stretch"
+0x6F = "Valoon Way"
+0x70 = "Telmurk Swamp"
+0x71 = "Nemesis River"
+0x72 = "Archan Hills"
+0x73 = "Telmurk Outskirts"
+0x74 = "Precimos Strait"
+0x75 = "Precimos Depths"
+0x76 = "Edashore Reach"
+0x77 = "Nestpine Climb"
+0x78 = "Loamas Fields"
+0x79 = "Katosurf Trench"
+0x7A = "Gyarados Bridge"
+0x7B = "Ikos Canyon"
+0x7C = "Ignis Valley"
+0x7D = "Emerald Peak"
+0x7E = "Archan Tunnel"
+0x7F = "Wisp Forest"
+0x80 = "Ovarr Dungeon"
+0x81 = "Frostbite Cave"
+0x82 = "Underground Path"
+0x83 = "Apex Temple"
+0x84 = "Sabulo Cave"
+0x85 = "Rimewood Forest"
+0x86 = "Telmurk Warehouses"
+0x87 = "Nemesis Cave"
+0x88 = "Victory Road"
+0x89 = "Ikos Town"
+0x8A = "Cosmic Caverns"
+0x8B = "Ferre Ruins"
+0x8C = "Sabulo Tower"
+0x8D = "Valoon Reserve"
+0x8E = "Underwater"
+0x8F = "Katosurf Town"
+0x90 = "Battle Marsh"
+0x91 = "Ovarr Island"
+0x92 = "Pokémon League"
+0x93 = "Five Island"
+0x94 = "Six Island"
+0x95 = "Seven Island"
+0x96 = "Edamist Heights"
+0x97 = "Atsail Bay"
+0x98 = "Victory Falls"
+0x99 = "Ovarr Outback"
+0x9A = "Three Isle Port"
+0x9B = "Sevii Isle 6"
+0x9C = "Sevii Isle 7"
+0x9D = "Sevii Isle 8"
+0x9E = "Sevii Isle 9"
+0x9F = "Resort Gorgeous"
+0xA0 = "Water Labyrinth"
+0xA1 = "Five Isle Meadow"
+0xA2 = "Memorial Pillar"
+0xA3 = "Outcast Island"
+0xA4 = "Green Path"
+0xA5 = "Water Path"
+0xA6 = "Ruin Valley"
+0xA7 = "Trainer Tower"
+0xA8 = "Canyon Entrance"
+0xA9 = "Sevault Canyon"
+0xAA = "Tanoby Ruins"
+0xAB = "Sevii Isle 22"
+0xAC = "Sevii Isle 23"
+0xAD = "Sevii Isle 24"
+0xAE = "Ignis Catacombs"
+0xAF = "Mt. Ember"
+0xB0 = "Berry Forest"
+0xB1 = "Icefall Cave"
+0xB2 = "Rocket Warehouse"
+0xB3 = "Trainer Tower"
+0xB4 = "Ikos Ruins"
+0xB5 = "Lost Cave"
+0xB6 = "Chamber of Gaia"
+0xB7 = "Behind the Tablet"
+0xB8 = "Tanoby Chambers"
+0xB9 = "Three Isle Path"
+0xBA = "Tanoby Key"
+0xBB = "Birth Island"
+0xBC = "Monean Chamber"
+0xBD = "Liptoo Chamber"
+0xBE = "Weepth Chamber"
+0xBF = "Dilford Chamber"
+0xC0 = "Scufib Chamber"
+0xC1 = "Rixy Chamber"
+0xC2 = "Viapois Chamber"
+0xC3 = "Ember Spa"
+0xC4 = "Union Room"
+
+# Sections with the same shown name are one Area.
+[area_merges]
+0xB3 = 0xA7
+
+# Level cap stages, in order: each next gym leader, then each Elite Four member
+# and the Champion, by the base game's trainer ids, which the hack keeps.
+[[level_caps]]
+name = "Fernando"
+trainers = [414]
+badges = 1
+
+[[level_caps]]
+name = "Aria"
+trainers = [415]
+badges = 2
+
+[[level_caps]]
+name = "Nina"
+trainers = [416]
+badges = 3
+
+[[level_caps]]
+name = "Vernon"
+trainers = [417]
+badges = 4
+
+[[level_caps]]
+name = "Sid"
+trainers = [418]
+badges = 5
+
+[[level_caps]]
+name = "Will"
+trainers = [419]
+badges = 6
+
+[[level_caps]]
+name = "Marina"
+trainers = [420]
+badges = 7
+
+[[level_caps]]
+name = "Richter"
+trainers = [421]
+badges = 8
+
+[[level_caps]]
+name = "Nicola"
+trainers = [410]
+flag = 0x4B8   # FLAG_DEFEATED_LORELEI
+
+[[level_caps]]
+name = "Knight"
+trainers = [411]
+flag = 0x4B9   # FLAG_DEFEATED_BRUNO
+
+[[level_caps]]
+name = "Kara"
+trainers = [412]
+flag = 0x4BA   # FLAG_DEFEATED_AGATHA
+
+[[level_caps]]
+name = "Leif"
+trainers = [413]
+flag = 0x4BB   # FLAG_DEFEATED_LANCE
+
+[[level_caps]]
+name = "Champion"
+trainers = [438, 439, 440]
+flag = 0x4BC   # FLAG_DEFEATED_CHAMP
+
+# The Gift and Static catalogue, from `cargo dev scan`: every
+# givemon, giveegg and setwildbattle the hack's scripts hold. One script's
+# copies of a Pokémon, or its choice of Pokémon, are one source.
+[[sources]]
+key = "lapras_gift"
+name = "Lapras, level 25"
+kind = "gift"
+at = [0x08161AE0]
+
+[[sources]]
+key = "mewtwo_static"
+name = "Mewtwo, level 70"
+kind = "static"
+at = [0x0816251D]
+
+[[sources]]
+key = "articuno_static"
+name = "Articuno, level 50"
+kind = "static"
+at = [0x081631BF]
+
+[[sources]]
+key = "zapdos_static"
+name = "Zapdos, level 50"
+kind = "static"
+at = [0x081637CB]
+
+[[sources]]
+key = "electrode_static"
+name = "Electrode, level 34"
+kind = "static"
+at = [0x0816383F, 0x0816389D]
+
+[[sources]]
+key = "moltres_static"
+name = "Moltres, level 50"
+kind = "static"
+at = [0x08163B46]
+
+[[sources]]
+key = "hypno_static"
+name = "Hypno, level 30"
+kind = "static"
+at = [0x08163CC1]
+
+[[sources]]
+key = "snorlax_static"
+name = "Snorlax, level 30"
+kind = "static"
+at = [0x08168048]
+
+[[sources]]
+key = "snorlax_static_2"
+name = "Snorlax, level 30"
+kind = "static"
+at = [0x08168155]
+
+[[sources]]
+key = "togepi_egg"
+name = "Togepi egg"
+kind = "egg"
+at = [0x081688C9]
+
+[[sources]]
+key = "starter"
+name = "Starter"
+kind = "starter"
+at = [0x08169C8B]
+
+[[sources]]
+key = "scripted_gift"
+name = "Pokémon a script chooses, level 25"
+kind = "gift"
+at = [0x0816CCD4, 0x0816CCE9, 0x0816CCFE, 0x0816CD13, 0x0816CD28, 0x0816CD3D]
+
+[[sources]]
+key = "omanyte_kabuto_aerodactyl_gift"
+name = "Omanyte or Kabuto or Aerodactyl, level 5"
+kind = "gift"
+at = [0x0816E769, 0x0816E7AE, 0x0816E7F3]
+
+[[sources]]
+key = "scripted_gift_2"
+name = "Pokémon a script chooses, level 25"
+kind = "gift"
+at = [0x0816EC83]
+
+[[sources]]
+key = "magikarp_gift"
+name = "Magikarp, level 5"
+kind = "gift"
+at = [0x0816F7C5]
+
+[[sources]]
+key = "cubchoo_egg"
+name = "Cubchoo egg"
+kind = "egg"
+at = [0x084217D1]
+
+[[sources]]
+key = "magmortar_egg"
+name = "Magmortar egg"
+kind = "egg"
+at = [0x08704061]
+
+[[sources]]
+key = "jigglypuff_gift"
+name = "Jigglypuff, level 5"
+kind = "gift"
+at = [0x0880DD4A]
+
+[[sources]]
+key = "deoxys_sigilyph_gift"
+name = "Deoxys or Sigilyph, level 57"
+kind = "gift"
+at = [0x0880F3E2, 0x0880F3F9, 0x0880F410]
+
+[[sources]]
+key = "weedle_gift"
+name = "Weedle, level 5"
+kind = "gift"
+at = [0x0882A409]
+
+[[sources]]
+key = "weedle_gift_2"
+name = "Weedle, level 5"
+kind = "gift"
+at = [0x0882FCDD]
+
+[[sources]]
+key = "maractus_static"
+name = "Maractus, level 18"
+kind = "static"
+at = [0x08833344]
+
+[[sources]]
+key = "chansey_static"
+name = "Chansey, level 25"
+kind = "static"
+at = [0x0883ABF1]
+
+[[sources]]
+key = "chansey_static_2"
+name = "Chansey, level 20"
+kind = "static"
+at = [0x0883ACA7]
+
+[[sources]]
+key = "diancie_gift"
+name = "Diancie, level 100"
+kind = "gift"
+at = [0x0885B271]
+
+[[sources]]
+key = "marowak_static"
+name = "Marowak, level 30"
+kind = "static"
+at = [0x0885F8CF]
+
+[[sources]]
+key = "genesect_gift"
+name = "Genesect, level 100"
+kind = "gift"
+at = [0x08876354]
+
+[[sources]]
+key = "maractus_static_2"
+name = "Maractus, level 15"
+kind = "static"
+at = [0x0887DACD]
+
+[[sources]]
+key = "marowak_static_2"
+name = "Marowak, level 18"
+kind = "static"
+at = [0x08889021, 0x088890E3]
+
+[[sources]]
+key = "marowak_static_3"
+name = "Marowak, level 30"
+kind = "static"
+at = [0x0888929B]
+
+[[sources]]
+key = "deoxys_gift"
+name = "Deoxys, level 100"
+kind = "gift"
+at = [0x0888AEAE]
+
+[[sources]]
+key = "genesect_gift_2"
+name = "Genesect, level 100"
+kind = "gift"
+at = [0x0888BE17]
+
+[[sources]]
+key = "marowak_static_4"
+name = "Marowak, level 30"
+kind = "static"
+at = [0x0888E055]
+
+[[sources]]
+key = "clefairy_static"
+name = "Clefairy, level 5"
+kind = "static"
+at = [0x08891C00]
+
+[[sources]]
+key = "abomasnow_static"
+name = "Abomasnow, level 40"
+kind = "static"
+at = [0x08891EEF]
+
+[[sources]]
+key = "abomasnow_static_2"
+name = "Abomasnow, level 40"
+kind = "static"
+at = [0x08892011]
+
+[[sources]]
+key = "growlithe_static"
+name = "Growlithe, level 25"
+kind = "static"
+at = [0x08893BC8]
+
+[[sources]]
+key = "skuntank_static"
+name = "Skuntank, level 35"
+kind = "static"
+at = [0x08893D10]
+
+[[sources]]
+key = "charmeleon_ivysaur_wartortle_gift"
+name = "Charmeleon or Ivysaur or Wartortle, level 25"
+kind = "gift"
+at = [0x088B9D38, 0x088B9D73, 0x088B9DAE]
+
+[[sources]]
+key = "kecleon_static"
+name = "Kecleon, level 35"
+kind = "static"
+at = [0x088C09E6]
+
+[[sources]]
+key = "electrode_static_2"
+name = "Electrode, level 30"
+kind = "static"
+at = [0x088C5740]
+
+[[sources]]
+key = "electrode_static_3"
+name = "Electrode, level 30"
+kind = "static"
+at = [0x088DD31A, 0x088DD385]
+
+[[sources]]
+key = "exeggutor_static"
+name = "Exeggutor, level 25"
+kind = "static"
+at = [0x088E207B]
+
+[[sources]]
+key = "venonat_static"
+name = "Venonat, level 6"
+kind = "static"
+at = [0x089168E0]
+
+[[sources]]
+key = "regice_gift"
+name = "Regice, level 55"
+kind = "gift"
+at = [0x089402AA]
+
+[[sources]]
+key = "regigigas_static"
+name = "Regigigas, level 50"
+kind = "static"
+at = [0x089402DC]
+
+[[sources]]
+key = "regirock_gift"
+name = "Regirock, level 55"
+kind = "gift"
+at = [0x08948EB0]
+
+[[sources]]
+key = "regigigas_static_2"
+name = "Regigigas, level 50"
+kind = "static"
+at = [0x08948EE2]
+
+[[sources]]
+key = "registeel_gift"
+name = "Registeel, level 55"
+kind = "gift"
+at = [0x089495D4]
+
+[[sources]]
+key = "regigigas_static_3"
+name = "Regigigas, level 50"
+kind = "static"
+at = [0x08949606]
+
+[[sources]]
+key = "abomasnow_static_3"
+name = "Abomasnow, level 40"
+kind = "static"
+at = [0x08A7D247]
+
+[[sources]]
+key = "kangaskhan_static"
+name = "Kangaskhan, level 35"
+kind = "static"
+at = [0x08AC535A]
+
+[[sources]]
+key = "landorus_egg"
+name = "Landorus egg"
+kind = "egg"
+at = [0x098532D4]
+
+[[sources]]
+key = "regirock_gift_2"
+name = "Regirock, level 55"
+kind = "gift"
+at = [0x0993B3D1]
+
+[[sources]]
+key = "regigigas_static_4"
+name = "Regigigas, level 50"
+kind = "static"
+at = [0x0993B403]
+
+# Sync Gates: the base game's gym leader, Elite Four and Champion battles,
+# each checked in this ROM; the hack keeps the trainer ids and renames them.
+[sync_gates]
+hold = 0x09F00000
+
+[[sync_gates.gates]]
+name = "Fernando"
+sites = [{ at = 0x0816A5A0, expect = "5C 01 9E 01 00" }]
+
+[[sync_gates.gates]]
+name = "Aria"
+sites = [{ at = 0x0816AAAE, expect = "5C 01 9F 01 00" }]
+
+[[sync_gates.gates]]
+name = "Nina"
+sites = [{ at = 0x0816B957, expect = "5C 01 A0 01 00" }]
+
+[[sync_gates.gates]]
+name = "Vernon"
+sites = [{ at = 0x0816D06E, expect = "5C 01 A1 01 00" }]
+
+[[sync_gates.gates]]
+name = "Sid"
+sites = [{ at = 0x0816D55B, expect = "5C 01 A2 01 00" }]
+
+[[sync_gates.gates]]
+name = "Will"
+sites = [{ at = 0x0816D9E1, expect = "5C 01 A3 01 00" }]
+
+[[sync_gates.gates]]
+name = "Marina"
+sites = [{ at = 0x0816EDE5, expect = "5C 01 A4 01 00" }]
+
+[[sync_gates.gates]]
+name = "Richter"
+sites = [{ at = 0x08160C7F, expect = "5C 00 A5 01 00" }]
+
+[[sync_gates.gates]]
+name = "Nicola"
+sites = [{ at = 0x08162653, expect = "5C 03 9A 01 00" }]
+
+[[sync_gates.gates]]
+name = "Knight"
+sites = [{ at = 0x08162763, expect = "5C 03 9B 01 00" }]
+
+[[sync_gates.gates]]
+name = "Kara"
+sites = [{ at = 0x081628FB, expect = "5C 03 9C 01 00" }]
+
+[[sync_gates.gates]]
+name = "Leif"
+sites = [{ at = 0x08162A8B, expect = "5C 03 9D 01 00" }]
+
+[[sync_gates.gates]]
+name = "Herschel"
+sites = [
+    { at = 0x08162CC5, expect = "5C 03 B6 01 00" },
+    { at = 0x08162CD0, expect = "5C 03 B7 01 00" },
+    { at = 0x08162CDB, expect = "5C 03 B8 01 00" },
+]

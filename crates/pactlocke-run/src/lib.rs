@@ -33,7 +33,7 @@ pub use boot::{BootPlan, Booted, boot_core};
 pub use cheats::{Cheat, CheatWatch, FAST_BURST_FRAMES, Flag};
 pub use clock::{RunClock, SystemRunClock};
 pub use ending::{LastDeath, Survivor, survivors};
-pub use engine::{RunEngine, SUSPEND_SLOT_EVERY_MS};
+pub use engine::{PARTY_LOOK_FRAMES, RunEngine, SUSPEND_SLOT_EVERY_MS};
 pub use event::{AreaRef, CheckpointReason, DeathCause, Recorded, ResumedFrom, RunEvent, SourceRef};
 pub use file::{CopiedFrom, RunFile, RunId, RunLibrary, RunSummary};
 pub use links::{Judge, Link, LinkKeeper, LinkStanding, Member, WaitingOnLink, links};
@@ -42,7 +42,7 @@ pub use presence::{DROPOUT_OFFER_MS, HOST_SILENT_MS, OFFLINE_MS, Presence};
 pub use running::{RetryTo, RunCommand, RunningGame};
 pub use setup::{
     COUNTDOWN_MS, Locked, Mismatch, Preset, RosterEntry, RunSetup, SetupCheck, SetupError, SetupMessage, SetupPlayer,
-    SetupView, settle, unavailable,
+    SetupView, native_options, native_options_in_use, settle, unavailable,
 };
 pub use shadow::{
     BUFFER_FRAMES, CATCH_UP_SPEED, PREDICT_FRAMES, Seen, SeenAvatar, SeenPokemon, ShadowCheckpoint, ShadowGame,
@@ -59,7 +59,8 @@ pub use stream::{
     StreamMessage, StreamOut, StreamStore, StreamWant,
 };
 pub use view::{
-    Doing, FeedEntry, FeedIcon, FeedKind, GameOverView, Grave, LevelCapView, NicknameWanted, RunView, WipeView,
+    Doing, FeedEntry, FeedIcon, FeedKind, GameOverView, Grave, LevelCapView, NativeOptionView, NicknameWanted, RunView,
+    WipeView,
 };
 
 use pactlocke_game::LevelCap;
@@ -153,6 +154,25 @@ impl Default for Ruleset {
 }
 
 impl Ruleset {
+    /// Whether the Ruleset has `rule` on.
+    pub fn has(&self, rule: pactlocke_game::Rule) -> bool {
+        use pactlocke_game::Rule;
+        match rule {
+            Rule::FirstEncounter => self.first_encounter,
+            Rule::DupesClause => self.dupes_clause,
+            Rule::Gifts => self.gifts,
+            Rule::Statics => self.statics,
+            Rule::FaintIsDead => self.faint_is_dead,
+            Rule::Links => self.links,
+            Rule::LevelCap => self.level_caps.is_some(),
+            Rule::NoItems => self.no_items,
+            Rule::MustNickname => self.must_nickname,
+            Rule::SetMode => self.set_mode,
+            Rule::TypeClause => self.type_clause,
+            Rule::SyncGates => !self.sync_gates.is_empty(),
+        }
+    }
+
     /// Whether the dupes clause can be chosen: it needs first Encounter.
     pub fn dupes_clause_available(&self) -> bool {
         self.first_encounter

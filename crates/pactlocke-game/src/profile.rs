@@ -216,6 +216,10 @@ pub struct Symbols {
     pub type_names: u32,
     /// Where the game expands the message it is showing (`gStringVar4`).
     pub message_buffer: u32,
+    /// The Bag's Poké Balls pocket, for a game that keeps the Bag in RAM
+    /// outside save block 1 (Gaia); otherwise `layout.balls_pocket` in save block 1.
+    #[serde(default)]
+    pub balls_pocket: Option<u32>,
 }
 
 /// How Pokémon, battlers, items and the PC are laid out.

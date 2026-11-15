@@ -519,6 +519,16 @@ fn check(profile: &GameProfile) -> Result<(), String> {
         ("set_mode", &rules.set_mode, true),
         ("must_nickname", &rules.must_nickname, true),
     ];
+    // A rule the game does is the game's whole rule: Pactlocke can't do half of it.
+    let native = |method: &Option<Method>| matches!(method, Some(Method::Native { .. }));
+    if native(&rules.no_items_trainer) != native(&rules.no_items_wild) {
+        return Err("rules no_items_trainer and no_items_wild: both native or neither".to_owned());
+    }
+    // A rule the game does is the game's whole rule: Pactlocke can't do half of it.
+    let native = |method: &Option<Method>| matches!(method, Some(Method::Native { .. }));
+    if native(&rules.no_items_trainer) != native(&rules.no_items_wild) {
+        return Err("rules no_items_trainer and no_items_wild: both native or neither".to_owned());
+    }
     for (rule, method, switched) in named {
         match method {
             Some(Method::Patch { sites }) => {

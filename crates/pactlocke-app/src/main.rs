@@ -40,8 +40,8 @@ use std::sync::{Arc, Mutex};
 use eframe::egui;
 use pactlocke_emu::{CoreAdapter, Emulator, EmulatorOptions, FrameSlot, Keys, Speed, SystemClock};
 use pactlocke_game::{
-    Capability, DEV_PROFILES_VAR, GameProfile, LevelCap, MAX_LEVEL, ProfileGame, ProfileStore, RomIdentity, Rule,
-    sha1_hex,
+    Capability, CapabilityReport, DEV_PROFILES_VAR, GameProfile, LevelCap, MAX_LEVEL, ProfileGame, ProfileStore,
+    RomIdentity, Rule, sha1_hex,
 };
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
@@ -220,7 +220,8 @@ fn unavailable_reason(capability: &Capability) -> Option<String> {
     match capability {
         Capability::Enforceable => None,
         Capability::GreyedOut { reason } => Some(format!("can't be enforced on this ROM: {reason}")),
-        Capability::NativeOption { .. } => Some("this game's own option, which solo Runs don't use yet".to_owned()),
+        // Pactlocke sets the game's own option for it.
+        Capability::NativeOption(_) => None,
     }
 }
 
@@ -236,6 +237,11 @@ fn rule_checkbox(ui: &mut egui::Ui, on: &mut bool, rule: Rule, shown: &Ruleset, 
 /// The level caps checkbox and, while it is on, each stage's cap to edit.
 fn level_caps_editor(ui: &mut egui::Ui, draft: &mut NewRunDraft) {
     let shown = draft.ruleset.clone();
+    // The game's own caps: on or off, but their levels are the game's.
+    if matches!(draft.capabilities.get(Rule::LevelCap), Capability::NativeOption(_)) {
+        rule_checkbox(ui, &mut draft.level_caps_on, Rule::LevelCap, &shown, None);
+        return;
+    }
     if draft.level_caps.is_empty() {
         rule_checkbox(
             ui,
@@ -281,6 +287,8 @@ struct NewRunDraft {
     ruleset: Ruleset,
     /// Why each rule this ROM can't enforce can't be chosen.
     unavailable: BTreeMap<Rule, String>,
+    /// How this ROM can apply each rule.
+    capabilities: CapabilityReport,
     /// Whether the Run has level caps, and each stage's cap as the Host left it.
     level_caps_on: bool,
     level_caps: Vec<LevelCap>,
@@ -617,6 +625,7 @@ impl PactlockeApp {
             Ok(NewRunDraft {
                 ruleset,
                 unavailable,
+                capabilities: capabilities.clone(),
                 // On by default; where the game can't be stopped at the cap it is a soft cap.
                 level_caps_on: !level_caps.is_empty(),
                 level_caps,
@@ -1088,6 +1097,9 @@ impl PactlockeApp {
                 draft.unavailable.get(&Rule::TypeClause).cloned(),
             );
             level_caps_editor(ui, draft);
+            let mut chosen = draft.ruleset.clone();
+            chosen.level_caps = draft.level_caps_on.then(Vec::new);
+            rules_text::native_options(ui, &pactlocke_run::native_options(&chosen, &draft.capabilities));
             ui.horizontal(|ui| {
                 ui.label("Retries");
                 ui.add(egui::DragValue::new(&mut draft.ruleset.retries).range(0..=pactlocke_run::MAX_RETRIES));

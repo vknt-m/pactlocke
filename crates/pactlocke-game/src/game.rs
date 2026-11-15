@@ -282,6 +282,8 @@ pub trait Game {
     fn force_set_mode(&mut self) -> Actions;
     /// Sets one of the game's options, such as a native option written back.
     fn set_option(&mut self, name: &str, value: &str) -> Actions;
+    /// The rules this game does through its own options.
+    fn native_options(&mut self) -> Vec<crate::NativeOption>;
 
     // Partner Avatars.
 

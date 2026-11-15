@@ -389,6 +389,7 @@ impl HostCoop {
         if caps != ruleset.level_caps.is_some() {
             ruleset.level_caps = caps.then(|| self.level_caps.clone());
         }
+        crate::rules_text::native_options(ui, &view.native_options);
         let gates = self.setup_mut().sync_gates().to_vec();
         if !gates.is_empty() {
             let unavailable = self.setup_mut().unavailable(Rule::SyncGates);

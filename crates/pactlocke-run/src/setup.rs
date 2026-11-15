@@ -3,10 +3,10 @@
 //! check passes, the Ruleset and roster lock and a countdown starts every game
 //! from a new game together. Pure state: the network carries its messages.
 
-use pactlocke_game::{Capability, CapabilityReport, LevelCap, Rule};
+use pactlocke_game::{Capability, CapabilityReport, LevelCap, NativeOption, Rule};
 use serde::{Deserialize, Serialize};
 
-use crate::Ruleset;
+use crate::{NativeOptionView, Ruleset};
 
 /// How long the 3-2-1 countdown after the lock runs, before every game starts.
 pub const COUNTDOWN_MS: i64 = 3000;
@@ -92,8 +92,39 @@ pub fn unavailable(rule: Rule, ruleset: &Ruleset, capabilities: &CapabilityRepor
         // A level cap the game can't be stopped at is still a soft cap.
         Capability::GreyedOut { .. } if rule == Rule::LevelCap => None,
         Capability::GreyedOut { reason } => Some(format!("can't be enforced on this ROM: {reason}")),
-        Capability::NativeOption { .. } => Some("this game's own option, which Runs don't use yet".to_owned()),
+        // Pactlocke sets the game's own option for it.
+        Capability::NativeOption { .. } => None,
     }
+}
+
+/// The native options of the rules `ruleset` has on, each once: what
+/// Pactlocke sets in every Player's game, and what setup shows them.
+pub fn native_options_in_use<'a>(
+    ruleset: &Ruleset,
+    natives: impl IntoIterator<Item = &'a NativeOption>,
+) -> Vec<NativeOption> {
+    let mut in_use: Vec<NativeOption> = Vec::new();
+    for native in natives {
+        let known = in_use
+            .iter()
+            .any(|n| n.rule == native.rule && n.option == native.option);
+        if ruleset.has(native.rule) && !known {
+            in_use.push(native.clone());
+        }
+    }
+    in_use
+}
+
+/// What setup shows every Player of the game's own options in use on this ROM.
+pub fn native_options(ruleset: &Ruleset, capabilities: &CapabilityReport) -> Vec<NativeOptionView> {
+    let natives = capabilities.iter().filter_map(|(_, capability)| match capability {
+        Capability::NativeOption(native) => Some(native),
+        _ => None,
+    });
+    native_options_in_use(ruleset, natives)
+        .iter()
+        .map(|native| NativeOptionView::of(native, None))
+        .collect()
 }
 
 /// Turns off every rule that can't be chosen, the dependents of a rule
@@ -194,6 +225,9 @@ pub struct SetupView {
     pub players: Vec<SetupPlayer>,
     pub mismatches: Vec<Mismatch>,
     pub locked: Option<Locked>,
+    /// The game's own options the Ruleset's rules are done with.
+    #[serde(default)]
+    pub native_options: Vec<NativeOptionView>,
 }
 
 impl SetupView {
@@ -501,6 +535,7 @@ impl RunSetup {
             players: self.players.clone(),
             mismatches: self.mismatches(),
             locked: self.locked.clone(),
+            native_options: native_options(&self.ruleset, &self.capabilities),
         }
     }
 

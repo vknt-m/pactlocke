@@ -582,6 +582,18 @@ fn ruleset_tab(ui: &mut egui::Ui, run: &RunPanel<'_>, lobbies: &Lobbies) -> Opti
         )
         .on_hover_text(rules_text::detail(Rule::SyncGates, r));
     }
+    for native in &run.view.native_options {
+        let read = native.read.as_deref().unwrap_or("not a known setting");
+        fact(
+            ui,
+            &native.rule,
+            format!("the game's {} is {read} (the rule needs {})", native.name, native.value),
+        )
+        .on_hover_text(format!(
+            "This game does {} itself, through its {} option ({}). Pactlocke set it for the Run.",
+            native.rule, native.name, native.menu
+        ));
+    }
     if let Some(caps) = r.level_caps.as_ref().filter(|c| !c.is_empty()) {
         let caps: Vec<String> = caps.iter().map(|c| format!("{} {}", c.name, c.level)).collect();
         fact(ui, "Level caps", caps.join(" · "));

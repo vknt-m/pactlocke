@@ -91,6 +91,10 @@ pub(crate) struct Rules {
     item_ban_failed_said: bool,
     set_mode_forced_before: bool,
     set_mode_failed_said: bool,
+    /// The native options (by in-game name) the log has said were set, and
+    /// those it has said couldn't be.
+    natives_said: BTreeSet<String>,
+    native_failures_said: BTreeSet<String>,
     /// Must nickname: Pokémon waiting for the Player to name them, with their species names.
     nickname_wanted: BTreeMap<u32, String>,
     /// Sync Gates every Player is Ready at, and those this Player is Ready at.
@@ -142,6 +146,8 @@ impl Rules {
             item_ban_failed_said: false,
             set_mode_forced_before: false,
             set_mode_failed_said: false,
+            natives_said: BTreeSet::new(),
+            native_failures_said: BTreeSet::new(),
             nickname_wanted: BTreeMap::new(),
             open_gates: BTreeSet::new(),
             ready_gates: BTreeSet::new(),
@@ -326,6 +332,16 @@ impl Rules {
         self.set_mode_failed_said
     }
 
+    /// Whether the log has said this native option was set for its rule.
+    pub fn native_said(&self, name: &str) -> bool {
+        self.natives_said.contains(name)
+    }
+
+    /// Whether the log has said this native option couldn't be set.
+    pub fn native_failure_said(&self, name: &str) -> bool {
+        self.native_failures_said.contains(name)
+    }
+
     /// The level cap now, once one is set.
     pub fn level_cap(&self) -> Option<u8> {
         self.level_cap
@@ -409,6 +425,12 @@ impl Rules {
             RunEvent::ItemBanFailed { .. } => self.item_ban_failed_said = true,
             RunEvent::SetModeForced { .. } => self.set_mode_forced_before = true,
             RunEvent::SetModeFailed { .. } => self.set_mode_failed_said = true,
+            RunEvent::NativeOptionSet { name, .. } => {
+                self.natives_said.insert(name.clone());
+            }
+            RunEvent::NativeOptionFailed { name, .. } => {
+                self.native_failures_said.insert(name.clone());
+            }
             RunEvent::Released { pid, .. } => {
                 self.to_release.remove(pid);
                 self.nickname_wanted.remove(pid);

@@ -3,6 +3,7 @@ mod game_over;
 mod gates;
 mod gifts;
 mod links_party;
+mod native_options;
 mod nicknames_and_types;
 mod no_items_and_set_mode;
 
@@ -27,7 +28,7 @@ pub const SUSPEND_SLOT_EVERY_MS: i64 = 2 * 60 * 1000;
 const FLUSH_EVERY_MS: i64 = 1000;
 
 /// How often the side panel's party is brought up to date, in frames.
-const PARTY_LOOK_FRAMES: u64 = 30;
+pub const PARTY_LOOK_FRAMES: u64 = 30;
 
 /// How many Run Checkpoints stay in RAM, for instant Retries.
 const RUN_CHECKPOINTS_IN_RAM: usize = 2;
@@ -73,6 +74,10 @@ pub struct RunEngine {
     cap_patched_for: Option<u8>,
     /// Whether no items is patched in since the game was booted.
     items_patched: bool,
+    /// The rules this game does through its own options, once asked.
+    natives: Option<Vec<pactlocke_game::NativeOption>>,
+    /// Whether the native options were set since the game was booted.
+    natives_set_this_boot: bool,
     /// Pokémon caught or given whose nickname hasn't been looked at yet.
     names_to_check: BTreeSet<u32>,
     /// Names the Player gave in the side panel, written at the next quiet moment.
@@ -594,6 +599,8 @@ impl RunEngine {
             release_failed: BTreeSet::new(),
             cap_patched_for: None,
             items_patched: false,
+            natives: None,
+            natives_set_this_boot: false,
             names_to_check: BTreeSet::new(),
             names_given: Vec::new(),
             party_before: None,
@@ -681,6 +688,7 @@ impl RunEngine {
     pub fn frame(&mut self, keys: Keys, game: &mut impl LiveGame) {
         self.pending.keys.push(keys);
         self.frame += 1;
+        self.learn_natives(game);
 
         // Only on the overworld: before a game is loaded the Bag reads as garbage.
         if self.rules.waiting_for_poke_balls() && game.at_safe_overworld_point() && game.holds_poke_balls() {
@@ -694,6 +702,7 @@ impl RunEngine {
             self.keep_level_cap(game);
             self.keep_items_banned(game);
             self.keep_set_mode(game);
+            self.keep_native_options(game);
         }
 
         if game.at_safe_overworld_point() {
@@ -749,6 +758,7 @@ impl RunEngine {
         if self.frame.is_multiple_of(PARTY_LOOK_FRAMES) {
             self.look_at_the_party(game);
             self.look_at_the_player(game, battle.is_some());
+            self.look_at_the_native_options(game);
         }
 
         if battle.is_none() && self.quiet(game) {
@@ -1001,6 +1011,11 @@ impl RunEngine {
 
     /// Refuses ball throws for this battle and records `event`, or records why it couldn't.
     fn block_catches_then(&mut self, game: &mut impl LiveGame, area: Option<AreaRef>, event: RunEvent) {
+        // The game's own option refuses the throws.
+        if self.is_native(pactlocke_game::Rule::FirstEncounter) {
+            self.record(event);
+            return;
+        }
         match game.block_catches(true) {
             Ok(changes) => {
                 self.apply(changes, game);

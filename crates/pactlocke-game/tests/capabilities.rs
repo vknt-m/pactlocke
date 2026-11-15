@@ -85,12 +85,58 @@ fn a_rule_the_game_has_its_own_option_for_is_a_native_option() {
     });
     assert_eq!(
         report.get(Rule::SetMode),
-        &Capability::NativeOption {
+        &Capability::NativeOption(pactlocke_game::NativeOption {
+            rule: Rule::SetMode,
+            option: "battle_style".into(),
             name: "Battle style".into(),
             menu: "OPTION > BATTLE STYLE".into(),
-            value: "set".into()
-        }
+            value: "set".into(),
+            watched: false,
+        })
     );
+}
+
+#[test]
+fn a_profile_lists_each_rule_it_does_through_the_game_s_own_option() {
+    let rom = patchable_rom(b"BPRE");
+    let toml = profile_toml("test-game", &sha1_hex(&rom))
+        .replace(
+            "[rules.set_mode]
+method = \"option_bit\"",
+            "[rules.set_mode]
+method = \"native\"",
+        )
+        .replace(
+            "values = { shift = 0x00, set = 0x02 }",
+            "values = { shift = 0x00, set = 0x02 }
+watched = true",
+        );
+    let store = ProfileStore::from_sources([("test.toml", toml)]).unwrap();
+    let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
+        panic!("the test profile should match");
+    };
+    assert_eq!(
+        profile.native_options(),
+        vec![pactlocke_game::NativeOption {
+            rule: Rule::SetMode,
+            option: "battle_style".into(),
+            name: "Battle style".into(),
+            menu: "OPTION > BATTLE STYLE".into(),
+            value: "set".into(),
+            watched: true,
+        }]
+    );
+}
+
+#[test]
+fn a_profile_whose_game_does_only_half_of_no_items_is_refused() {
+    let rom = patchable_rom(b"BPRE");
+    let toml = profile_toml("test-game", &sha1_hex(&rom)).replace(
+        "[rules.no_items_trainer]\nmethod = \"patch\"\nsites = [{ at = 0x08000300, expect = \"02 09 00 00\", write = \"0A 09 00 00\" }]",
+        "[rules.no_items_trainer]\nmethod = \"native\"\noption = \"battle_style\"\nvalue = \"set\"",
+    );
+    let refused = ProfileStore::from_sources([("test.toml", toml)]).unwrap_err();
+    assert!(refused.to_string().contains("both native or neither"), "{refused}");
 }
 
 #[test]

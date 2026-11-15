@@ -30,6 +30,37 @@ pub struct RunView {
     pub wipe: Option<WipeView>,
     /// The Run is lost.
     pub game_over: Option<GameOverView>,
+    /// The Ruleset's rules this game does through its own options, as of the last look.
+    pub native_options: Vec<NativeOptionView>,
+}
+
+/// A rule the game does through its own option, as setup and the side
+/// panel show it: the setting it needs, and what the game reads.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NativeOptionView {
+    /// The Pactlocke rule, as Players see it: "Set mode".
+    pub rule: String,
+    /// The option's in-game name: "BATTLE STYLE".
+    pub name: String,
+    /// Where it is in the game's menus: "OPTIONS ▸ BATTLE STYLE".
+    pub menu: String,
+    /// The setting the rule needs.
+    pub value: String,
+    /// What the game holds now, if it holds a setting the Game Profile
+    /// knows; `None` before the Run, in setup.
+    pub read: Option<String>,
+}
+
+impl NativeOptionView {
+    pub fn of(native: &pactlocke_game::NativeOption, read: Option<String>) -> Self {
+        Self {
+            rule: native.rule.name().to_owned(),
+            name: native.name.clone(),
+            menu: native.menu.clone(),
+            value: native.value.clone(),
+            read,
+        }
+    }
 }
 
 /// This Player's party is wiped: the game waits on a Retry or the game over.
@@ -540,6 +571,28 @@ impl FeedEntry {
                 "Set mode: the battle style was changed, so it is set back to Set".to_owned(),
             ),
             RunEvent::SetModeFailed { reason } => (FeedKind::Problem, format!("Couldn't force set mode: {reason}")),
+            RunEvent::NativeOptionSet {
+                rule,
+                name,
+                value,
+                again: false,
+            } => (
+                FeedKind::Run,
+                format!("{rule} is the game's own {name} option, set to {value}"),
+            ),
+            RunEvent::NativeOptionSet {
+                rule,
+                name,
+                value,
+                again: true,
+            } => (
+                FeedKind::Run,
+                format!("{rule}: the game's {name} was changed, so it is set back to {value}"),
+            ),
+            RunEvent::NativeOptionFailed { rule, name, reason } => (
+                FeedKind::Problem,
+                format!("{rule}: couldn't set the game's {name} option: {reason}"),
+            ),
             RunEvent::NicknameWanted { species_name, .. } => (
                 FeedKind::Run,
                 format!("Must nickname: {species_name} needs a nickname, so name it in the side panel"),

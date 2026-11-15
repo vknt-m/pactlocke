@@ -18,7 +18,10 @@ impl RunEngine {
     /// The keys the game gets for the frame about to run: with must nickname
     /// on, "Give a nickname?" can't be declined.
     pub fn keys_for_frame(&mut self, keys: Keys, game: &mut impl LiveGame) -> Keys {
-        if !self.rules.must_nickname() || !game.nickname_prompt_up() {
+        if !self.rules.must_nickname()
+            || self.is_native(pactlocke_game::Rule::MustNickname)
+            || !game.nickname_prompt_up()
+        {
             return keys;
         }
         if let Ok(changes) = game.keep_nickname_cursor_on_yes() {
