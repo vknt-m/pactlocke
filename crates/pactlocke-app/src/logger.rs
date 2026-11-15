@@ -34,10 +34,22 @@ pub fn init() {
     init_at(path(), false);
 }
 
+/// The same, but adding to the log already there: for the app started again
+/// by itself, so the reason it was is kept beside what follows.
+pub fn init_continuing() {
+    start(path(), false, false);
+}
+
 /// The same, for a headless app: the log is kept at `path`, and every line
 /// goes to stderr too.
 pub fn init_at(path: PathBuf, stderr: bool) {
-    let _ = std::fs::rename(&path, path.with_file_name("pactlocke.old.log"));
+    start(path, stderr, true);
+}
+
+fn start(path: PathBuf, stderr: bool, fresh: bool) {
+    if fresh {
+        let _ = std::fs::rename(&path, path.with_file_name("pactlocke.old.log"));
+    }
     let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) else {
         return;
     };

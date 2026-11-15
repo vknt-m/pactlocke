@@ -75,23 +75,63 @@ fn main() -> std::process::ExitCode {
             .collect();
         return headless::main(&args);
     }
-    match windowed() {
-        Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("Pactlocke couldn't start: {e}");
-            std::process::ExitCode::FAILURE
+    let opengl = std::env::args_os().any(|a| a == OPENGL_FLAG);
+    if opengl {
+        logger::init_continuing();
+    } else {
+        logger::init();
+    }
+    let Err(e) = windowed(opengl) else {
+        return std::process::ExitCode::SUCCESS;
+    };
+    log::error!("The window couldn't open ({}): {e}", renderer_name(opengl));
+    log::logger().flush();
+    // A graphics driver wgpu can't use: start again drawing with OpenGL. A
+    // new process, since a window's event loop can only be made once.
+    if !opengl {
+        let restarted = std::env::current_exe().and_then(|exe| {
+            std::process::Command::new(exe)
+                .args(std::env::args_os().skip(1))
+                .arg(OPENGL_FLAG)
+                .spawn()
+        });
+        match restarted {
+            Ok(_) => {
+                log::info!("Starting again with OpenGL");
+                return std::process::ExitCode::SUCCESS;
+            }
+            Err(r) => log::error!("Couldn't start again with OpenGL: {r}"),
         }
     }
+    log::logger().flush();
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("Pactlocke couldn't start")
+        .set_description(format!(
+            "Pactlocke couldn't open its window: {e}\n\nUpdating your graphics driver may fix this. \
+             The details are in {}.",
+            logger::path().display()
+        ))
+        .show();
+    std::process::ExitCode::FAILURE
 }
 
-fn windowed() -> eframe::Result {
-    logger::init();
+/// Asks for the window to be drawn with OpenGL rather than wgpu: given by the
+/// app itself when it starts again because wgpu couldn't draw.
+const OPENGL_FLAG: &str = "--opengl";
 
+fn renderer_name(opengl: bool) -> &'static str {
+    if opengl { "OpenGL" } else { "wgpu" }
+}
+
+fn windowed(opengl: bool) -> eframe::Result {
+    log::info!("Drawing with {}", renderer_name(opengl));
     let mut smoke = false;
     let (mut rom, mut shot, mut demo, mut demo_lobby, mut open) = (None, None, None, None, None);
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some(OPENGL_FLAG) => {}
             Some("--smoke") => smoke = true,
             Some("--shot") => shot = args.next().map(PathBuf::from),
             Some("--demo-run") => demo = args.next().map(PathBuf::from),
@@ -106,6 +146,11 @@ fn windowed() -> eframe::Result {
             .with_title("Pactlocke")
             .with_inner_size([1100.0, 600.0])
             .with_min_inner_size([480.0, 320.0]),
+        renderer: if opengl {
+            eframe::Renderer::Glow
+        } else {
+            eframe::Renderer::Wgpu
+        },
         ..Default::default()
     };
     eframe::run_native(
@@ -2206,7 +2251,7 @@ fn panel_contents(
 impl eframe::App for PactlockeApp {
     /// The window's close button or Exit: a Run with friends is suspended
     /// and its network left, so Resume goes on exactly where the Player stopped.
-    fn on_exit(&mut self) {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.close_run();
     }
 
