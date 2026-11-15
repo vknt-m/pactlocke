@@ -82,7 +82,7 @@ fn a_run_resumed_from_its_file_keeps_its_closed_areas_and_feed() {
     clock.advance_ms(3_600_000);
     let mut player = Player::resumes_from(Box::new(library.open_run(&id).unwrap()), clock);
     assert_eq!(player.feed(FeedKind::Catch), ["Caught PIDGEY on Route 1"]);
-    assert_eq!(player.engine.view().closed_areas, ["Route 1"]);
+    assert_eq!(player.engine.view().closed_areas(), ["Route 1"]);
 
     player.walks_into(route_1());
     player.meets_wild(RATTATA);
@@ -429,7 +429,7 @@ fn a_solo_copy_of_a_run_with_friends_goes_on_alone_from_there_and_the_run_with_f
     };
     assert_eq!(from.core, core_checkpoint(0x44));
     assert_eq!(player.engine.view().graveyard.len(), 1);
-    assert_eq!(player.engine.view().closed_areas, ["Route 1"]);
+    assert_eq!(player.engine.view().closed_areas(), ["Route 1"]);
     assert!(player.engine.kept_log().is_empty(), "alone");
 }
 

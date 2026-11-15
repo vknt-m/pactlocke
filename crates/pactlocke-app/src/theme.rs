@@ -171,6 +171,11 @@ impl Icons {
         }
     }
 
+    /// The Game Profile of the ROM these icons come from.
+    pub fn profile(&self) -> &GameProfile {
+        &self.profile
+    }
+
     /// A species' party icon, if the ROM has one.
     pub fn get(&mut self, ctx: &egui::Context, species: u16) -> Option<&egui::TextureHandle> {
         let (profile, rom) = (&self.profile, &self.rom);

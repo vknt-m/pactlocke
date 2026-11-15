@@ -43,7 +43,7 @@ fn alone_a_retry_goes_back_to_the_last_in_game_save_and_undoes_everything_since(
     table.saves(0);
     table.meets_wild(0, PIDGEY);
     table.leaves_battle(0);
-    assert_eq!(table.apps[0].running.engine().view().closed_areas, ["Route 1"]);
+    assert_eq!(table.apps[0].running.engine().view().closed_areas(), ["Route 1"]);
 
     retry_alone(&mut table);
     let feed = table.apps[0].view_feed();
@@ -54,7 +54,7 @@ fn alone_a_retry_goes_back_to_the_last_in_game_save_and_undoes_everything_since(
         "{feed:?}"
     );
     assert!(
-        table.apps[0].running.engine().view().closed_areas.is_empty(),
+        table.apps[0].running.engine().view().closed_areas().is_empty(),
         "Route 1's Encounter is undone"
     );
     assert_eq!(table.apps[0].running.engine().retries_left(), 1);
@@ -62,7 +62,7 @@ fn alone_a_retry_goes_back_to_the_last_in_game_save_and_undoes_everything_since(
     // Route 1's first wild battle is its Encounter again.
     table.meets_wild(0, RATTATA);
     assert!(!table.game(0).catches_blocked);
-    assert_eq!(table.apps[0].running.engine().view().closed_areas, ["Route 1"]);
+    assert_eq!(table.apps[0].running.engine().view().closed_areas(), ["Route 1"]);
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn when_everyone_votes_yes_every_game_goes_back_together_and_the_shadows_follow(
         "Red's Encounter after the checkpoint is void"
     );
     assert!(
-        table.apps[0].running.engine().view().closed_areas.is_empty(),
+        table.apps[0].running.engine().view().closed_areas().is_empty(),
         "and Route 1 is open again in Red's game"
     );
     for (i, app) in table.apps.iter().enumerate().take(2) {

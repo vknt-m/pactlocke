@@ -79,6 +79,9 @@ fn a_catch_is_pending_until_every_player_has_had_their_encounter_then_they_are_l
         let link = route_1_link(&table, i);
         assert!(!link.pending() && link.broken.is_none(), "{i}: {link:?}");
         assert!(matches!(link.member(&key(1)), Some(Member::Caught { pid: 0xB1, .. })));
+        // Each part carries its species, for the Links tab's icons.
+        assert!(matches!(link.member(&key(0)), Some(Member::Caught { species, .. }) if *species == PIDGEY));
+        assert!(matches!(link.member(&key(1)), Some(Member::Caught { species, .. }) if *species == RATTATA));
     }
 }
 

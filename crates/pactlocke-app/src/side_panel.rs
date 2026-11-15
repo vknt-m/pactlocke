@@ -1,8 +1,8 @@
 //! The side panel during a Run. With other Players, the Player strip, the
 //! next Sync Gate's ready check and any open vote stay fixed at the top, and
 //! everything else is a tab, with the tab bar at the bottom: Feed, Party,
-//! Links, Graveyard, Ruleset and Lobby. Alone, there is no strip, Links or
-//! Lobby. Before a Run with friends starts, the panel is the Lobby alone.
+//! Links, Areas, Graveyard, Ruleset and Lobby. Alone, there is no strip, Links
+//! or Lobby. Before a Run with friends starts, the panel is the Lobby alone.
 
 use eframe::egui;
 use pactlocke_game::Rule;
@@ -25,6 +25,7 @@ pub enum Tab {
     Feed,
     Party,
     Links,
+    Areas,
     Graveyard,
     Ruleset,
     Lobby,
@@ -67,10 +68,16 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
         (Some(spectate), Some(log)) if run.ruleset.links => spectate.links(log),
         _ => Vec::new(),
     };
+    let areas = icons.profile().all_areas();
+    let others = match lobbies.log() {
+        Some(log) if coop => pactlocke_run::area_encounters(log),
+        _ => Default::default(),
+    };
     let tabs: Vec<(Tab, String)> = [
         (Tab::Feed, "Feed".to_owned()),
         (Tab::Party, "Party".to_owned()),
         (Tab::Links, format!("Links · {}", links.len())),
+        (Tab::Areas, crate::areas_panel::label(&run.view.encounters, &areas)),
         (Tab::Graveyard, format!("Graveyard · {}", run.view.graveyard.len())),
         (Tab::Ruleset, "Ruleset".to_owned()),
         (Tab::Lobby, "Lobby".to_owned()),
@@ -156,12 +163,28 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
                     Tab::Party => party(ui, &run, &players, &links, icons),
                     Tab::Links => {
                         if let Some(spectate) = run.spectate {
-                            let roster: Vec<(PlayerKey, String)> =
-                                players.iter().map(|p| (p.key, p.name.clone())).collect();
-                            if let Some(skip) = crate::links_panel::tab(ui, &links, &roster, &spectate.me()) {
+                            let roster: Vec<(PlayerKey, String, usize)> =
+                                players.iter().map(|p| (p.key, p.name.clone(), p.index)).collect();
+                            if let Some(skip) = crate::links_panel::tab(ui, &links, &roster, &spectate.me(), icons) {
                                 asks.command = Some(skip);
                             }
                         }
+                    }
+                    Tab::Areas => {
+                        let columns: Vec<crate::areas_panel::Column<'_>> = players
+                            .iter()
+                            .map(|who| crate::areas_panel::Column {
+                                name: &who.name,
+                                index: who.index,
+                                you: who.you,
+                                encounters: if who.you {
+                                    &run.view.encounters
+                                } else {
+                                    others.get(&who.key).map_or(&[][..], Vec::as_slice)
+                                },
+                            })
+                            .collect();
+                        crate::areas_panel::tab(ui, &areas, &columns, icons);
                     }
                     Tab::Graveyard => run_panel::graveyard(ui, run.view, now),
                     Tab::Ruleset => {
@@ -646,16 +669,5 @@ fn ruleset_tab(ui: &mut egui::Ui, run: &RunPanel<'_>, lobbies: &Lobbies) -> Opti
         };
         row.response.on_hover_text(help);
     }
-    ui.add_space(6.0);
-    egui::CollapsingHeader::new(format!("Encounters used · {}", run.view.closed_areas.len()))
-        .id_salt("closed areas")
-        .show(ui, |ui| {
-            if run.view.closed_areas.is_empty() {
-                ui.weak("None yet: the first wild battle in each Area is its Encounter.");
-            }
-            for area in &run.view.closed_areas {
-                ui.label(area);
-            }
-        });
     command
 }

@@ -97,7 +97,7 @@ fn the_area_encounter_is_used_whether_or_not_it_is_caught() {
 
     player.meets_wild(RATTATA);
     assert!(player.game.catches_blocked, "a catch used the Encounter too");
-    assert_eq!(player.engine.view().closed_areas, ["Route 1"]);
+    assert_eq!(player.engine.view().closed_areas(), ["Route 1"]);
 }
 
 #[test]
@@ -231,7 +231,7 @@ fn a_resumed_run_still_has_its_closed_areas_and_feed() {
             "Run started on Pokémon FireRed (USA) 1.0"
         ]
     );
-    assert_eq!(player.engine.view().closed_areas, ["Route 1"]);
+    assert_eq!(player.engine.view().closed_areas(), ["Route 1"]);
 
     player.walks_into(route_1());
     player.meets_wild(RATTATA);
@@ -297,7 +297,7 @@ fn wild_battles_before_the_player_has_poke_balls_do_not_count() {
         player.feed(FeedKind::Encounter),
         ["Route 1: a wild PIDGEY, not counted: no Poké Balls yet"]
     );
-    assert!(player.engine.view().closed_areas.is_empty());
+    assert!(player.engine.view().closed_areas().is_empty());
 
     // Oak hands over Poké Balls: from then on Encounters count.
     player.game.holds_poke_balls = true;
@@ -361,4 +361,31 @@ fn poke_balls_are_only_looked_for_on_the_overworld() {
     player.game.safe_point = true;
     player.plays(1);
     assert!(player.feed(FeedKind::Run)[0].starts_with("You have Poké Balls"));
+}
+
+#[test]
+fn each_areas_encounter_keeps_what_was_met_there_and_whether_it_was_caught() {
+    let mut player = Player::starts_a_run(first_encounter());
+    player.walks_into(route_1());
+    player.meets_wild(PIDGEY);
+    player.catches(PIDGEY, 0xABCD_0001);
+    player.walks_into(route_2());
+    player.meets_wild(RATTATA);
+    player.leaves_battle();
+
+    let met: Vec<_> = player
+        .engine
+        .view()
+        .encounters
+        .iter()
+        .map(|e| (e.area.clone(), e.species, e.species_name.clone(), e.caught))
+        .collect();
+    assert_eq!(
+        met,
+        [
+            ("Route 1".to_owned(), PIDGEY, "PIDGEY".to_owned(), true),
+            ("Route 2".to_owned(), RATTATA, "RATTATA".to_owned(), false),
+        ]
+    );
+    assert_eq!(player.engine.view().closed_areas(), ["Route 1", "Route 2"]);
 }

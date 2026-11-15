@@ -1290,9 +1290,7 @@ impl RunEngine {
             _ => {}
         }
         self.take_in_ending(recorded);
-        if let RunEvent::Encounter { area, .. } = &recorded.event {
-            self.view.closed_areas.push(area.name.clone());
-        }
+        crate::AreaEncounter::take(&mut self.view.encounters, &recorded.event);
         if recorded.event.is_run_checkpoint()
             && let RunEvent::Checkpoint { hash, .. } = &recorded.event
         {

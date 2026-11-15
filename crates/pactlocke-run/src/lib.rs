@@ -6,6 +6,7 @@
 //! Dependencies are passed in: the game (through [`LiveGame`]), storage
 //! (through [`RunStorage`]) and the clock (through [`RunClock`]).
 
+mod areas;
 mod avatars;
 mod boot;
 mod cheats;
@@ -28,6 +29,7 @@ mod storage;
 mod stream;
 mod view;
 
+pub use areas::{AreaEncounter, area_encounters};
 pub use avatars::{Painter, PartnerAvatar};
 pub use boot::{BootPlan, Booted, boot_core};
 pub use cheats::{Cheat, CheatWatch, FAST_BURST_FRAMES, Flag};

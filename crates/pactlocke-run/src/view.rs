@@ -8,8 +8,9 @@ pub struct RunView {
     pub game_name: String,
     /// Newest first.
     pub feed: Vec<FeedEntry>,
-    /// The Areas whose Encounter is used, in the order they closed.
-    pub closed_areas: Vec<String>,
+    /// Each Area whose Encounter is used, in the order they closed: what was
+    /// met there and whether it was caught.
+    pub encounters: Vec<crate::AreaEncounter>,
     /// The Dead, newest first.
     pub graveyard: Vec<Grave>,
     /// The level cap now, in a Run with level caps.
@@ -32,6 +33,13 @@ pub struct RunView {
     pub game_over: Option<GameOverView>,
     /// The Ruleset's rules this game does through its own options, as of the last look.
     pub native_options: Vec<NativeOptionView>,
+}
+
+impl RunView {
+    /// The Areas whose Encounter is used, in the order they closed.
+    pub fn closed_areas(&self) -> Vec<String> {
+        self.encounters.iter().map(|e| e.area.clone()).collect()
+    }
 }
 
 /// A rule the game does through its own option, as setup and the side

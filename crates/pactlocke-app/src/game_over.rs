@@ -184,7 +184,7 @@ fn tallies(ui: &mut egui::Ui, view: &RunView, log: Option<&RunLog>) {
             ui.add(
                 egui::Label::new(format!(
                     "Encounters {} · catches {} · Deaths {} · Violations {} · cheat flags {}",
-                    view.closed_areas.len(),
+                    view.encounters.len(),
                     count(FeedKind::Catch),
                     view.graveyard.len(),
                     count(FeedKind::Violation),

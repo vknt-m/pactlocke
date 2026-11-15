@@ -42,7 +42,7 @@ fn a_wild_pokemon_from_a_family_already_owned_is_skipped_and_the_next_one_counts
     );
     player.leaves_battle();
     assert!(!player.game.catches_blocked);
-    assert!(player.engine.view().closed_areas.is_empty(), "Route 1 is still open");
+    assert!(player.engine.view().closed_areas().is_empty(), "Route 1 is still open");
 
     player.meets_wild(RATTATA);
     assert!(!player.game.catches_blocked);

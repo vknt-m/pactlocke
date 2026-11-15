@@ -19,6 +19,7 @@ pub enum Member {
     /// Caught (or given) this Pokémon from it.
     Caught {
         pid: u32,
+        species: u16,
         species_name: String,
         /// Their Shadow Game here has shown it (always so for this Player's own).
         judged: bool,
@@ -95,24 +96,27 @@ pub fn links(log: &RunLog, me: &PlayerKey, judge: &dyn Judge) -> Vec<Link> {
     let mut parts: BTreeMap<String, BTreeMap<PlayerKey, Member>> = BTreeMap::new();
     let mut deaths: BTreeMap<PlayerKey, BTreeSet<u32>> = BTreeMap::new();
     let mut gifts: BTreeSet<String> = BTreeSet::new();
-    let mut names_of: BTreeMap<(PlayerKey, u32), String> = BTreeMap::new();
+    // Each Player's catches by PID: species and its name, for an Encounter's part.
+    let mut caught: BTreeMap<(PlayerKey, u32), (u16, String)> = BTreeMap::new();
     for (author, event) in log.standing_events() {
         let trusted = author == *me;
         match event {
             RunEvent::Gift {
                 source: Some(source),
                 pid,
+                species,
                 species_name,
                 ..
             } => {
                 gifts.insert(source.key.clone());
-                names_of.insert((author, pid), species_name.clone());
+                caught.insert((author, pid), (species, species_name.clone()));
                 let judged = trusted || judge.has(&author, pid);
                 set(
                     &source,
                     author,
                     Member::Caught {
                         pid,
+                        species,
                         species_name,
                         judged,
                         dead: false,
@@ -121,17 +125,26 @@ pub fn links(log: &RunLog, me: &PlayerKey, judge: &dyn Judge) -> Vec<Link> {
                     &mut parts,
                 );
             }
-            RunEvent::Caught { pid, species_name, .. } => {
-                names_of.insert((author, pid), species_name);
+            RunEvent::Caught {
+                pid,
+                species,
+                species_name,
+                ..
+            } => {
+                caught.insert((author, pid), (species, species_name));
             }
             RunEvent::EncounterOver { source, pid } => {
                 let member = match pid {
-                    Some(pid) => Member::Caught {
-                        pid,
-                        species_name: names_of.get(&(author, pid)).cloned().unwrap_or_default(),
-                        judged: trusted || judge.has(&author, pid),
-                        dead: false,
-                    },
+                    Some(pid) => {
+                        let (species, species_name) = caught.get(&(author, pid)).cloned().unwrap_or_default();
+                        Member::Caught {
+                            pid,
+                            species,
+                            species_name,
+                            judged: trusted || judge.has(&author, pid),
+                            dead: false,
+                        }
+                    }
                     None => Member::Missed { skipped: false },
                 };
                 set(&source, author, member, &mut order, &mut parts);
@@ -175,6 +188,7 @@ pub fn links(log: &RunLog, me: &PlayerKey, judge: &dyn Judge) -> Vec<Link> {
                             species_name,
                             judged: true,
                             dead,
+                            ..
                         } if deaths.get(player).is_some_and(|pids| pids.contains(pid)) => {
                             *dead = true;
                             broken.get_or_insert(format!("{name}'s {species_name} died"));

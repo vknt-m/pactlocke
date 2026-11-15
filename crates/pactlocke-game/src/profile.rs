@@ -142,6 +142,16 @@ impl GameProfile {
         let name = self.area_renames.get(&id).or_else(|| self.areas.get(&id))?;
         Some(crate::Area { id, name: name.clone() })
     }
+
+    /// Every Area of the game, once each, by section: merged sections count
+    /// as the one they merge into.
+    pub fn all_areas(&self) -> Vec<crate::Area> {
+        self.areas
+            .keys()
+            .filter(|section| !self.area_merges.contains_key(section))
+            .filter_map(|section| self.area(*section))
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

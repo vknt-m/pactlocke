@@ -212,7 +212,7 @@ fn with_statics_on_a_static_is_a_bonus_encounter_even_in_a_closed_area() {
     );
     player.leaves_battle();
     assert_eq!(
-        player.engine.view().closed_areas,
+        player.engine.view().closed_areas(),
         ["Route 1"],
         "the Area's own Encounter is unchanged"
     );
@@ -329,5 +329,5 @@ fn a_battle_nobody_can_catch_in_is_no_ones_encounter() {
     player.leaves_battle();
 
     assert!(player.feed(FeedKind::Encounter).is_empty());
-    assert!(player.engine.view().closed_areas.is_empty(), "Route 1 is still open");
+    assert!(player.engine.view().closed_areas().is_empty(), "Route 1 is still open");
 }

@@ -721,7 +721,10 @@ fn a_route_1_pokemon_from_a_family_already_owned_is_skipped_as_a_dupe() {
         "{encounters:?}"
     );
     assert_eq!(d.read(CATCH_SITE, 4), [0x01, 0x20, 0x70, 0x47], "no catching a dupe");
-    assert!(d.game.engine().view().closed_areas.is_empty(), "Route 1 is still open");
+    assert!(
+        d.game.engine().view().closed_areas().is_empty(),
+        "Route 1 is still open"
+    );
     assert!(
         d.feed(FeedKind::Catch).is_empty(),
         "the PC was filled by the test, not by catches"
@@ -1516,7 +1519,7 @@ fn after_a_retry_the_game_is_back_at_its_run_checkpoint_and_its_shadow_follows()
     );
     assert_eq!(d.game.engine().retries_left(), 0);
     assert!(
-        d.game.engine().view().closed_areas.is_empty(),
+        d.game.engine().view().closed_areas().is_empty(),
         "Route 1's Encounter is undone"
     );
 

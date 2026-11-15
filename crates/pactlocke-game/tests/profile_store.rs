@@ -141,6 +141,26 @@ fn merged_sections_count_as_one_area() {
     assert_eq!(profile.area(0x99), None, "not a listed section");
 }
 
+#[test]
+fn the_games_areas_are_listed_once_each_after_merges_and_renames() {
+    let merged = format!(
+        "{}
+[area_merges]
+0x82 = 0x81
+",
+        profile_toml("test-game", TEST_ROM_SHA1)
+    );
+    let store = ProfileStore::from_sources([("test.toml", merged)]).unwrap();
+    let names: Vec<String> = store
+        .find(TEST_ROM_SHA1)
+        .unwrap()
+        .all_areas()
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
+    assert_eq!(names, ["Pallet Town", "Route 1", "Underground Path", "Pokémon Tower"]);
+}
+
 /// A store whose one profile is FireRed's game code, as the bundled FireRed's is.
 fn store_with_a_firered_base() -> ProfileStore {
     let base = profile_toml("test-game", TEST_ROM_SHA1).replace("game_code = \"TEST\"", "game_code = \"BPRE\"");
