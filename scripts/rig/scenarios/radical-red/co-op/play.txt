@@ -1,0 +1,12 @@
+# Both Players: to the overworld at 4x, then checks.
+speed 4
+include ../common/overworld.txt
+shot ${SHARED}/${PLAYER}-overworld.png
+expect matched within 120
+sync overworld 2
+m B 600
+expect matched within 90
+expect connected
+expect no-errors
+sync done 2
+w 300

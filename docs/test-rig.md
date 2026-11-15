@@ -6,7 +6,10 @@ Two or three headless Pactlockes, each in its own Linux container, play a scenar
 PACTLOCKE_ROMS=~/roms bash scripts/rig.sh firered/shadow-sync
 PACTLOCKE_ROMS=~/roms bash scripts/rig.sh firered              # every FireRed scenario
 PACTLOCKE_ROMS=~/roms bash scripts/rig.sh firered/retry --arm64 Blue
+PACTLOCKE_ROMHACKS=~/rompatches bash scripts/rig.sh radical-red/co-op
 ```
+
+Original games are read from `PACTLOCKE_ROMS`, and patched Romhacks from `PACTLOCKE_ROMHACKS` (as the acceptance tests read them).
 
 `--arm64 PLAYER` runs that Player's container as ARM64 under emulation. The first ARM64 build compiles everything under emulation, which is slow; later runs reuse it. `--keep` leaves the containers so you can look at them afterwards.
 
@@ -46,6 +49,8 @@ Each scenario is a folder in `scripts/rig/scenarios/<game>/`. `rig.env` names th
 | `resume-host` | 2 | Red, the Host, closes the app. Blue takes over and plays on; Red comes back with Resume and joins Blue as a Player. Every Shadow Game matches. |
 | `apart-then-together` | 2 | Both leave. Red comes back alone and hosts, changing speed; then Blue comes back alone and, with Red silent, takes over, changing speed too. When they meet, Blue's copy wins and Red's entry is sent again: the same Run log on both with both events, every Shadow Game matched. |
 | `back-in-another-order` | 3 | Everyone leaves, then comes back in another order, the Host last: Green plays alone, Blue takes over and Green finds them, then Red joins Blue as a Player. Every Shadow Game matches. |
+
+`radical-red/co-op` (2 Players) checks co-op on a Romhack: a Soul Link Run on Radical Red 4.1 (CFRU) is locked, both Players play from power-on through its new-game option menus to their bedroom, and each Shadow Game matches, with one Run log.
 
 Emerald scenarios wait for Emerald's Game Profile: the app won't start a Run on a game it has no profile for.
 

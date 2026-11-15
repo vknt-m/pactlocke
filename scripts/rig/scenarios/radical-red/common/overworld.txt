@@ -1,0 +1,9 @@
+# Radical Red 4.1, from power-on to the first free moment on the overworld,
+# as the acceptance tests reach it: its new-game option menus run as scripts
+# on the overworld, so A goes on until no script runs (the script context
+# idle) and nothing holds the Player still (sLockFieldControls clear).
+m A 15000
+until mem8 0x03000EA8 == 2 mash A 20000
+until mem8 0x03000F9C == 0 mash B 3000
+m B 600
+until mem8 0x03000EA8 == 2 mash B 3000

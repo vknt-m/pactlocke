@@ -1,0 +1,9 @@
+# Co-op on a Romhack: two Players lock a Soul Link Run on Radical Red 4.1
+# (CFRU), play from power-on to the overworld, and each one's Shadow Game of
+# the other stays matched, with one Run log.
+include ../common/host.txt
+players 2
+preset soul-link
+ready
+lock-when 2
+include play.txt
