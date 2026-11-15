@@ -230,6 +230,22 @@ name = "Champion"
 trainers = [438, 439, 440]
 flag = 0x4BC   # FLAG_DEFEATED_CHAMP
 
+# Partner Avatars: the Player's tile and map at the start of save
+# block 1, FireRed's screen anchor, the overworld's free hardware sprite
+# entries (gOamLimit is 64), tiles and palette slots, checked against the
+# game's own sprite bookkeeping on its overworld, and the party icon tables.
+[avatars]
+position = 0x00
+location = 0x04
+anchor_x = 112
+anchor_y = 56
+first_oam = 64
+first_tile = 944
+palettes = [11, 12, 13, 14, 15]
+icon_table = 0x097FE6CC
+icon_palette_indices = 0x097FE164
+icon_palette_table = 0x083D4038
+
 # Sync Gates: FireRed's leaders, Elite Four and Champion, at FireRed's
 # trainerbattle instructions and at Radical Red's own copies of those scripts
 # (0x0904... to 0x0905...), each checked in this ROM. The Elite Four and the

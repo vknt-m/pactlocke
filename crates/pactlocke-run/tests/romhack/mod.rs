@@ -40,10 +40,39 @@ pub struct Hack {
     /// Free ROM (0xFF in the clean ROM) for the test scripts, past the Sync
     /// Gates' hold area and anything else the Game Profile writes there.
     pub test_scripts: u32,
+    /// The game's sprite bookkeeping, to check the room Partner Avatars take.
+    pub sprites: Sprites,
     /// A gate whose battle takes its trainer from a script variable, run from
     /// the start of its own script; `None` where every gate names its trainer.
     pub variable_gate: Option<VariableGate>,
 }
+
+/// Where the game keeps track of its sprites (pret's sprite.c, which every
+/// one of these hacks keeps): its base game's addresses.
+pub struct Sprites {
+    /// `gOamLimit`: how many hardware sprite entries the game fills.
+    pub oam_limit: u32,
+    /// `gSpriteTileAllocBitmap`: a bit per OBJ tile the game has taken.
+    pub tile_bitmap: u32,
+    /// `sSpritePaletteTags`: each OBJ palette slot's tag, 0xFFFF when free.
+    pub palette_tags: u32,
+}
+
+/// pokefirered's (each hack uses its base game's set).
+#[allow(dead_code)]
+pub const FIRERED_SPRITES: Sprites = Sprites {
+    oam_limit: 0x0202_1B44,
+    tile_bitmap: 0x0202_1B48,
+    palette_tags: 0x0300_0DE8,
+};
+
+/// pokeemerald's (each hack uses its base game's set).
+#[allow(dead_code)]
+pub const EMERALD_SPRITES: Sprites = Sprites {
+    oam_limit: 0x0202_1B38,
+    tile_bitmap: 0x0202_1B3C,
+    palette_tags: 0x0300_0CF0,
+};
 
 /// A Sync Gate battle that picks its trainer at run time (Unbound's gyms:
 /// `setvar 0x8000, gym`, a CFRU routine, then `trainerbattle 3, 0x800D`).
@@ -281,12 +310,13 @@ impl Driver {
         game.at_safe_overworld_point() && game.script().status == pactlocke_game::ScriptStatus::Idle && lock == 0
     }
 
-    /// `w` waits, `p` presses then waits.
+    /// `w` waits, `p` presses then waits, `h` holds for that many frames.
     fn play(&mut self, script: &str) {
         for line in script.lines() {
             let words: Vec<&str> = line.split_whitespace().collect();
             match words[..] {
                 ["w", n] => (0..n.parse::<u32>().unwrap()).for_each(|_| self.frame(Keys::NONE)),
+                ["h", key, n] => (0..n.parse::<u32>().unwrap()).for_each(|_| self.frame(keys(key))),
                 ["p", key, wait] => {
                     (0..4).for_each(|_| self.frame(keys(key)));
                     (0..wait.parse::<u32>().unwrap()).for_each(|_| self.frame(Keys::NONE));
@@ -387,6 +417,7 @@ fn keys(name: &str) -> Keys {
         "D" => Keys::DOWN,
         "L" => Keys::LEFT,
         "R" => Keys::RIGHT,
+        "U" => Keys::UP,
         other => panic!("no key {other}"),
     }
 }
@@ -778,4 +809,153 @@ fn a_held_gate_that_picks_its_trainer_at_run_time_lets_that_trainers_battle_run_
     );
     d.print_feed();
     d.assert_shadow_matched(10);
+}
+
+/// The sprite room the Game Profile gives Partner Avatars, checked against
+/// the game's own bookkeeping now: what the game fills is printed, and any
+/// overlap is returned.
+fn room_taken(d: &mut Driver) -> Vec<String> {
+    let avatars = d
+        .profile
+        .avatars
+        .clone()
+        .expect("the Game Profile gives Partner Avatars room");
+    let mut taken = Vec::new();
+    let limit = d.u8(GAME.sprites.oam_limit);
+    if limit > avatars.first_oam {
+        taken.push(format!("gOamLimit is {limit}, past entry {}", avatars.first_oam));
+    }
+    let bitmap = d.read(GAME.sprites.tile_bitmap, 128);
+    let used: Vec<u16> = (0..1024u16)
+        .filter(|t| bitmap[usize::from(t / 8)] & (1 << (t % 8)) != 0)
+        .collect();
+    let last = used.last().copied().unwrap_or(0);
+    let room = avatars.first_tile..avatars.first_tile + 80;
+    if let Some(t) = used.iter().find(|t| room.contains(t)) {
+        taken.push(format!("OBJ tile {t} is the game's"));
+    }
+    let tags: Vec<u16> = d
+        .read(GAME.sprites.palette_tags, 32)
+        .chunks(2)
+        .map(|w| u16::from_le_bytes([w[0], w[1]]))
+        .collect();
+    for slot in &avatars.palettes {
+        let tag = tags[usize::from(*slot)];
+        if tag != 0xFFFF {
+            taken.push(format!("OBJ palette slot {slot} holds tag {tag:#06X}"));
+        }
+    }
+    let in_use: Vec<usize> = (0..16).filter(|i| tags[*i] != 0xFFFF).collect();
+    eprintln!("the game: gOamLimit {limit}, tiles up to {last}, palette slots {in_use:?}");
+    taken
+}
+
+#[test]
+fn the_room_partner_avatars_take_is_free_on_the_hacks_overworld() {
+    let rom = rom_or_skip!();
+    let mut d = run_with(rom, Ruleset::default());
+    to_the_overworld(&mut d);
+    let mut taken = room_taken(&mut d);
+    // Walking about loads people and field effects: look again after each try.
+    for walk in ["h L 48", "h R 96", "h U 48", "h D 96"] {
+        d.play(&format!("{walk}\nw 60"));
+        taken.extend(room_taken(&mut d));
+    }
+    dump_screen(&d.game, "room");
+    assert!(taken.is_empty(), "{taken:?}");
+}
+
+/// The game's RAM, hashed.
+fn ram_hash(d: &mut Driver) -> String {
+    use sha1::{Digest, Sha1};
+    let mut sha = Sha1::new();
+    sha.update(d.read(0x0200_0000, 0x4_0000));
+    sha.update(d.read(0x0300_0000, 0x8000));
+    sha.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[test]
+fn a_partner_avatar_is_drawn_from_their_shadow_game_and_nothing_else_changes() {
+    let rom = rom_or_skip!();
+    // A draws partners; a control gets exactly A's presses and draws none; B walks off.
+    let mut a = run_with(rom.clone(), Ruleset::default());
+    let mut control = run_with(rom.clone(), Ruleset::default());
+    let mut b = run_with(rom, Ruleset::default());
+    for d in [&mut a, &mut control, &mut b] {
+        to_the_overworld(d);
+    }
+    let start = b.game.game_mut().whereabouts().expect("B on the overworld");
+    for walk in ["h L 32", "h R 64", "h D 32", "h U 64"] {
+        b.play(&format!("{walk}\nw 120"));
+        let moved = b
+            .game
+            .game_mut()
+            .whereabouts()
+            .is_some_and(|w| (w.x, w.y) != (start.x, start.y));
+        if moved {
+            break;
+        }
+    }
+    let avatars = a.game.draw_partner_avatars();
+    for _ in 0..180 {
+        let seen = b.watcher.as_ref().unwrap().shadow.seen().avatar.clone();
+        *avatars.lock().unwrap() = seen
+            .map(|seen| vec![pactlocke_run::PartnerAvatar { player: [2; 32], seen }])
+            .unwrap_or_default();
+        a.frame(Keys::NONE);
+        control.frame(Keys::NONE);
+        b.frame(Keys::NONE);
+    }
+
+    let mine = a.game.game_mut().whereabouts().expect("A on the overworld");
+    let theirs = b
+        .watcher
+        .as_ref()
+        .unwrap()
+        .shadow
+        .seen()
+        .avatar
+        .clone()
+        .expect("B's Shadow shows B");
+    assert_eq!(theirs.at.map, mine.map, "the same map");
+    let (dx, dy) = (i32::from(theirs.at.x - mine.x), i32::from(theirs.at.y - mine.y));
+    assert_ne!((dx, dy), (0, 0), "B walked off");
+    let room = a.profile.avatars.clone().expect("room for Partner Avatars");
+    // Slot 0: the first Partner Avatar.
+    let entry = a.read(0x0700_0000 + u32::from(room.first_oam) * 8, 6);
+    let attr0 = u16::from_le_bytes([entry[0], entry[1]]);
+    let attr1 = u16::from_le_bytes([entry[2], entry[3]]);
+    let attr2 = u16::from_le_bytes([entry[4], entry[5]]);
+    // A 32x32 sprite (Unbound's own Player is one) is centred over the tile.
+    let (width, inset) = if theirs.sprite.square { (32, 8) } else { (16, 0) };
+    let (x, y) = (
+        i32::from(room.anchor_x) + 16 * dx - inset,
+        i32::from(room.anchor_y) + 16 * dy,
+    );
+    assert_eq!(attr0 & 0x0200, 0, "drawn");
+    assert_eq!(
+        (i32::from(attr1 & 0x1FF), i32::from(attr0 & 0xFF)),
+        (x, y),
+        "at B's tile"
+    );
+    let tile = u32::from(attr2 & 0x3FF);
+    assert_eq!(
+        a.read(0x0601_0000 + tile * 32, theirs.sprite.tiles.len()),
+        theirs.sprite.tiles,
+        "B's own look, from B's game"
+    );
+
+    // The game never saw it: A's RAM is the control's, and A's Shadow still matches.
+    assert_eq!(ram_hash(&mut a), ram_hash(&mut control));
+    a.assert_shadow_matched(10);
+    // But A's picture has B in it, where the control's doesn't.
+    let (drawn, plain) = (a.game.frame(), control.game.frame());
+    let differs = (y.max(0)..(y + 32).min(160)).any(|row| {
+        (x.max(0)..(x + width).min(240)).any(|col| {
+            let at = ((row * 240 + col) * 4) as usize;
+            drawn.rgba[at..at + 3] != plain.rgba[at..at + 3]
+        })
+    });
+    dump_screen(&a.game, "partner-avatar");
+    assert!(differs, "B is on A's screen");
 }

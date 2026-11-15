@@ -15,5 +15,6 @@ const GAME: romhack::Hack = romhack::Hack {
     single_trainer: 410,
     // Past the Sync Gates' hold area: the end of the ROM is free.
     test_scripts: 0x09FF_1000,
+    sprites: romhack::FIRERED_SPRITES,
     variable_gate: None,
 };

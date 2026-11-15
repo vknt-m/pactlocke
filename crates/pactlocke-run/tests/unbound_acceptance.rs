@@ -17,6 +17,7 @@ const GAME: romhack::Hack = romhack::Hack {
     test_scripts: 0x09FF_1000,
     // Mel's gym battle: `setvar 0x8000, 4`, then the CFRU routine that picks
     // the difficulty's Mel into 0x800D, then `trainerbattle 3, 0x800D`.
+    sprites: romhack::FIRERED_SPRITES,
     variable_gate: Some(romhack::VariableGate {
         gate: "Mel",
         script: 0x09E7_309C,

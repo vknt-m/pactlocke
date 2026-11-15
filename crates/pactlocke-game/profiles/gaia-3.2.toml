@@ -674,6 +674,22 @@ key = "regigigas_static_4"
 name = "Regigigas, level 50"
 kind = "static"
 at = [0x0993B403]
+# Partner Avatars: the Player's tile and map at the start of save
+# block 1, FireRed's screen anchor, the overworld's free hardware sprite
+# entries (gOamLimit is 64), tiles and palette slots, checked against the
+# game's own sprite bookkeeping on its overworld, and the party icon tables.
+[avatars]
+position = 0x00
+location = 0x04
+anchor_x = 112
+anchor_y = 56
+first_oam = 64
+first_tile = 944
+palettes = [11, 12, 13, 14, 15]
+icon_table = 0x0872A86C
+icon_palette_indices = 0x0872B870
+icon_palette_table = 0x0823C500
+
 
 # Sync Gates: the base game's gym leader, Elite Four and Champion battles,
 # each checked in this ROM; the hack keeps the trainer ids and renames them.

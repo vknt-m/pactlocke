@@ -14,5 +14,6 @@ const GAME: romhack::Hack = romhack::Hack {
     // Rosaline of the Elite Four, Emerald's Sidney.
     single_trainer: 261,
     test_scripts: 0x09F0_1000,
+    sprites: romhack::EMERALD_SPRITES,
     variable_gate: None,
 };

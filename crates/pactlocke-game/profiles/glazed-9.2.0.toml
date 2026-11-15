@@ -1142,6 +1142,21 @@ key = "kecleon_gift"
 name = "Kecleon, level 5"
 kind = "gift"
 at = [0x091DE85A]
+# Partner Avatars: Emerald's, which Glazed keeps (its save block
+# layout, screen anchor and party icon tables), checked against the game's
+# own sprite bookkeeping on its overworld.
+[avatars]
+position = 0x00
+location = 0x04
+anchor_x = 112
+anchor_y = 56
+first_oam = 64
+first_tile = 944
+palettes = [15, 9, 7, 11, 6]
+icon_table = 0x0857BCA8
+icon_palette_indices = 0x0857C388
+icon_palette_table = 0x0857C540
+
 
 # Sync Gates: the base game's gym leader, Elite Four and Champion battles,
 # each checked in this ROM; the hack keeps the trainer ids and renames them.

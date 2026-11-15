@@ -179,7 +179,7 @@ fn an_unknown_hack_laid_out_like_its_game_is_untested_on_that_games_profile() {
         profile.sources.is_empty(),
         "no catalogue: Gifts are only seen after the fact"
     );
-    assert_eq!(profile.avatars, None, "no Partner Avatars on Romhacks");
+    assert_eq!(profile.avatars, None, "no Partner Avatars on an Untested Romhack");
     assert_eq!(
         capabilities.get(Rule::FirstEncounter),
         &Capability::Enforceable,

@@ -240,6 +240,22 @@ name = "Champion"
 trainers = [414]
 flag = 0x16D9
 
+# Partner Avatars: the Player's tile and map at the start of save
+# block 1, FireRed's screen anchor, the overworld's free hardware sprite
+# entries (gOamLimit is 64), tiles and palette slots, checked against the
+# game's own sprite bookkeeping on its overworld, and the party icon tables.
+[avatars]
+position = 0x00
+location = 0x04
+anchor_x = 112
+anchor_y = 56
+first_oam = 64
+first_tile = 944
+palettes = [11, 12, 13, 14, 15]
+icon_table = 0x09A217FC
+icon_palette_indices = 0x09A212EC
+icon_palette_table = 0x083D4038
+
 # Sync Gates. Unbound's gyms and League start their battles with
 # `setvar 0x8000, <gym or member>`, a CFRU routine that picks the
 # difficulty's trainer into 0x800D (0x09ECA98D for the gyms, 0x09ECE37D for
