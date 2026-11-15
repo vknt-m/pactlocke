@@ -1,0 +1,19 @@
+[package]
+name = "pactlocke-randomizer"
+description = "UPR FVX for the original games: its pinned download, the settings string a recipe makes, seeds from the Run secret, and a checked headless run."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64 = "0.22"
+crc32fast = "1"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+serde = { version = "1", features = ["derive"] }
+sha1 = "0.10"
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"
