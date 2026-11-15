@@ -141,7 +141,18 @@ fn windowed(opengl: bool) -> eframe::Result {
         }
     }
 
+    // wgpu draws with DirectX 12 or Vulkan, never OpenGL: merely looking for
+    // an OpenGL adapter crashes AMD's OpenGL driver (atio6axx.dll) on some
+    // PCs. OpenGL proper is the `--opengl` start. `WGPU_BACKEND` still overrides.
+    let mut wgpu_setup = eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+    wgpu_setup.instance_descriptor.backends =
+        eframe::wgpu::Backends::from_env().unwrap_or(eframe::wgpu::Backends::PRIMARY);
+    let wgpu_options = eframe::egui_wgpu::WgpuConfiguration {
+        wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(wgpu_setup),
+        ..Default::default()
+    };
     let options = eframe::NativeOptions {
+        wgpu_options,
         viewport: egui::ViewportBuilder::default()
             .with_title("Pactlocke")
             .with_inner_size([1100.0, 600.0])
