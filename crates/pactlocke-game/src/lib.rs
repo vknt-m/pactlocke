@@ -3,6 +3,7 @@
 
 mod capability;
 mod caps;
+mod compressed;
 mod fake;
 mod fake_core;
 mod game;
@@ -24,8 +25,8 @@ pub use game::{
 };
 pub use icons::{ICON_SIZE, party_icon_rgba};
 pub use profile::{
-    Bit, Family, GameProfile, GateDef, HexBytes, Layout, Method, OptionDef, PatchSite, Place, ROM_BASE, RuleMethods,
-    SCHEMA_VERSION, SupportStatus, Symbols, SyncGates,
+    Bit, BoxFormat, Family, GameProfile, GateDef, HexBytes, Layout, Method, OptionDef, PatchSite, Place, ROM_BASE,
+    RuleMethods, SCHEMA_VERSION, SupportStatus, Symbols, SyncGates,
 };
 pub use profile_game::ProfileGame;
 pub use source::{Source, SourceDef, SourceKind};

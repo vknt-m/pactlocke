@@ -188,6 +188,7 @@ impl Headless {
                         at: *at,
                         expect: pactlocke_game::HexBytes(expect.clone()),
                         write: None,
+                        below_cap: 0,
                     })
                     .collect(),
             }),

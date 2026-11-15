@@ -13,4 +13,5 @@ const GAME: romhack::Hack = romhack::Hack {
     field_lock: 0x0300_0F9C,
     // Nicola of the Elite Four, FireRed's Lorelei.
     single_trainer: 410,
+    test_scripts: 0x09F0_1000,
 };

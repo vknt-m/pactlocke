@@ -276,7 +276,7 @@ fn method_capability(profile: &GameProfile, method: Option<&Method>, rom: &[u8])
                 }
             }
         }
-        Some(Method::ZeroTableField | Method::OptionBit { .. }) => Capability::Enforceable,
+        Some(Method::ZeroTableField | Method::OptionBit { .. } | Method::Always) => Capability::Enforceable,
     }
 }
 

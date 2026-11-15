@@ -8,7 +8,7 @@ use std::sync::Arc;
 use sha1::{Digest, Sha1};
 
 use crate::capability::CapabilityReport;
-use crate::profile::{GameProfile, Method, ROM, SCHEMA_VERSION};
+use crate::profile::{BoxFormat, COMPRESSED_SLOT_SIZE, GameProfile, Method, ROM, SCHEMA_VERSION};
 
 /// The profiles bundled with the app, as (file name, TOML).
 const BUNDLED: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/bundled_profiles.rs"));
@@ -471,6 +471,21 @@ fn check(profile: &GameProfile) -> Result<(), String> {
             return Err(format!("symbol {table} {addr:#010X} is not in ROM"));
         }
     }
+    let layout = &profile.layout;
+    if layout.box_format == BoxFormat::Compressed && (layout.encrypted || layout.box_slot_size != COMPRESSED_SLOT_SIZE)
+    {
+        return Err(format!(
+            "layout box_format \"compressed\": Pokémon must be unencrypted and box_slot_size {COMPRESSED_SLOT_SIZE}"
+        ));
+    }
+    if let Some(starts) = &profile.symbols.pc_box_starts
+        && starts.len() != usize::from(layout.pc_boxes)
+    {
+        return Err(format!(
+            "symbols pc_box_starts: give one for each of the {} boxes",
+            layout.pc_boxes
+        ));
+    }
     if profile.layout.trainer_mon_sizes.len() != 4 {
         return Err("layout trainer_mon_sizes must give a size for each of the 4 party flag values".into());
     }
@@ -524,11 +539,6 @@ fn check(profile: &GameProfile) -> Result<(), String> {
     if native(&rules.no_items_trainer) != native(&rules.no_items_wild) {
         return Err("rules no_items_trainer and no_items_wild: both native or neither".to_owned());
     }
-    // A rule the game does is the game's whole rule: Pactlocke can't do half of it.
-    let native = |method: &Option<Method>| matches!(method, Some(Method::Native { .. }));
-    if native(&rules.no_items_trainer) != native(&rules.no_items_wild) {
-        return Err("rules no_items_trainer and no_items_wild: both native or neither".to_owned());
-    }
     for (rule, method, switched) in named {
         match method {
             Some(Method::Patch { sites }) => {
@@ -538,6 +548,12 @@ fn check(profile: &GameProfile) -> Result<(), String> {
                 for site in sites {
                     if !ROM.contains(&site.at) {
                         return Err(format!("rule {rule}: site {:#010X} is not in ROM", site.at));
+                    }
+                    if site.below_cap != 0 && rule != "level_cap" {
+                        return Err(format!(
+                            "rule {rule}: site {:#010X} gives below_cap, which only a level cap site may",
+                            site.at
+                        ));
                     }
                     if switched != site.write.is_some() {
                         let should = if switched { "must" } else { "must not" };

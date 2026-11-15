@@ -13,4 +13,5 @@ const GAME: romhack::Hack = romhack::Hack {
     field_lock: 0x0300_0F2C,
     // Rosaline of the Elite Four, Emerald's Sidney.
     single_trainer: 261,
+    test_scripts: 0x09F0_1000,
 };

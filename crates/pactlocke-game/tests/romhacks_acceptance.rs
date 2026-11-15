@@ -20,7 +20,7 @@ fn gba_files(dir: &Path, found: &mut Vec<PathBuf>) {
 }
 
 /// The tested Romhacks with a bundled Game Profile.
-const PROFILED: [&str; 2] = ["Gaia", "Glazed"];
+const PROFILED: [&str; 4] = ["Gaia", "Glazed", "Radical Red", "Unbound"];
 
 #[test]
 fn each_patched_launch_romhack_is_named_and_profiled_or_waits_for_its_game_profile() {

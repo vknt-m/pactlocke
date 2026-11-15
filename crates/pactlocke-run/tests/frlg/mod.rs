@@ -1632,6 +1632,7 @@ fn with_a_rival_gate(profile: &pactlocke_game::GameProfile) -> pactlocke_game::G
         at,
         expect: HexBytes(vec![0x5C, 0x09, trainer, 0x01, 0x03]),
         write: None,
+        below_cap: 0,
     };
     profile
         .sync_gates

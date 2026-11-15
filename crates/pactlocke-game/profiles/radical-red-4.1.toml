@@ -1,0 +1,710 @@
+# Pokémon Radical Red 4.1 by soupercell, a FireRed (USA) 1.0 hack on CFRU
+# (the Complete Fire Red Upgrade). It keeps FireRed's RAM, save block
+# pointers, event flags, trainer table, map names and scripts (with copies
+# of its own), but CFRU replaces the battle engine, EXP and Bag code and
+# keeps Pokémon unencrypted, in a fixed order. Its PC is CFRU's: 25 boxes of
+# 58-byte compressed slots, spread over RAM (CFRU's sPokemonBoxPtrs, at
+# 0x09148930 in this ROM). It always plays the Set battle style. Its tables
+# were found by reading FireRed's literal pools in this ROM, and its patch
+# sites by `cargo dev scan`.
+
+schema = 1
+id = "radical-red-4.1"
+name = "Pokémon Radical Red 4.1"
+game_code = "BPRE"
+family = "FRLG"
+sha1 = "964f951a0fdaf209e4ea1344883ef0d557bb3a80"
+status = "supported"
+
+[symbols]
+party = 0x02024284
+party_count = 0x02024029
+enemy_party = 0x0202402C              # gEnemyParty
+# FireRed's PC pointer; CFRU reads its boxes from pc_box_starts instead.
+pc_storage = { pointer = 0x03005010 }
+save_block_1 = { pointer = 0x03005008 }
+save_block_2 = { pointer = 0x0300500C }
+region_map_section = 0x02036E10        # gMapHeader.regionMapSectionId
+main_callback2 = 0x030030F4            # gMain.callback2
+overworld_callback = 0x080565B4        # CB2_Overworld
+in_battle = { at = 0x03003529, mask = 0x02 }   # gMain.inBattle
+battle_type_flags = 0x02022B4C
+battle_mons = 0x02023BE4
+battler_party_indexes = 0x02023BCE
+battler_statuses3 = 0x02023DFC
+disable_structs = 0x02023E0C
+script_context_status = 0x03000EA8     # 0 running, 1 waiting, 2 idle
+script_context = 0x03000EB0
+species_info = 0x097B98EC              # CFRU's gBaseStats
+species_names = 0x094042CC             # gSpeciesNames
+evolution_table = 0x097CD9B0           # gEvolutionTable
+items = 0x093C0000                     # CFRU's item table
+trainers = 0x0823EAC8                  # gTrainers, where FireRed has it
+type_names = 0x0910140C                # gTypeNames, with Fairy
+message_buffer = 0x02021D18            # gStringVar4
+# Radical Red keeps the Bag in RAM, outside save block 1 (gBagPockets[2] points here).
+balls_pocket = 0x0203C354
+# CFRU's boxes: 1 to 19 one after another, 20 to 22, 23 and 24, then 25 in save block 2.
+pc_box_starts = [
+  0x02029318, 0x020299E4, 0x0202A0B0, 0x0202A77C, 0x0202AE48, 0x0202B514, 0x0202BBE0,
+  0x0202C2AC, 0x0202C978, 0x0202D044, 0x0202D710, 0x0202DDDC, 0x0202E4A8, 0x0202EB74,
+  0x0202F240, 0x0202F90C, 0x0202FFD8, 0x020306A4, 0x02030D70, 0x0203CB44, 0x0203D210,
+  0x0203D8DC, 0x02027434, 0x02027B00, 0x02024638,
+]
+
+[layout]
+party_slot_size = 100
+box_slot_size = 58
+box_format = "compressed"
+encrypted = false
+ot_id = 0x04
+nickname = 0x08
+nickname_length = 10
+flags = 0x13
+egg_mask = 0x04
+has_species_mask = 0x02
+checksum = 0x1C
+substructures = 0x20
+level = 0x54
+hp = 0x56
+max_hp = 0x58
+battle_mon_size = 0x58
+battle_mon_hp = 0x28
+battle_type_trainer = 0x08
+# BATTLE_TYPE_OLD_MAN_TUTORIAL, _GHOST and _POKEDUDE, as in FireRed.
+battle_type_uncatchable = 0x18200
+battle_type_double = 0x01
+perish_song_status3 = 0x20
+disable_struct_size = 0x1C
+perish_timer = 0x0F
+script_context_stack_depth = 0x00
+script_context_stack = 0x0C
+script_context_pointer = 0x08
+species_info_size = 28
+species_name_length = 11
+species_count = 1376                   # NUM_SPECIES: Chillet is the last name
+evolutions_per_species = 16            # EVOS_PER_MON
+evolution_size = 8
+evolution_target = 4
+primary_type = 6
+item_size = 44
+item_count = 750
+item_pocket = 26
+item_battle_usage = 32
+ball_pocket = 3
+pc_boxes = 25
+pc_box_slots = 30
+pc_boxes_offset = 4
+trainer_id = 0x0A                      # in save block 2
+play_time = 0x0E                       # in save block 2
+badge_flags = 0x820                    # FLAG_BADGE01_GET
+event_flags = 0xEE0                    # in save block 1
+trainer_size = 40
+trainer_party_flags = 0
+trainer_party_size = 32
+trainer_party = 36
+trainer_mon_level = 2
+trainer_mon_sizes = [8, 16, 8, 16]
+type_name_length = 7
+balls_pocket = 0x430                   # FireRed's, unused: see symbols.balls_pocket
+balls_pocket_slots = 50
+dead_box = 25
+
+# Closes an Area: the ball is refused in the Bag with Oak's "This isn't the
+# time to use that!" line. Radical Red's own FLAG_NO_CATCHING (0x902) does it
+# too, with "The Pokémon can't be caught!", but the patch keeps one line for
+# every FireRed game. The Safari Zone's BALL still shows FireRed's "box is
+# full" line: its battle string isn't found in CFRU yet.
+[rules.catch_block]
+method = "patch"
+sites = [
+  { at = 0x08040F6C, expect = "10 B5 00 24", write = "01 20 70 47" },  # IsPlayerPartyAndPokemonStorageFull -> TRUE
+  { at = 0x080A1E5C, expect = "31 66 41 08", write = "25 64 41 08" },  # gText_BoxFull -> "This isn't the time to use that!"
+]
+
+# CFRU checks `level >= MAX_LEVEL` as `cmp rX, #99`, written one below the
+# cap: three sites in its Cmd_getexp (battle command 0x23) and one in its
+# EXP update. Radical Red changed FireRed's two item-use checks (Rare Candy)
+# to `cmp #250`; the cap is written there as it is.
+[rules.level_cap]
+method = "patch"
+sites = [
+  { at = 0x0909489C, expect = "63 2B", below_cap = 1 },  # Cmd_getexp
+  { at = 0x09094CC8, expect = "63 2A", below_cap = 1 },  # Cmd_getexp
+  { at = 0x0909503E, expect = "63 2B", below_cap = 1 },  # Cmd_getexp
+  { at = 0x09094490, expect = "63 2B", below_cap = 1 },  # the EXP update handler
+  { at = 0x08041834, expect = "FA 28" },                 # PokemonUseItemEffects (Rare Candy)
+  { at = 0x0804274E, expect = "FA 28" },                 # PokemonItemUseNoEffect
+]
+
+# CFRU's hook for FireRed's Bag check calls its IsBagDisabled() and branches
+# past "Items can't be used now." when it's false: the branch becomes a nop.
+# Radical Red's own FLAG_DISABLE_BAG (0x915) does the same.
+[rules.no_items_trainer]
+method = "patch"
+sites = [{ at = 0x0904230A, expect = "01 D0", write = "C0 46" }]
+
+# Only Poké Balls keep a battle use in wild battles, in CFRU's item table.
+[rules.no_items_wild]
+method = "zero_table_field"
+
+# Radical Red never offers to switch after a foe faints.
+[rules.set_mode]
+method = "always"
+
+# FireRed's trygivecaughtmonnick is still command 0xF3 in CFRU's own table,
+# and FireRed's shared MSGBOX_YESNO script is unchanged.
+[rules.must_nickname]
+method = "key_filter"
+battle_script_pointer = 0x02023D74   # gBattlescriptCurrInstr
+command_table = 0x0903EF20           # CFRU's gBattleScriptingCommandsTable
+command = 0x0802DD39                 # Cmd_trygivecaughtmonnick
+battle_communication = 0x02023E82
+field_yes_no = [0x081A4E65]
+question = "give a nickname"
+
+# Level cap stages: FireRed's, by its trainer ids and defeat flags, which
+# Radical Red keeps (its harder teams are levels in the same entries).
+[[level_caps]]
+name = "Brock"
+trainers = [414]
+badges = 1
+
+[[level_caps]]
+name = "Misty"
+trainers = [415]
+badges = 2
+
+[[level_caps]]
+name = "Lt. Surge"
+trainers = [416]
+badges = 3
+
+[[level_caps]]
+name = "Erika"
+trainers = [417]
+badges = 4
+
+[[level_caps]]
+name = "Koga"
+trainers = [418]
+badges = 5
+
+[[level_caps]]
+name = "Sabrina"
+trainers = [420]
+badges = 6
+
+[[level_caps]]
+name = "Blaine"
+trainers = [419]
+badges = 7
+
+[[level_caps]]
+name = "Giovanni"
+trainers = [350]
+badges = 8
+
+[[level_caps]]
+name = "Lorelei"
+trainers = [410]
+flag = 0x4B8   # FLAG_DEFEATED_LORELEI
+
+[[level_caps]]
+name = "Bruno"
+trainers = [411]
+flag = 0x4B9   # FLAG_DEFEATED_BRUNO
+
+[[level_caps]]
+name = "Agatha"
+trainers = [412]
+flag = 0x4BA   # FLAG_DEFEATED_AGATHA
+
+[[level_caps]]
+name = "Lance"
+trainers = [413]
+flag = 0x4BB   # FLAG_DEFEATED_LANCE
+
+[[level_caps]]
+name = "Champion"
+trainers = [438, 439, 440]
+flag = 0x4BC   # FLAG_DEFEATED_CHAMP
+
+# Sync Gates: FireRed's leaders, Elite Four and Champion, at FireRed's
+# trainerbattle instructions and at Radical Red's own copies of those scripts
+# (0x0904... to 0x0905...), each checked in this ROM. The Elite Four and the
+# Champion also battle their rematch teams (735 to 741) right after.
+[sync_gates]
+hold = 0x09FF0000
+
+[[sync_gates.gates]]
+name = "Brock"
+sites = [
+    { at = 0x0816A5A0, expect = "5C 01 9E 01 00" },
+    { at = 0x09050F70, expect = "5C 01 9E 01 00" },
+]
+
+[[sync_gates.gates]]
+name = "Misty"
+sites = [
+    { at = 0x0816AAAE, expect = "5C 01 9F 01 00" },
+    { at = 0x09046ABA, expect = "5C 01 9F 01 00" },
+]
+
+[[sync_gates.gates]]
+name = "Lt. Surge"
+sites = [
+    { at = 0x0816B957, expect = "5C 01 A0 01 00" },
+    { at = 0x0905A3B5, expect = "5C 01 A0 01 00" },
+]
+
+[[sync_gates.gates]]
+name = "Erika"
+sites = [
+    { at = 0x0816D06E, expect = "5C 01 A1 01 00" },
+    { at = 0x09045F0B, expect = "5C 01 A1 01 00" },
+]
+
+[[sync_gates.gates]]
+name = "Koga"
+sites = [
+    { at = 0x0816D55B, expect = "5C 01 A2 01 00" },
+    { at = 0x0904A5B1, expect = "5C 01 A2 01 00" },
+]
+
+[[sync_gates.gates]]
+name = "Sabrina"
+sites = [
+    { at = 0x0816EDE5, expect = "5C 01 A4 01 00" },
+    { at = 0x09054FA7, expect = "5C 03 A4 01 00" },
+]
+
+[[sync_gates.gates]]
+name = "Blaine"
+sites = [
+    { at = 0x0816D9E1, expect = "5C 01 A3 01 00" },
+    { at = 0x09047D1A, expect = "5C 01 A3 01 00" },
+]
+
+[[sync_gates.gates]]
+name = "Giovanni"
+sites = [{ at = 0x08169ED7, expect = "5C 01 5E 01 00" }]
+
+[[sync_gates.gates]]
+name = "Lorelei"
+sites = [
+    { at = 0x08162653, expect = "5C 03 9A 01 00" },
+    { at = 0x0816265E, expect = "5C 03 DF 02 00" },
+]
+
+[[sync_gates.gates]]
+name = "Bruno"
+sites = [
+    { at = 0x08162763, expect = "5C 03 9B 01 00" },
+    { at = 0x0816276E, expect = "5C 03 E0 02 00" },
+]
+
+[[sync_gates.gates]]
+name = "Agatha"
+sites = [
+    { at = 0x081628FB, expect = "5C 03 9C 01 00" },
+    { at = 0x08162906, expect = "5C 03 E1 02 00" },
+]
+
+[[sync_gates.gates]]
+name = "Lance"
+sites = [
+    { at = 0x08162A8B, expect = "5C 03 9D 01 00" },
+    { at = 0x08162A96, expect = "5C 03 E2 02 00" },
+]
+
+[[sync_gates.gates]]
+name = "Champion"
+sites = [
+    { at = 0x08162CC5, expect = "5C 03 B6 01 00" },
+    { at = 0x08162CD0, expect = "5C 03 B7 01 00" },
+    { at = 0x08162CDB, expect = "5C 03 B8 01 00" },
+    { at = 0x08162CE6, expect = "5C 03 E3 02 00" },
+    { at = 0x08162CF1, expect = "5C 03 E4 02 00" },
+    { at = 0x08162CFC, expect = "5C 03 E5 02 00" },
+    { at = 0x09049622, expect = "5C 03 B6 01 00" },
+    { at = 0x0904962D, expect = "5C 03 B7 01 00" },
+    { at = 0x09049638, expect = "5C 03 B8 01 00" },
+    { at = 0x09049643, expect = "5C 03 B6 01 00" },
+    { at = 0x09049652, expect = "5C 03 B7 01 00" },
+    { at = 0x09049661, expect = "5C 03 B8 01 00" },
+]
+
+
+# FireRed's region-map sections and names, which Radical Red keeps but for two
+# sections it renames to Oak's Lab.
+[areas]
+0x58 = "Pallet Town"
+0x59 = "Viridian City"
+0x5A = "Pewter City"
+0x5B = "Cerulean City"
+0x5C = "Lavender Town"
+0x5D = "Vermilion City"
+0x5E = "Celadon City"
+0x5F = "Fuchsia City"
+0x60 = "Cinnabar Island"
+0x61 = "Indigo Plateau"
+0x62 = "Saffron City"
+0x63 = "Route 4"
+0x64 = "Route 10"
+0x65 = "Route 1"
+0x66 = "Route 2"
+0x67 = "Route 3"
+0x68 = "Route 4"
+0x69 = "Route 5"
+0x6A = "Route 6"
+0x6B = "Route 7"
+0x6C = "Route 8"
+0x6D = "Route 9"
+0x6E = "Route 10"
+0x6F = "Route 11"
+0x70 = "Route 12"
+0x71 = "Route 13"
+0x72 = "Route 14"
+0x73 = "Route 15"
+0x74 = "Route 16"
+0x75 = "Route 17"
+0x76 = "Route 18"
+0x77 = "Route 19"
+0x78 = "Route 20"
+0x79 = "Route 21"
+0x7A = "Route 22"
+0x7B = "Route 23"
+0x7C = "Route 24"
+0x7D = "Route 25"
+0x7E = "Viridian Forest"
+0x7F = "Mt. Moon"
+0x80 = "S.S. Anne"
+0x81 = "Underground Path"
+0x82 = "Underground Path"
+0x83 = "Diglett's Cave"
+0x84 = "Victory Road"
+0x85 = "Rocket Hideout"
+0x86 = "Silph Co."
+0x87 = "Pokémon Mansion"
+0x88 = "Safari Zone"
+0x89 = "Pokémon League"
+0x8A = "Rock Tunnel"
+0x8B = "Seafoam Islands"
+0x8C = "Pokémon Tower"
+0x8D = "Cerulean Cave"
+0x8E = "Power Plant"
+0x8F = "One Island"
+0x90 = "Two Island"
+0x91 = "Three Island"
+0x92 = "Four Island"
+0x93 = "Five Island"
+0x94 = "Seven Island"
+0x95 = "Six Island"
+0x96 = "Kindle Road"
+0x97 = "Treasure Beach"
+0x98 = "Cape Brink"
+0x99 = "Bond Bridge"
+0x9A = "Three Isle Port"
+0x9B = "Sevii Isle 6"
+0x9C = "Sevii Isle 7"
+0x9D = "Oak's Lab"
+0x9E = "Sevii Isle 9"
+0x9F = "Resort Gorgeous"
+0xA0 = "Water Labyrinth"
+0xA1 = "Five Isle Meadow"
+0xA2 = "Memorial Pillar"
+0xA3 = "Outcast Island"
+0xA4 = "Green Path"
+0xA5 = "Water Path"
+0xA6 = "Ruin Valley"
+0xA7 = "Trainer Tower"
+0xA8 = "Canyon Entrance"
+0xA9 = "Sevault Canyon"
+0xAA = "Tanoby Ruins"
+0xAB = "Sevii Isle 22"
+0xAC = "Sevii Isle 23"
+0xAD = "Sevii Isle 24"
+0xAE = "Navel Rock"
+0xAF = "Mt. Ember"
+0xB0 = "Berry Forest"
+0xB1 = "Icefall Cave"
+0xB2 = "Rocket Warehouse"
+0xB3 = "Trainer Tower"
+0xB4 = "Dotted Hole"
+0xB5 = "Lost Cave"
+0xB6 = "Pattern Bush"
+0xB7 = "Altering Cave"
+0xB8 = "Tanoby Chambers"
+0xB9 = "Three Isle Path"
+0xBA = "Tanoby Key"
+0xBB = "Birth Island"
+0xBC = "Oak's Lab"
+0xBD = "Liptoo Chamber"
+0xBE = "Weepth Chamber"
+0xBF = "Dilford Chamber"
+0xC0 = "Scufib Chamber"
+0xC1 = "Rixy Chamber"
+0xC2 = "Viapois Chamber"
+0xC3 = "Ember Spa"
+0xC4 = "Celadon Dept."
+
+# One Area per place: the Pokémon Centers on Routes 4 and 10 count as their
+# routes, and the game's second Underground Path and Trainer Tower sections as
+# the first.
+[area_merges]
+0x63 = 0x68
+0x64 = 0x6E
+0x82 = 0x81
+0xB3 = 0xA7
+0xBC = 0x9D
+
+# The Gift and Static catalogue, from `cargo dev scan`: every givemon,
+# giveegg and setwildbattle in the ROM, decoded with its own species names.
+# FireRed's scripts keep FireRed's names; Radical Red's own give the species
+# and level, not the place. Neighbouring instructions of one script are one source.
+[[sources]]
+key = "lapras_silph"
+name = "Lapras in Silph Co."
+kind = "gift"
+at = [0x08161AE0]
+
+[[sources]]
+key = "mewtwo"
+name = "Mewtwo in Cerulean Cave"
+kind = "static"
+at = [0x0816251D]
+
+[[sources]]
+key = "articuno"
+name = "Articuno in the Seafoam Islands"
+kind = "static"
+at = [0x081631BF]
+
+[[sources]]
+key = "zapdos"
+name = "Zapdos in the Power Plant"
+kind = "static"
+at = [0x081637CB]
+
+[[sources]]
+key = "electrode_power_plant_1"
+name = "Electrode in the Power Plant"
+kind = "static"
+at = [0x0816383F]
+
+[[sources]]
+key = "electrode_power_plant_2"
+name = "Electrode in the Power Plant"
+kind = "static"
+at = [0x0816389D]
+
+[[sources]]
+key = "moltres"
+name = "Moltres on Mt. Ember"
+kind = "static"
+at = [0x08163B46]
+
+[[sources]]
+key = "hypno_berry_forest"
+name = "Hypno in Berry Forest"
+kind = "static"
+at = [0x08163CC1]
+
+[[sources]]
+key = "snorlax_route_12"
+name = "Snorlax on Route 12"
+kind = "static"
+at = [0x08168048]
+
+[[sources]]
+key = "snorlax_route_16"
+name = "Snorlax on Route 16"
+kind = "static"
+at = [0x08168155]
+
+[[sources]]
+key = "togepi_egg"
+name = "Togepi egg"
+kind = "egg"
+at = [0x081688C9]
+
+[[sources]]
+key = "starter"
+name = "Starter"
+kind = "starter"
+at = [0x08169C8B]
+
+[[sources]]
+key = "eevee_celadon"
+name = "Eevee in Celadon Mansion"
+kind = "gift"
+at = [0x0816C474]
+
+[[sources]]
+key = "game_corner_prize_1"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CCD4]
+
+[[sources]]
+key = "game_corner_prize_2"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CCE9]
+
+[[sources]]
+key = "game_corner_prize_3"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CCFE]
+
+[[sources]]
+key = "game_corner_prize_4"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CD13]
+
+[[sources]]
+key = "game_corner_prize_5"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CD28]
+
+[[sources]]
+key = "game_corner_prize_6"
+name = "Celadon Game Corner prize"
+kind = "gift"
+at = [0x0816CD3D]
+
+[[sources]]
+key = "mt_moon_fossil"
+name = "Mt. Moon fossil (Omanyte or Kabuto)"
+kind = "gift"
+at = [0x0816E769, 0x0816E7AE]
+
+[[sources]]
+key = "old_amber"
+name = "Old Amber (Aerodactyl)"
+kind = "gift"
+at = [0x0816E7F3]
+
+[[sources]]
+key = "fighting_dojo"
+name = "Fighting Dojo prize (Hitmonlee or Hitmonchan)"
+kind = "gift"
+at = [0x0816EC83]
+
+[[sources]]
+key = "magikarp_route_4"
+name = "Magikarp salesman on Route 4"
+kind = "gift"
+at = [0x0816F7C5]
+
+[[sources]]
+key = "cobalion_static"
+name = "Cobalion, level 65"
+kind = "static"
+at = [0x0904C018]
+
+[[sources]]
+key = "magikarp_gift"
+name = "Magikarp, level 5"
+kind = "gift"
+at = [0x0904C086]
+
+[[sources]]
+key = "magikarp_gift_2"
+name = "Magikarp, level 5"
+kind = "gift"
+at = [0x0904C0E6]
+
+[[sources]]
+key = "zapdos_static"
+name = "Zapdos, level 70"
+kind = "static"
+at = [0x090519EE]
+
+[[sources]]
+key = "snorlax_static"
+name = "Snorlax, level 45"
+kind = "static"
+at = [0x0905320D]
+
+[[sources]]
+key = "snorlax_static_2"
+name = "Snorlax, level 45"
+kind = "static"
+at = [0x09053285]
+
+[[sources]]
+key = "eevee_gift"
+name = "Eevee, level 5"
+kind = "gift"
+at = [0x09054302]
+
+[[sources]]
+key = "articuno_static"
+name = "Articuno, level 70"
+kind = "static"
+at = [0x0905623A]
+
+[[sources]]
+key = "keldeo_static"
+name = "Keldeo, level 70"
+kind = "static"
+at = [0x090563C8]
+
+[[sources]]
+key = "kyogre_static"
+name = "Kyogre, level 100"
+kind = "static"
+at = [0x09056785]
+
+[[sources]]
+key = "charmander_torchic_egg"
+name = "Charmander or Torchic egg"
+kind = "egg"
+at = [0x090570A7, 0x090570BB]
+
+[[sources]]
+key = "cyndaquil_totodile_chikorita_treecko_bulbasaur_snivy_squirtle_mudkip_froakie_piplup_chimchar_oshawott_fennekin_egg"
+name = "Cyndaquil or Totodile or Chikorita or Treecko or Bulbasaur or Snivy or Squirtle or Mudkip or Froakie or Piplup or Chimchar or Oshawott or Fennekin egg"
+kind = "egg"
+at = [0x0905719E, 0x090571A8, 0x090571B2, 0x090571D0, 0x090571DA, 0x090571E4, 0x09057216, 0x09057220, 0x09057234, 0x0905723E, 0x09057248, 0x09057266, 0x09057270]
+
+[[sources]]
+key = "mew_gift"
+name = "Mew, level 100"
+kind = "gift"
+at = [0x09059548]
+
+[[sources]]
+key = "mew_static"
+name = "Mew, level 100"
+kind = "static"
+at = [0x09059A8D]
+
+[[sources]]
+key = "moltres_static"
+name = "Moltres, level 70"
+kind = "static"
+at = [0x0905A903]
+
+[[sources]]
+key = "virizion_static"
+name = "Virizion, level 65"
+kind = "static"
+at = [0x0905B06D]
+
+[[sources]]
+key = "pansear_egg"
+name = "Pansear egg"
+kind = "egg"
+at = [0x090AE4E1]
+
+[[sources]]
+key = "landorus_egg"
+name = "Landorus egg"
+kind = "egg"
+at = [0x094334B1]

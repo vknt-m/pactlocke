@@ -29,6 +29,8 @@ const ACCEPTANCE: &[(&str, &str)] = &[
     ("sapphire-usa-1.0", "sapphire_acceptance"),
     ("glazed-9.2.0", "glazed_acceptance"),
     ("gaia-3.2", "gaia_acceptance"),
+    ("unbound-2.1.1.1", "unbound_acceptance"),
+    ("radical-red-4.1", "radical_red_acceptance"),
 ];
 
 fn main() -> ExitCode {

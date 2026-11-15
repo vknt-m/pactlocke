@@ -37,6 +37,9 @@ pub struct Hack {
     pub field_lock: u32,
     /// A single trainer with a full team, for a trainer battle.
     pub single_trainer: u16,
+    /// Free ROM (0xFF in the clean ROM) for the test scripts, past the Sync
+    /// Gates' hold area and anything else the Game Profile writes there.
+    pub test_scripts: u32,
 }
 
 /// The ROM `cargo dev accept` names in `PACTLOCKE_ROM`, or the patched ROM
@@ -69,8 +72,6 @@ macro_rules! rom_or_skip {
 }
 
 const TEXT_SPEED: u32 = 0x14; // in save block 2, bits 0-2
-/// Free ROM in both hacks (0xFF), past the Sync Gates' hold area and the Safari line.
-const TEST_SCRIPTS: u32 = 0x09F0_1000;
 const PIKACHU: u16 = 25;
 const RATTATA: u16 = 19;
 const POKE_BALL: u16 = 4;
@@ -156,7 +157,7 @@ fn run_with(rom: Vec<u8>, ruleset: Ruleset) -> Driver {
         profile,
         rom,
         watcher: None,
-        next_script: TEST_SCRIPTS,
+        next_script: GAME.test_scripts,
     };
     d.watched();
     d
@@ -399,8 +400,11 @@ fn to_the_overworld(d: &mut Driver) {
                 return;
             }
         }
+        // START leaves a naming screen; on the overworld it would open the
+        // start menu (Unbound's stays open), so B closes whatever A opened.
         let keys = match frame % 64 {
             0..3 => Keys::A,
+            32..35 if frame > 6000 && d.game.game_mut().at_safe_overworld_point() => Keys::B,
             32..35 if frame > 6000 => Keys::START,
             _ => Keys::NONE,
         };
@@ -433,10 +437,14 @@ fn scripted_wild_battle(d: &mut Driver, level: u8) {
     d.until_action_menu(Keys::A, 6000);
 }
 
-/// The foe on 1 HP and the Player's on plenty: FIGHT wins it, then A through what follows.
+/// The foe on 1 HP with a Perish count of zero, and the Player's on plenty:
+/// it faints at the end of the turn even when the lead's first move does no
+/// damage (a CFRU hack's givemon teaches newer moves), then A through what follows.
 fn win_the_battle(d: &mut Driver) {
     d.set_battler_hp(1, 1);
     d.set_battler_hp(0, 999);
+    let perish = d.game.game_mut().faint_active_battler(1).expect("in battle");
+    perish.into_iter().for_each(|change| d.change(change));
     d.until_battle_over(Keys::A, 6000);
     d.until_idle(Keys::B, 6000);
 }
@@ -573,6 +581,28 @@ fn a_pokemon_that_faints_goes_to_the_dead_box_in_the_hacks_own_pc() {
     d.assert_shadow_matched(10);
 }
 
+#[test]
+fn a_pokemon_the_game_sends_to_its_pc_is_found_there() {
+    let rom = rom_or_skip!();
+    let mut d = run_with(rom, Ruleset::default());
+    to_the_overworld(&mut d);
+    while d.game.game_mut().party().len() < 6 {
+        a_pikachu_and_poke_balls(&mut d, 5);
+    }
+    assert!(d.game.game_mut().pc().is_empty(), "an empty PC to start");
+    // With the party full, the game's own givemon stores the Pokémon in its PC.
+    a_pikachu_and_poke_balls(&mut d, 7);
+    let pc = d.game.game_mut().pc();
+    eprintln!("the PC holds {pc:?}");
+    assert!(
+        pc.iter().any(|s| s.box_number == 1
+            && s.pokemon.species == PIKACHU
+            && s.pokemon.nickname.eq_ignore_ascii_case("Pikachu")),
+        "the given Pikachu, read where and how the game keeps it: {pc:?}"
+    );
+    d.assert_shadow_matched(10);
+}
+
 /// "Items can't" in the game's characters, as "Items can't be used now." shows it.
 const ITEMS_CANT: [u8; 11] = [0xC3, 0xE8, 0xD9, 0xE1, 0xE7, 0x00, 0xD7, 0xD5, 0xE2, 0xB4, 0xE8];
 
@@ -605,7 +635,10 @@ fn in_a_trainer_battle_the_bag_is_refused_and_the_battle_style_is_set() {
         },
     );
     to_the_overworld(&mut d);
-    assert_eq!(d.game.game_mut().option("battle_style").as_deref(), Some("set"));
+    // A game that always plays Set has no battle style option to set.
+    if d.profile.options.contains_key("battle_style") {
+        assert_eq!(d.game.game_mut().option("battle_style").as_deref(), Some("set"));
+    }
     a_pikachu_and_poke_balls(&mut d, 50);
     let script = trainer_battle(&d, GAME.single_trainer);
     d.run_script(&script);

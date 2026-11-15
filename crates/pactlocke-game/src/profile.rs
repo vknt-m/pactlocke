@@ -220,6 +220,25 @@ pub struct Symbols {
     /// outside save block 1 (Gaia); otherwise `layout.balls_pocket` in save block 1.
     #[serde(default)]
     pub balls_pocket: Option<u32>,
+    /// Where each PC box starts, for a game that spreads its boxes over RAM
+    /// (CFRU's 25); otherwise the boxes follow one another from `pc_storage`.
+    #[serde(default)]
+    pub pc_box_starts: Option<Vec<u32>>,
+}
+
+/// The size of CFRU's compressed PC slot.
+pub const COMPRESSED_SLOT_SIZE: u32 = 58;
+
+/// How a PC slot holds a Pokémon.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoxFormat {
+    /// The party form's first `box_slot_size` bytes (pret's BoxPokemon).
+    #[default]
+    Full,
+    /// CFRU's 58-byte CompressedPokemon: no checksum, PP, contest stats or
+    /// ribbons, moves packed in 10 bits each, never encrypted.
+    Compressed,
 }
 
 /// How Pokémon, battlers, items and the PC are laid out.
@@ -228,6 +247,9 @@ pub struct Symbols {
 pub struct Layout {
     pub party_slot_size: u32,
     pub box_slot_size: u32,
+    /// How a PC slot holds a Pokémon: the party form's start (the default) or CFRU's compressed form.
+    #[serde(default)]
+    pub box_format: BoxFormat,
     /// Whether the four substructures are shuffled and XOR-encrypted.
     pub encrypted: bool,
     pub ot_id: u32,
@@ -322,7 +344,7 @@ pub struct OptionDef {
 pub struct RuleMethods {
     /// Refuses ball throws in a closed Area.
     pub catch_block: Option<Method>,
-    /// The level-100 checks; the first byte of each site is the cap.
+    /// The level-100 checks; the first byte of each site is the cap, less its `below_cap`.
     pub level_cap: Option<Method>,
     pub no_items_trainer: Option<Method>,
     pub no_items_wild: Option<Method>,
@@ -355,6 +377,8 @@ pub enum Method {
     },
     /// The game's own option does it; the Player turns it on and the lock checks it.
     Native { option: String, value: String },
+    /// The game always plays this way (Radical Red's Set battle style): nothing to do.
+    Always,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -366,6 +390,10 @@ pub struct PatchSite {
     /// What Pactlocke writes there while the rule applies, where it is fixed.
     #[serde(default)]
     pub write: Option<HexBytes>,
+    /// For a level cap site: how far below the cap its first byte is written
+    /// (1 where the game checks `level > 99`, as CFRU's EXP code does).
+    #[serde(default)]
+    pub below_cap: u8,
 }
 
 /// Bytes written in a profile as hex pairs, such as `"10 B5 00 24"`.

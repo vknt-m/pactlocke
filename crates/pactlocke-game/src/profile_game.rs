@@ -4,12 +4,13 @@
 use std::sync::Arc;
 
 use crate::caps::MAX_LEVEL;
+use crate::compressed;
 use crate::game::{
     Actions, Badges, Battle, BattleKind, Battler, Change, Game, GameError, Memory, PartyStats, Pokemon, ScriptContext,
     ScriptStatus, Side, StoredPokemon,
 };
 use crate::profile::HOLD_SCRIPT_LEN;
-use crate::profile::{GameProfile, Method, PatchSite, Place, ROM_BASE};
+use crate::profile::{BoxFormat, GameProfile, Method, PatchSite, Place, ROM_BASE};
 use crate::{Area, Source, text};
 use crate::{AvatarRoom, OAM, OBJ_PALETTES, OBJ_TILES, SpriteImage, Whereabouts};
 
@@ -106,9 +107,40 @@ impl<M: Memory> ProfileGame<M> {
 
     fn box_slot_addr(&mut self, box_index: u8, slot_index: u8) -> u32 {
         let layout = &self.profile.layout;
+        let size = layout.box_slot_size;
+        // The store checked there is a start for every box.
+        if let Some(starts) = &self.profile.symbols.pc_box_starts {
+            return starts[usize::from(box_index)] + u32::from(slot_index) * size;
+        }
         let index = u32::from(box_index) * u32::from(layout.pc_box_slots) + u32::from(slot_index);
-        let (offset, size) = (layout.pc_boxes_offset, layout.box_slot_size);
+        let offset = layout.pc_boxes_offset;
         self.place(self.profile.symbols.pc_storage) + offset + index * size
+    }
+
+    /// A party Pokémon's bytes as a PC slot holds them.
+    fn box_slot_bytes(&self, party: &[u8]) -> Vec<u8> {
+        let layout = &self.profile.layout;
+        match layout.box_format {
+            BoxFormat::Full => party[..layout.box_slot_size as usize].to_vec(),
+            BoxFormat::Compressed => compressed::compress(party, layout.substructures as usize),
+        }
+    }
+
+    /// A Pokémon in CFRU's compressed PC slot at `addr`.
+    fn compressed_pokemon(&mut self, addr: u32) -> Pokemon {
+        let layout = self.profile.layout.clone();
+        let raw = self.bytes(addr, layout.box_slot_size as usize);
+        let word = |at: usize| u32::from_le_bytes(raw[at..at + 4].try_into().unwrap());
+        let nickname = layout.nickname as usize;
+        Pokemon {
+            pid: word(0),
+            ot_id: word(layout.ot_id as usize),
+            species: u16::from_le_bytes([raw[compressed::SPECIES], raw[compressed::SPECIES + 1]]),
+            nickname: text::decode(&raw[nickname..nickname + layout.nickname_length as usize]),
+            met_section: u16::from(raw[compressed::MET_LOCATION]),
+            is_egg: raw[layout.flags as usize] & layout.egg_mask != 0,
+            stats: None,
+        }
     }
 
     fn has_species(&mut self, addr: u32) -> bool {
@@ -125,6 +157,9 @@ impl<M: Memory> ProfileGame<M> {
     /// Reads a Pokémon at `addr`; party Pokémon also carry their stats.
     fn pokemon(&mut self, addr: u32, in_party: bool) -> Pokemon {
         let layout = self.profile.layout.clone();
+        if !in_party && layout.box_format == BoxFormat::Compressed {
+            return self.compressed_pokemon(addr);
+        }
         let size = if in_party {
             layout.party_slot_size
         } else {
@@ -502,7 +537,7 @@ impl<M: Memory> Game for ProfileGame<M> {
             .into_iter()
             .map(|site| {
                 let mut bytes = site.expect.0;
-                bytes[0] = level;
+                bytes[0] = level.saturating_sub(site.below_cap);
                 Change::Patch { addr: site.at, bytes }
             })
             .collect())
@@ -592,7 +627,7 @@ impl<M: Memory> Game for ProfileGame<M> {
             0,
             Change::Write {
                 addr: free,
-                bytes: moved[..layout.box_slot_size as usize].to_vec(),
+                bytes: self.box_slot_bytes(&moved),
             },
         );
         Ok(changes)
@@ -672,8 +707,10 @@ impl<M: Memory> Game for ProfileGame<M> {
     }
 
     fn force_set_mode(&mut self) -> Actions {
-        let Some(Method::OptionBit { option, value }) = self.profile.rules.set_mode.clone() else {
-            return Err(GameError::NoMethod("set mode"));
+        let (option, value) = match self.profile.rules.set_mode.clone() {
+            Some(Method::OptionBit { option, value }) => (option, value),
+            Some(Method::Always) => return Ok(Vec::new()),
+            _ => return Err(GameError::NoMethod("set mode")),
         };
         if self.option(&option).as_deref() == Some(value.as_str()) {
             return Ok(Vec::new());

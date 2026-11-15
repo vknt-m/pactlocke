@@ -1,0 +1,799 @@
+# Pokémon Unbound 2.1.1.1 by Skeli, a FireRed (USA) 1.0 hack on CFRU (the
+# Complete Fire Red Upgrade). It keeps FireRed's RAM, save block pointers,
+# event flags, trainer table and most field code, but CFRU replaces the
+# battle engine, EXP and Bag code and keeps Pokémon unencrypted, in a fixed
+# order. Its PC is CFRU's: 25 boxes of 58-byte compressed slots, spread over
+# RAM (CFRU's sPokemonBoxPtrs, at 0x08A6CB2C in this ROM). Its tables were
+# found by reading FireRed's literal pools in this ROM, its patch sites by
+# `cargo dev scan`, and its Areas, Gifts, Statics
+# and leaders are its own, read from this ROM.
+
+schema = 1
+id = "unbound-2.1.1.1"
+name = "Pokémon Unbound 2.1.1.1"
+game_code = "BPRE"
+family = "FRLG"
+sha1 = "b4776b82a4c7915d0fadeaa27e013523f99dfd94"
+status = "supported"
+
+[symbols]
+party = 0x02024284
+party_count = 0x02024029
+enemy_party = 0x0202402C              # gEnemyParty
+# FireRed's PC pointer; CFRU reads its boxes from pc_box_starts instead.
+pc_storage = { pointer = 0x03005010 }
+save_block_1 = { pointer = 0x03005008 }
+save_block_2 = { pointer = 0x0300500C }
+region_map_section = 0x02036E10        # gMapHeader.regionMapSectionId
+main_callback2 = 0x030030F4            # gMain.callback2
+overworld_callback = 0x080565B4        # CB2_Overworld
+in_battle = { at = 0x03003529, mask = 0x02 }   # gMain.inBattle
+battle_type_flags = 0x02022B4C
+battle_mons = 0x02023BE4
+battler_party_indexes = 0x02023BCE
+battler_statuses3 = 0x02023DFC
+disable_structs = 0x02023E0C
+script_context_status = 0x03000EA8     # 0 running, 1 waiting, 2 idle
+script_context = 0x03000EB0
+species_info = 0x099E0C9C              # CFRU's gBaseStats
+species_names = 0x0966A98C             # gSpeciesNames
+evolution_table = 0x099F3A7A           # gEvolutionTable
+items = 0x08876200                     # CFRU's item table
+trainers = 0x0823EAC8                  # gTrainers, where FireRed has it
+type_names = 0x08A4EAD4                # gTypeNames, with Fairy
+message_buffer = 0x02021D18            # gStringVar4
+# Unbound keeps the Bag in RAM, outside save block 1 (gBagPockets[2] points here).
+balls_pocket = 0x0203C354
+# CFRU's boxes: 1 to 19 one after another, 20 to 22, 23 and 24, then 25 in save block 2.
+pc_box_starts = [
+  0x02029318, 0x020299E4, 0x0202A0B0, 0x0202A77C, 0x0202AE48, 0x0202B514, 0x0202BBE0,
+  0x0202C2AC, 0x0202C978, 0x0202D044, 0x0202D710, 0x0202DDDC, 0x0202E4A8, 0x0202EB74,
+  0x0202F240, 0x0202F90C, 0x0202FFD8, 0x020306A4, 0x02030D70, 0x0203CB44, 0x0203D210,
+  0x0203D8DC, 0x02027434, 0x02027B00, 0x02024638,
+]
+
+[layout]
+party_slot_size = 100
+box_slot_size = 58
+box_format = "compressed"
+encrypted = false
+ot_id = 0x04
+nickname = 0x08
+nickname_length = 10
+flags = 0x13
+egg_mask = 0x04
+has_species_mask = 0x02
+checksum = 0x1C
+substructures = 0x20
+level = 0x54
+hp = 0x56
+max_hp = 0x58
+battle_mon_size = 0x58
+battle_mon_hp = 0x28
+battle_type_trainer = 0x08
+# BATTLE_TYPE_OLD_MAN_TUTORIAL, _GHOST and _POKEDUDE, as in FireRed.
+battle_type_uncatchable = 0x18200
+battle_type_double = 0x01
+perish_song_status3 = 0x20
+disable_struct_size = 0x1C
+perish_timer = 0x0F
+script_context_stack_depth = 0x00
+script_context_stack = 0x0C
+script_context_pointer = 0x08
+species_info_size = 28
+species_name_length = 11
+species_count = 1294                   # NUM_SPECIES: Urshifu is the last name
+evolutions_per_species = 16            # EVOS_PER_MON
+evolution_size = 8
+evolution_target = 4
+primary_type = 6
+item_size = 44
+item_count = 729                       # Hisui Rock is the last item
+item_pocket = 26
+item_battle_usage = 32
+ball_pocket = 3
+pc_boxes = 25
+pc_box_slots = 30
+pc_boxes_offset = 4
+trainer_id = 0x0A                      # in save block 2
+play_time = 0x0E                       # in save block 2
+badge_flags = 0x820                    # FLAG_BADGE01_GET: set after Mirskle's battle
+event_flags = 0xEE0                    # in save block 1
+trainer_size = 40
+trainer_party_flags = 0
+trainer_party_size = 32
+trainer_party = 36
+trainer_mon_level = 2
+trainer_mon_sizes = [8, 16, 8, 16]
+type_name_length = 7
+balls_pocket = 0x430                   # FireRed's, unused: see symbols.balls_pocket
+balls_pocket_slots = 50
+dead_box = 25
+
+[options.battle_style]
+name = "Battle style"
+menu = "OPTIONS > BATTLE STYLE"
+save_block = 2
+offset = 0x15
+mask = 0x02
+values = { shift = 0x00, set = 0x02 }
+
+# Closes an Area: the ball is refused in the Bag with the game's own "This
+# isn't the time to use that!" line. The Safari Zone's BALL still shows
+# FireRed's "box is full" line: its battle string isn't found in CFRU yet.
+[rules.catch_block]
+method = "patch"
+sites = [
+  { at = 0x08040F6C, expect = "10 B5 00 24", write = "01 20 70 47" },  # IsPlayerPartyAndPokemonStorageFull -> TRUE
+  { at = 0x080A1E5C, expect = "31 66 41 08", write = "25 64 41 08" },  # gText_BoxFull -> "This isn't the time to use that!"
+]
+
+# CFRU checks `level >= MAX_LEVEL` as `cmp rX, #99`, written one below the
+# cap: three sites in its Cmd_getexp (battle command 0x23) and one in its
+# EXP update. FireRed's two item-use checks (Rare Candy) keep `cmp #100`.
+[rules.level_cap]
+method = "patch"
+sites = [
+  { at = 0x089E1DFC, expect = "63 2B", below_cap = 1 },  # Cmd_getexp
+  { at = 0x089E2274, expect = "63 2A", below_cap = 1 },  # Cmd_getexp
+  { at = 0x089E2664, expect = "63 2B", below_cap = 1 },  # Cmd_getexp
+  { at = 0x089E19AC, expect = "63 2B", below_cap = 1 },  # the EXP update handler
+  { at = 0x08041834, expect = "64 28" },                 # PokemonUseItemEffects (Rare Candy)
+  { at = 0x0804274E, expect = "64 28" },                 # PokemonItemUseNoEffect
+]
+
+# CFRU's hook for FireRed's Bag check calls its IsBagDisabled() and branches
+# past "Items can't be used now." when it's false: the branch becomes a nop.
+[rules.no_items_trainer]
+method = "patch"
+sites = [{ at = 0x089A24E6, expect = "01 D0", write = "C0 46" }]
+
+# Only Poké Balls keep a battle use in wild battles, in CFRU's item table.
+[rules.no_items_wild]
+method = "zero_table_field"
+
+[rules.set_mode]
+method = "option_bit"
+option = "battle_style"
+value = "set"
+
+# FireRed's trygivecaughtmonnick is still command 0xF3 in CFRU's own table,
+# and FireRed's shared MSGBOX_YESNO script is unchanged.
+[rules.must_nickname]
+method = "key_filter"
+battle_script_pointer = 0x02023D74   # gBattlescriptCurrInstr
+command_table = 0x0899FFFC           # CFRU's gBattleScriptingCommandsTable
+command = 0x0802DD39                 # Cmd_trygivecaughtmonnick
+battle_communication = 0x02023E82
+field_yes_no = [0x081A4E65]
+question = "give a nickname"
+
+# Level cap stages: the eight gym leaders, by the main game's trainer ids
+# (the 7xx and 72 to 88 teams are other difficulties and rematches). Not yet
+# listed: the Elite Four (410 to 413) and the Champion, whose defeat flags
+# haven't been found.
+[[level_caps]]
+name = "Mirskle"
+trainers = [6]
+badges = 1
+
+[[level_caps]]
+name = "Véga"
+trainers = [415]
+badges = 2
+
+[[level_caps]]
+name = "Alice"
+trainers = [20]
+badges = 3
+
+[[level_caps]]
+name = "Mel"
+trainers = [416]
+badges = 4
+
+[[level_caps]]
+name = "Galavan"
+trainers = [418]
+badges = 5
+
+[[level_caps]]
+name = "Big Mo"
+trainers = [419]
+badges = 6
+
+[[level_caps]]
+name = "Tessy"
+trainers = [417]
+badges = 7
+
+[[level_caps]]
+name = "Benjamin"
+trainers = [420]
+badges = 8
+
+# Sync Gates: the leaders whose battle is a plain `trainerbattle` with their
+# trainer id. Mirskle's is the verified instruction (the scan's
+# second match; the first, at 0x087413D5, is a type-8 variant that never
+# starts a battle). The others are checked in this ROM's bytes only. Mel,
+# Tessy, Benjamin, the Elite Four and the Champion start their battles from
+# a script variable through CFRU's own code, and aren't gates yet.
+[sync_gates]
+hold = 0x09FF0000
+
+[[sync_gates.gates]]
+name = "Mirskle"
+sites = [{ at = 0x0874148F, expect = "5C 01 06 00 00" }]
+
+[[sync_gates.gates]]
+name = "Véga"
+sites = [
+    { at = 0x08741818, expect = "5C 01 9F 01 00" },
+    { at = 0x087650E5, expect = "5C 01 9F 01 00" },
+]
+
+[[sync_gates.gates]]
+name = "Alice"
+sites = [{ at = 0x0878E827, expect = "5C 03 14 00 00" }]
+
+[[sync_gates.gates]]
+name = "Galavan"
+sites = [{ at = 0x08771C3D, expect = "5C 03 A2 01 00" }]
+
+[[sync_gates.gates]]
+name = "Big Mo"
+sites = [
+    { at = 0x087FD96D, expect = "5C 01 A3 01 00" },
+    { at = 0x087FD980, expect = "5C 01 A3 01 00" },
+]
+
+# Unbound's region-map sections and their names, read from FireRed's sMapNames
+# table (0x083F1CAC), which the hack keeps and refills. The capitals are
+# FireRed's leftovers, which no map uses.
+[areas]
+0x58 = "Frozen Heights"
+0x59 = "Bellin Town"
+0x5A = "Dresco Town"
+0x5B = "Crater Town"
+0x5C = "Blizzard City"
+0x5D = "Tehl Town"
+0x5E = "Fallshore City"
+0x5F = "Epidimy Town"
+0x60 = "Tarmigan Town"
+0x61 = "INDIGO PLATEAU"
+0x62 = "Dehara City"
+0x63 = "Route 4"
+0x64 = "Route 10"
+0x65 = "Route 1"
+0x66 = "Route 2"
+0x67 = "Route 3"
+0x68 = "Ruins of Void"
+0x69 = "Route 5"
+0x6A = "Route 6"
+0x6B = "Route 7"
+0x6C = "Route 8"
+0x6D = "Route 9"
+0x6E = "ROUTE 10"
+0x6F = "Route 11"
+0x70 = "Route 12"
+0x71 = "Route 13"
+0x72 = "Route 14"
+0x73 = "Route 15"
+0x74 = "Route 16"
+0x75 = "Route 17"
+0x76 = "Route 18"
+0x77 = "Seaport City"
+0x78 = "Antisis City"
+0x79 = "Vivill Town"
+0x7A = "Gurun Town"
+0x7B = "Great Desert"
+0x7C = "Vivill Warehouse"
+0x7D = "Cube Space"
+0x7E = "Grim Woods"
+0x7F = "Cinder Volcano"
+0x80 = "Hidden Grotto"
+0x81 = "Underground Pass"
+0x82 = "Frost Mountain"
+0x83 = "Valley Cave"
+0x84 = "Victory Road"
+0x85 = "Shadow Base"
+0x86 = "KBT Expressway"
+0x87 = "Tarmigan Mansion"
+0x88 = "Flower Paradise"
+0x89 = "Pokémon League"
+0x8A = "Thundercap Mt."
+0x8B = "Rift Cave"
+0x8C = "Vivill Woods"
+0x8D = "Icicle Cave"
+0x8E = "Auburn Waterway"
+0x8F = "Antisis Sewers"
+0x90 = "Polder Town"
+0x91 = "Magnolia Town"
+0x92 = "Redwood Village"
+0x93 = "Cube Corp."
+0x94 = "SEVEN ISLAND"
+0x95 = "SIX ISLAND"
+0x96 = "KINDLE ROAD"
+0x97 = "Distortion World"
+0x98 = "Newmoon Island"
+0x99 = "Frozen Forest"
+0x9A = "Cave of Being"
+0x9B = "Pokémon Day Care"
+0x9C = "Lost Tunnel"
+0x9D = "Icy Hole"
+0x9E = "Crystal Peak"
+0x9F = "Glimmer Isle"
+0xA0 = "Game Corner"
+0xA1 = "FIVE ISLE MEADOW"
+0xA2 = "MEMORIAL PILLAR"
+0xA3 = "Fullmoon Island"
+0xA4 = "Safari Zone"
+0xA5 = "Old Map"
+0xA6 = "RUIN VALLEY"
+0xA7 = "Battle Frontier"
+0xA8 = "CANYON ENTRANCE"
+0xA9 = "SEVAULT CANYON"
+0xAA = "TANOBY RUINS"
+0xAB = "SEVII ISLE 22"
+0xAC = "SEVII ISLE 23"
+0xAD = "SEVII ISLE 24"
+0xAE = "NAVEL ROCK"
+0xAF = "MT. EMBER"
+0xB0 = "BERRY FOREST"
+0xB1 = "ICEFALL CAVE"
+0xB2 = "Battle Mine"
+0xB3 = "Battle Tower"
+0xB4 = "Battle Circus"
+0xB5 = "Cootes Bog"
+0xB6 = "Magnolia Fields"
+0xB7 = "Redwood Forest"
+0xB8 = "Autl Woods"
+0xB9 = "Cliff Cave"
+0xBA = "Antisis Port"
+0xBB = "Battleground"
+0xBC = "MONEAN CHAMBER"
+0xBD = "Underwater"
+0xBE = "S.S. Marine"
+0xBF = "Ferrothorn Turf"
+0xC0 = "Tomb of Borrius"
+0xC1 = "Desert Ruins"
+0xC2 = "Frozen Tomb"
+0xC3 = "Island Cave"
+0xC4 = "Dehara Dept."
+
+# The Gift and Static catalogue, from `cargo dev scan`: every givemon,
+# giveegg and setwildbattle in the ROM, decoded with its own species names.
+# Names give the species and level, not the place: the maps are not decoded.
+# Neighbouring instructions of one script are one source. Unbound gives its
+# starter through CFRU code, not a givemon, so it is not catalogued yet.
+[[sources]]
+key = "zapdos_static"
+name = "Zapdos, level 50"
+kind = "static"
+at = [0x081637CB]
+
+[[sources]]
+key = "moltres_static"
+name = "Moltres, level 50"
+kind = "static"
+at = [0x08163B46]
+
+[[sources]]
+key = "scripted_gift"
+name = "Pokémon a script chooses, level 33"
+kind = "gift"
+at = [0x0816CCD4]
+
+[[sources]]
+key = "scripted_gift_2"
+name = "Pokémon a script chooses, level 25"
+kind = "gift"
+at = [0x0816CCE9]
+
+[[sources]]
+key = "scripted_gift_3"
+name = "Pokémon a script chooses, level 25"
+kind = "gift"
+at = [0x0816CCFE]
+
+[[sources]]
+key = "scripted_gift_4"
+name = "Pokémon a script chooses, level 35"
+kind = "gift"
+at = [0x0816CD13]
+
+[[sources]]
+key = "scripted_gift_5"
+name = "Pokémon a script chooses, level 35"
+kind = "gift"
+at = [0x0816CD28]
+
+[[sources]]
+key = "scripted_gift_6"
+name = "Pokémon a script chooses, level 18"
+kind = "gift"
+at = [0x0816CD3D]
+
+[[sources]]
+key = "bellsprout_gift"
+name = "Bellsprout, level 20"
+kind = "gift"
+at = [0x0826D695]
+
+[[sources]]
+key = "cubchoo_egg"
+name = "Cubchoo egg"
+kind = "egg"
+at = [0x084217D1]
+
+[[sources]]
+key = "magmortar_egg"
+name = "Magmortar egg"
+kind = "egg"
+at = [0x08704061]
+
+[[sources]]
+key = "togepi_egg"
+name = "Togepi egg"
+kind = "egg"
+at = [0x08762901]
+
+[[sources]]
+key = "clefairy_static"
+name = "Clefairy, level 20"
+kind = "static"
+at = [0x08765350]
+
+[[sources]]
+key = "sandygast_static"
+name = "Sandygast, level 15"
+kind = "static"
+at = [0x08780478]
+
+[[sources]]
+key = "sandygast_static_2"
+name = "Sandygast, level 15"
+kind = "static"
+at = [0x08780776]
+
+[[sources]]
+key = "sandygast_static_3"
+name = "Sandygast, level 35"
+kind = "static"
+at = [0x087817AA]
+
+[[sources]]
+key = "sandygast_static_4"
+name = "Sandygast, level 35"
+kind = "static"
+at = [0x08781824]
+
+[[sources]]
+key = "articuno_static"
+name = "Articuno, level 22"
+kind = "static"
+at = [0x087888FC]
+
+[[sources]]
+key = "mrmime_static"
+name = "Mr. Mime, level 50"
+kind = "static"
+at = [0x087C3F07]
+
+[[sources]]
+key = "diglett_static"
+name = "Diglett, level 39"
+kind = "static"
+at = [0x087C71F0]
+
+[[sources]]
+key = "golem_static"
+name = "Golem, level 42"
+kind = "static"
+at = [0x087C72D4]
+
+[[sources]]
+key = "dugtrio_static"
+name = "Dugtrio, level 45"
+kind = "static"
+at = [0x087C73AD]
+
+[[sources]]
+key = "shellder_static"
+name = "Shellder, level 45"
+kind = "static"
+at = [0x087CF14C]
+
+[[sources]]
+key = "bronzong_static"
+name = "Bronzong, level 37"
+kind = "static"
+at = [0x087D2A08]
+
+[[sources]]
+key = "dusclops_static"
+name = "Dusclops, level 37"
+kind = "static"
+at = [0x087D2A78]
+
+[[sources]]
+key = "groudon_static"
+name = "Groudon, level 40"
+kind = "static"
+at = [0x087D6FED]
+
+[[sources]]
+key = "voltorb_static"
+name = "Voltorb, level 35"
+kind = "static"
+at = [0x087EA680]
+
+[[sources]]
+key = "electrode_static"
+name = "Electrode, level 40"
+kind = "static"
+at = [0x087EAD2E]
+
+[[sources]]
+key = "scripted_gift_7"
+name = "Pokémon a script chooses, level 30"
+kind = "gift"
+at = [0x087EC597]
+
+[[sources]]
+key = "scripted_gift_8"
+name = "Pokémon a script chooses, level 35"
+kind = "gift"
+at = [0x087EDDF1]
+
+[[sources]]
+key = "paras_static"
+name = "Paras, level 35"
+kind = "static"
+at = [0x087EF119]
+
+[[sources]]
+key = "foongus_static"
+name = "Foongus, level 35"
+kind = "static"
+at = [0x087EF1CC]
+
+[[sources]]
+key = "kecleon_static"
+name = "Kecleon, level 45"
+kind = "static"
+at = [0x087F6DC4]
+
+[[sources]]
+key = "golem_egg"
+name = "Golem egg"
+kind = "egg"
+at = [0x089FC823]
+
+[[sources]]
+key = "pansear_egg"
+name = "Pansear egg"
+kind = "egg"
+at = [0x089FCE2D]
+
+[[sources]]
+key = "diggersby_static"
+name = "Diggersby, level 4"
+kind = "static"
+at = [0x08A63B9A]
+
+[[sources]]
+key = "diggersby_static_2"
+name = "Diggersby, level 4"
+kind = "static"
+at = [0x08A63EAA]
+
+[[sources]]
+key = "landorus_egg"
+name = "Landorus egg"
+kind = "egg"
+at = [0x096991F5]
+
+[[sources]]
+key = "diggersby_egg"
+name = "Diggersby egg"
+kind = "egg"
+at = [0x097CC03A]
+
+[[sources]]
+key = "trubbish_garbodor_static"
+name = "Trubbish or Garbodor, level 48"
+kind = "static"
+at = [0x09E51EA5, 0x09E51ED2]
+
+[[sources]]
+key = "victini_gift"
+name = "Victini, level 75"
+kind = "gift"
+at = [0x09E55A41]
+
+[[sources]]
+key = "volcanion_static"
+name = "Volcanion, level 80"
+kind = "static"
+at = [0x09E5826D]
+
+[[sources]]
+key = "jirachi_static"
+name = "Jirachi, level 70"
+kind = "static"
+at = [0x09E5B2AD]
+
+[[sources]]
+key = "clefairy_static_2"
+name = "Clefairy, level 20"
+kind = "static"
+at = [0x09E5B4ED]
+
+[[sources]]
+key = "ditto_static"
+name = "Ditto, level 50"
+kind = "static"
+at = [0x09E5D105]
+
+[[sources]]
+key = "hoopa_static"
+name = "Hoopa, level 60"
+kind = "static"
+at = [0x09E5F39F]
+
+[[sources]]
+key = "hoopa_gift"
+name = "Hoopa, level 60"
+kind = "gift"
+at = [0x09E5F414]
+
+[[sources]]
+key = "sandygast_static_5"
+name = "Sandygast, level 35"
+kind = "static"
+at = [0x09E62C83]
+
+[[sources]]
+key = "cresselia_static"
+name = "Cresselia, level 60"
+kind = "static"
+at = [0x09E6EAC3]
+
+[[sources]]
+key = "scripted_gift_9"
+name = "Pokémon a script chooses, level 25"
+kind = "gift"
+at = [0x09E6F2AE]
+
+[[sources]]
+key = "maractus_static"
+name = "Maractus, level 40"
+kind = "static"
+at = [0x09E7189F]
+
+[[sources]]
+key = "rufflet_static"
+name = "Rufflet, level 35"
+kind = "static"
+at = [0x09E718FA]
+
+[[sources]]
+key = "vullaby_static"
+name = "Vullaby, level 35"
+kind = "static"
+at = [0x09E71955]
+
+[[sources]]
+key = "scripted_gift_10"
+name = "Pokémon a script chooses, level 25"
+kind = "gift"
+at = [0x09E71F43]
+
+[[sources]]
+key = "spiritomb_static"
+name = "Spiritomb, level 35"
+kind = "static"
+at = [0x09E72548]
+
+[[sources]]
+key = "voltorb_static_2"
+name = "Voltorb, level 35"
+kind = "static"
+at = [0x09E75999]
+
+[[sources]]
+key = "electrode_static_2"
+name = "Electrode, level 40"
+kind = "static"
+at = [0x09E759F4]
+
+[[sources]]
+key = "landorus_static"
+name = "Landorus, level 70"
+kind = "static"
+at = [0x09E7A98E]
+
+[[sources]]
+key = "zoroark_static"
+name = "Zoroark, level 65"
+kind = "static"
+at = [0x09E8168E]
+
+[[sources]]
+key = "cosmog_gift"
+name = "Cosmog, level 15"
+kind = "gift"
+at = [0x09E843D2]
+
+[[sources]]
+key = "kecleon_static_2"
+name = "Kecleon, level 45"
+kind = "static"
+at = [0x09E8561A]
+
+[[sources]]
+key = "shellder_static_2"
+name = "Shellder, level 45"
+kind = "static"
+at = [0x09E85DED]
+
+[[sources]]
+key = "binacle_static"
+name = "Binacle, level 10"
+kind = "static"
+at = [0x09E86EF3]
+
+[[sources]]
+key = "sandygast_static_6"
+name = "Sandygast, level 15"
+kind = "static"
+at = [0x09E87639]
+
+[[sources]]
+key = "claydol_static"
+name = "Claydol, level 100"
+kind = "static"
+at = [0x09E8D1BB, 0x09E8D1D0]
+
+[[sources]]
+key = "mimikyu_static"
+name = "Mimikyu, level 50"
+kind = "static"
+at = [0x09E8FD33]
+
+[[sources]]
+key = "sharpedo_static"
+name = "Sharpedo, level 75"
+kind = "static"
+at = [0x09E99581]
+
+[[sources]]
+key = "foongus_static_2"
+name = "Foongus, level 35"
+kind = "static"
+at = [0x09E9DF39]
+
+[[sources]]
+key = "morelull_static"
+name = "Morelull, level 35"
+kind = "static"
+at = [0x09E9DF94]
+
+[[sources]]
+key = "paras_static_2"
+name = "Paras, level 35"
+kind = "static"
+at = [0x09E9DFEF]
+
+[[sources]]
+key = "palkia_static"
+name = "Palkia, level 70"
+kind = "static"
+at = [0x09EADC77]
+
+[[sources]]
+key = "keldeo_static"
+name = "Keldeo, level 80"
+kind = "static"
+at = [0x09EAEBF4]
