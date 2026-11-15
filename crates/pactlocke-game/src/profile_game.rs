@@ -93,8 +93,11 @@ impl<M: Memory> ProfileGame<M> {
 
     /// Whether an event flag is set.
     fn flag(&mut self, flag: u16) -> bool {
-        let flags = self.save_block(1) + self.profile.layout.event_flags;
-        self.u8(flags + u32::from(flag / 8)) & (1 << (flag % 8)) != 0
+        let (flags, index) = match self.profile.symbols.expanded_flags {
+            Some(expanded) if flag >= expanded.first => (expanded.at, flag - expanded.first),
+            _ => (self.save_block(1) + self.profile.layout.event_flags, flag),
+        };
+        self.u8(flags + u32::from(index / 8)) & (1 << (index % 8)) != 0
     }
 
     fn party_count(&mut self) -> u8 {

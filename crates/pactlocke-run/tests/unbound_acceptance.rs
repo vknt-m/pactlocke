@@ -15,4 +15,12 @@ const GAME: romhack::Hack = romhack::Hack {
     single_trainer: 410,
     // Past the Sync Gates' hold area: the end of the ROM is free.
     test_scripts: 0x09FF_1000,
+    // Mel's gym battle: `setvar 0x8000, 4`, then the CFRU routine that picks
+    // the difficulty's Mel into 0x800D, then `trainerbattle 3, 0x800D`.
+    variable_gate: Some(romhack::VariableGate {
+        gate: "Mel",
+        script: 0x09E7_309C,
+        opponent: 0x0203_86AE,
+        trainers: &[416, 78, 79, 728, 729, 730],
+    }),
 };

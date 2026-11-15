@@ -37,6 +37,8 @@ const BOX_STARTS: [u32; 25] = [
     0x0202_4638,
 ];
 const SLOT: u32 = 58;
+/// Where CFRU keeps flags 0x900 and up (Unbound's expanded flags).
+const EXPANDED_FLAGS: u32 = 0x0203_B174;
 /// A level-cap site CFRU writes as `cmp r3, #99`.
 const CFRU_CAP_SITE: u32 = 0x0800_0210;
 
@@ -45,8 +47,12 @@ fn cfru_text(sha1: &str) -> String {
     profile_toml("cfru-like", sha1)
         .replace(
             "message_buffer = 0x02021D18",
-            &format!("message_buffer = 0x02021D18\npc_box_starts = [{}]", starts.join(", ")),
+            &format!(
+                "message_buffer = 0x02021D18\npc_box_starts = [{}]\nexpanded_flags = {{ first = 0x900, at = {EXPANDED_FLAGS:#010X} }}",
+                starts.join(", ")
+            ),
         )
+        .replace("flag = 0x4BC", "flag = 0x16D9")
         .replace("encrypted = true", "encrypted = false")
         .replace("box_slot_size = 80", "box_slot_size = 58\nbox_format = \"compressed\"")
         .replace("pc_boxes = 14", "pc_boxes = 25")
@@ -203,6 +209,21 @@ fn a_box_past_the_fourteenth_is_filled_where_cfru_keeps_it() {
             bytes: vec![0; SLOT as usize]
         }]
     );
+}
+
+#[test]
+fn a_flag_past_the_games_own_is_read_where_cfru_keeps_it() {
+    let mut game = cfru_game();
+    // Both badges, so the stage after them is the Champion's (flag 0x16D9).
+    game.memory_mut().put8(SAVE_BLOCK_1 + 0xEE0 + 0x820 / 8, 0b11);
+    assert_eq!(game.cap_stage(), 2, "the Champion not yet beaten");
+    // Where FireRed's layout would put it: not where this game keeps it.
+    game.memory_mut()
+        .put8(SAVE_BLOCK_1 + 0xEE0 + 0x16D9 / 8, 1 << (0x16D9 % 8));
+    assert_eq!(game.cap_stage(), 2);
+    let at = EXPANDED_FLAGS + (0x16D9 - 0x900) / 8;
+    game.memory_mut().put8(at, 1 << ((0x16D9 - 0x900) % 8));
+    assert_eq!(game.cap_stage(), 3, "past the Champion");
 }
 
 #[test]

@@ -42,6 +42,8 @@ items = 0x08876200                     # CFRU's item table
 trainers = 0x0823EAC8                  # gTrainers, where FireRed has it
 type_names = 0x08A4EAD4                # gTypeNames, with Fairy
 message_buffer = 0x02021D18            # gStringVar4
+# CFRU keeps flags 0x900 to 0x18FF in its own save area: its GetFlagPointer hook.
+expanded_flags = { first = 0x900, at = 0x0203B174 }
 # Unbound keeps the Bag in RAM, outside save block 1 (gBagPockets[2] points here).
 balls_pocket = 0x0203C354
 # CFRU's boxes: 1 to 19 one after another, 20 to 22, 23 and 24, then 25 in save block 2.
@@ -168,10 +170,11 @@ battle_communication = 0x02023E82
 field_yes_no = [0x081A4E65]
 question = "give a nickname"
 
-# Level cap stages: the eight gym leaders, by the main game's trainer ids
-# (the 7xx and 72 to 88 teams are other difficulties and rematches). Not yet
-# listed: the Elite Four (410 to 413) and the Champion, whose defeat flags
-# haven't been found.
+# Level cap stages: the eight gym leaders, then the Elite Four and the
+# Champion, by the main game's trainer ids (the 7xx and 72 to 88 teams are
+# other difficulties and rematches). Each Elite Four member and the Champion
+# is passed by the flag the League sets after their battle (0x16D5 to
+# 0x16D9), which CFRU keeps in its expanded flags.
 [[level_caps]]
 name = "Mirskle"
 trainers = [6]
@@ -212,40 +215,111 @@ name = "Benjamin"
 trainers = [420]
 badges = 8
 
-# Sync Gates: the leaders whose battle is a plain `trainerbattle` with their
-# trainer id. Mirskle's is the verified instruction (the scan's
-# second match; the first, at 0x087413D5, is a type-8 variant that never
-# starts a battle). The others are checked in this ROM's bytes only. Mel,
-# Tessy, Benjamin, the Elite Four and the Champion start their battles from
-# a script variable through CFRU's own code, and aren't gates yet.
+[[level_caps]]
+name = "Moleman"
+trainers = [410]
+flag = 0x16D5
+
+[[level_caps]]
+name = "Elias"
+trainers = [411]
+flag = 0x16D6
+
+[[level_caps]]
+name = "Arabella"
+trainers = [412]
+flag = 0x16D7
+
+[[level_caps]]
+name = "Penny"
+trainers = [413]
+flag = 0x16D8
+
+[[level_caps]]
+name = "Champion"
+trainers = [414]
+flag = 0x16D9
+
+# Sync Gates. Unbound's gyms and League start their battles with
+# `setvar 0x8000, <gym or member>`, a CFRU routine that picks the
+# difficulty's trainer into 0x800D (0x09ECA98D for the gyms, 0x09ECE37D for
+# the League), then `trainerbattle 3, 0x800D`; each is followed by its badge
+# or defeat flag. A gate holds that instruction. Mirskle, Véga, Alice,
+# Galavan and Big Mo also have a plain `trainerbattle` with their id, held
+# too. Mirskle's plain one (0x0874148F, the scan's second match;
+# the first, at 0x087413D5, is a type-8 variant that never starts a battle)
+# is the one the acceptance test runs; the rest are checked in this ROM's bytes.
 [sync_gates]
 hold = 0x09FF0000
 
 [[sync_gates.gates]]
 name = "Mirskle"
-sites = [{ at = 0x0874148F, expect = "5C 01 06 00 00" }]
+sites = [
+    { at = 0x0874148F, expect = "5C 01 06 00 00" },
+    { at = 0x09E726D9, expect = "5C 03 0D 80 00" },
+]
 
 [[sync_gates.gates]]
 name = "Véga"
 sites = [
     { at = 0x08741818, expect = "5C 01 9F 01 00" },
     { at = 0x087650E5, expect = "5C 01 9F 01 00" },
+    { at = 0x09E72BF9, expect = "5C 03 0D 80 00" },
 ]
 
 [[sync_gates.gates]]
 name = "Alice"
-sites = [{ at = 0x0878E827, expect = "5C 03 14 00 00" }]
+sites = [
+    { at = 0x0878E827, expect = "5C 03 14 00 00" },
+    { at = 0x09E72E3A, expect = "5C 03 0D 80 00" },
+]
+
+[[sync_gates.gates]]
+name = "Mel"
+sites = [{ at = 0x09E730A6, expect = "5C 03 0D 80 00" }]
 
 [[sync_gates.gates]]
 name = "Galavan"
-sites = [{ at = 0x08771C3D, expect = "5C 03 A2 01 00" }]
+sites = [
+    { at = 0x08771C3D, expect = "5C 03 A2 01 00" },
+    { at = 0x09E731D8, expect = "5C 03 0D 80 00" },
+]
 
 [[sync_gates.gates]]
 name = "Big Mo"
 sites = [
     { at = 0x087FD96D, expect = "5C 01 A3 01 00" },
     { at = 0x087FD980, expect = "5C 01 A3 01 00" },
+    { at = 0x09E73374, expect = "5C 03 0D 80 00" },
 ]
+
+[[sync_gates.gates]]
+name = "Tessy"
+sites = [{ at = 0x09E73534, expect = "5C 03 0D 80 00" }]
+
+[[sync_gates.gates]]
+name = "Benjamin"
+sites = [{ at = 0x09E7366F, expect = "5C 03 0D 80 00" }]
+
+[[sync_gates.gates]]
+name = "Moleman"
+sites = [{ at = 0x09E7E4CA, expect = "5C 03 0D 80 00" }]
+
+[[sync_gates.gates]]
+name = "Elias"
+sites = [{ at = 0x09E7E5DF, expect = "5C 03 0D 80 00" }]
+
+[[sync_gates.gates]]
+name = "Arabella"
+sites = [{ at = 0x09E7E6F7, expect = "5C 03 0D 80 00" }]
+
+[[sync_gates.gates]]
+name = "Penny"
+sites = [{ at = 0x09E7E80A, expect = "5C 03 0D 80 00" }]
+
+[[sync_gates.gates]]
+name = "Champion"
+sites = [{ at = 0x09E7E9B8, expect = "5C 03 0D 80 00" }]
 
 # Unbound's region-map sections and their names, read from FireRed's sMapNames
 # table (0x083F1CAC), which the hack keeps and refills. The capitals are

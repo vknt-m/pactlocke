@@ -40,6 +40,22 @@ pub struct Hack {
     /// Free ROM (0xFF in the clean ROM) for the test scripts, past the Sync
     /// Gates' hold area and anything else the Game Profile writes there.
     pub test_scripts: u32,
+    /// A gate whose battle takes its trainer from a script variable, run from
+    /// the start of its own script; `None` where every gate names its trainer.
+    pub variable_gate: Option<VariableGate>,
+}
+
+/// A Sync Gate battle that picks its trainer at run time (Unbound's gyms:
+/// `setvar 0x8000, gym`, a CFRU routine, then `trainerbattle 3, 0x800D`).
+pub struct VariableGate {
+    /// The gate's name in the Game Profile.
+    pub gate: &'static str,
+    /// Where its script starts setting up the battle.
+    pub script: u32,
+    /// `gTrainerBattleOpponent_A`.
+    pub opponent: u32,
+    /// The trainers it may pick, one per difficulty.
+    pub trainers: &'static [u16],
 }
 
 /// The ROM `cargo dev accept` names in `PACTLOCKE_ROM`, or the patched ROM
@@ -707,6 +723,59 @@ fn a_held_sync_gate_at_the_hacks_first_leader_lets_the_real_battle_run_once_open
     let trainer = u16::from_le_bytes([clean[2], clean[3]]);
     eprintln!("{first} (trainer {trainer}) battle on");
     dump_screen(&d.game, "gate-battle");
+    d.print_feed();
+    d.assert_shadow_matched(10);
+}
+
+#[test]
+fn a_held_gate_that_picks_its_trainer_at_run_time_lets_that_trainers_battle_run_once_open() {
+    let Some(gate) = GAME.variable_gate.as_ref() else {
+        eprintln!("skipped: every gate in this hack names its trainer");
+        return;
+    };
+    let rom = rom_or_skip!();
+    let profile = profiled(&rom);
+    let gates = &profile.sync_gates.as_ref().expect("gates").gates;
+    let mut d = run_with(
+        rom,
+        Ruleset {
+            sync_gates: gates.iter().map(|g| g.name.clone()).collect(),
+            ..Ruleset::default()
+        },
+    );
+    to_the_overworld(&mut d);
+    a_pikachu_and_poke_balls(&mut d, 50);
+    let mut script = vec![GOTO];
+    script.extend(gate.script.to_le_bytes());
+    d.run_script(&script);
+    for _ in 0..40 {
+        d.play("p A 30");
+    }
+    assert!(!d.in_battle(), "no battle while the gate holds");
+    d.until_idle(Keys::B, 1200);
+    let ready = format!("Ready at {}: waiting for your partners to be ready", gate.gate);
+    assert!(d.feed(FeedKind::Run).contains(&ready), "{:?}", d.feed(FeedKind::Run));
+
+    d.game
+        .commands()
+        .send(RunCommand::OpenGate {
+            gate: gate.gate.into(),
+            checkpoint: true,
+        })
+        .unwrap();
+    d.play("w 30");
+    let mut script = vec![GOTO];
+    script.extend(gate.script.to_le_bytes());
+    d.run_script(&script);
+    d.until_action_menu(Keys::A, 6000);
+    let trainer = u16::from_le_bytes(d.read(gate.opponent, 2).try_into().unwrap());
+    eprintln!("{} (trainer {trainer}) battle on", gate.gate);
+    dump_screen(&d.game, "variable-gate-battle");
+    assert!(
+        gate.trainers.contains(&trainer),
+        "{}'s battle, not trainer {trainer}'s",
+        gate.gate
+    );
     d.print_feed();
     d.assert_shadow_matched(10);
 }

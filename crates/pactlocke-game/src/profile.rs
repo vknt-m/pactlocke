@@ -224,6 +224,18 @@ pub struct Symbols {
     /// (CFRU's 25); otherwise the boxes follow one another from `pc_storage`.
     #[serde(default)]
     pub pc_box_starts: Option<Vec<u32>>,
+    /// Event flags the game keeps outside save block 1 (CFRU's expanded flags in Unbound).
+    #[serde(default)]
+    pub expanded_flags: Option<ExpandedFlags>,
+}
+
+/// Flags from `first` on, kept a bit per flag from `at` rather than after the
+/// game's own flags in save block 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpandedFlags {
+    pub first: u16,
+    pub at: u32,
 }
 
 /// The size of CFRU's compressed PC slot.
