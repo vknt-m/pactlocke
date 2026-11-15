@@ -56,7 +56,7 @@ fn check() -> SetupCheck {
         app_build: BUILD.into(),
         game_sha1: Some(FIRERED_SHA1.into()),
         hack_options: Vec::new(),
-        randomizer: None,
+        randomized: Vec::new(),
     }
 }
 

@@ -169,9 +169,10 @@ pub struct SetupCheck {
     /// A Romhack's own options, read from the game (name, setting).
     #[serde(default)]
     pub hack_options: Vec<(String, String)>,
-    /// The SHA-1 of the randomizer's output, for a randomized Run.
+    /// For a randomized Run, the SHA-1 of every Player's game as this app
+    /// made it, in setup's Player order.
     #[serde(default)]
-    pub randomizer: Option<String>,
+    pub randomized: Vec<String>,
 }
 
 /// A Player in setup.
@@ -354,6 +355,8 @@ impl RunSetup {
     pub fn choose(&mut self, preset: Preset) -> Result<(), SetupError> {
         let mut ruleset = preset.ruleset(&self.level_caps);
         ruleset.sync_gates = self.sync_gates.clone();
+        // A preset is about the rules; the randomizer stays as the Host set it.
+        ruleset.randomizer = self.ruleset.randomizer.clone();
         let wanted = ruleset.sync_gates.clone();
         self.edit(|r| *r = ruleset)?;
         self.gates_wanted = wanted;
@@ -462,8 +465,12 @@ impl RunSetup {
                     mismatch(format!("the game's {option} is {theirs}, not {setting}"));
                 }
             }
-            if check.randomizer != host.randomizer {
-                mismatch("a different randomizer output".to_owned());
+            if self.ruleset.randomizer.is_some() {
+                if check.randomized.len() != self.players.len() {
+                    mismatch("hasn't made the randomized games yet".to_owned());
+                } else if host.randomized.len() == self.players.len() && check.randomized != host.randomized {
+                    mismatch("made different randomized games from the Host's".to_owned());
+                }
             }
         }
         found

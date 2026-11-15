@@ -100,6 +100,43 @@ const STATICS: Switch = Switch {
 };
 
 impl Recipe {
+    /// Every recipe there is, each switch on or off.
+    pub fn all() -> impl Iterator<Item = Recipe> {
+        (0u8..64).map(|bits| Recipe {
+            starters: bits & 1 != 0,
+            wild: bits & 2 != 0,
+            trainers: bits & 4 != 0,
+            statics: bits & 8 != 0,
+            types: bits & 16 != 0,
+            base_stats: bits & 32 != 0,
+        })
+    }
+
+    /// The recipe a settings string was made from, if a recipe made it.
+    pub fn of(settings: &str) -> Option<Recipe> {
+        Recipe::all().find(|recipe| same_options(&recipe.settings_string(), settings))
+    }
+
+    /// What it randomizes, for setup to show: "starters, wild Pokémon and trainers".
+    pub fn describe(&self) -> String {
+        let parts: Vec<&str> = [
+            (self.starters, "starters"),
+            (self.wild, "wild Pokémon"),
+            (self.trainers, "trainers"),
+            (self.statics, "Statics"),
+            (self.types, "types"),
+            (self.base_stats, "base stats"),
+        ]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect();
+        match parts.as_slice() {
+            [] => "nothing".to_owned(),
+            [one] => (*one).to_owned(),
+            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        }
+    }
+
     /// The FVX settings string for this recipe.
     pub fn settings_string(&self) -> String {
         let mut options = decode(BASE).expect("the base settings string is valid").options;
@@ -244,6 +281,17 @@ mod tests {
         damaged.replace_range(10..11, if &good[10..11] == "A" { "B" } else { "A" });
         assert_eq!(check_settings_string(&damaged), Err(SettingsError::Damaged));
         assert_eq!(check_settings_string("42"), Err(SettingsError::Damaged));
+    }
+
+    #[test]
+    fn a_recipe_is_read_back_from_its_string() {
+        for recipe in Recipe::all() {
+            assert_eq!(Recipe::of(&recipe.settings_string()), Some(recipe));
+        }
+        assert_eq!(
+            Recipe::default().describe(),
+            "starters, wild Pokémon, trainers and Statics"
+        );
     }
 
     #[test]

@@ -21,6 +21,12 @@ pub fn identity_file() -> PathBuf {
         .map_or_else(|| runs.join("identity.key"), |dir| dir.join("identity.key"))
 }
 
+/// The app's data folder, which holds the Runs folder: the randomizer and its games live here too.
+pub fn data_root() -> PathBuf {
+    let (runs, _) = runs_dir();
+    runs.parent().map_or_else(|| runs.clone(), std::path::Path::to_path_buf)
+}
+
 fn beside_app() -> Option<PathBuf> {
     Some(std::env::current_exe().ok()?.parent()?.join("data"))
 }

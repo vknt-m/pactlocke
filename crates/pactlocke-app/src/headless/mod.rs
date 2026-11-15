@@ -506,7 +506,7 @@ impl Headless {
         let me = self.lobbies.public_key().ok_or("no network key")?;
         let outbox = running.stream_as(me);
         let kept = running.engine().kept_shadows().to_vec();
-        let mut spectate = Spectate::new(me, locked, &rom, &profile, outbox, &commands, &kept)?;
+        let mut spectate = Spectate::new(me, locked, &|_| rom.clone(), &profile, outbox, &commands, &kept)?;
         if let Some(log) = resumed {
             spectate.resumed(log, running.streamed_before());
         }

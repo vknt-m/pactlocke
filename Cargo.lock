@@ -4097,6 +4097,7 @@ dependencies = [
  "pactlocke-game",
  "pactlocke-mgba",
  "pactlocke-net",
+ "pactlocke-randomizer",
  "pactlocke-run",
  "png 0.17.16",
  "rfd",

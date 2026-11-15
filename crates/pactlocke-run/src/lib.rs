@@ -120,6 +120,21 @@ pub struct Ruleset {
     /// a solo Run.
     #[serde(default)]
     pub sync_gates: Vec<String>,
+    /// A randomized Run: the FVX settings and how seeds are picked. Every
+    /// Player's app makes every Player's game from their own clean ROM.
+    #[serde(default)]
+    pub randomizer: Option<RandomizerChoice>,
+}
+
+/// How a randomized Run's games are made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RandomizerChoice {
+    /// The UPR FVX settings string.
+    pub settings: String,
+    /// Shared Seed: every Player gets the same game.
+    pub shared_seed: bool,
+    /// Where the seeds come from: picked by the Host, sent only to the roster.
+    pub secret: [u8; 16],
 }
 
 /// The most Retries a Ruleset's pool may hold.
@@ -149,6 +164,7 @@ impl Default for Ruleset {
             links: false,
             retries: 0,
             sync_gates: Vec::new(),
+            randomizer: None,
         }
     }
 }

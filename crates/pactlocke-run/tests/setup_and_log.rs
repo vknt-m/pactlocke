@@ -133,6 +133,53 @@ fn ready_to_an_old_version_of_the_ruleset_counts_for_nothing() {
 }
 
 #[test]
+fn a_randomized_run_locks_only_when_everyone_made_the_same_games() {
+    let mut coop = Coop::with(&["Red", "Blue", "Green"]);
+    coop.setup
+        .edit(|r| {
+            r.randomizer = Some(pactlocke_run::RandomizerChoice {
+                settings: "429...".into(),
+                shared_seed: false,
+                secret: [9; 16],
+            })
+        })
+        .unwrap();
+    let games = vec!["a".to_owned(), "b".to_owned(), "c".to_owned()];
+    coop.brings(0, |c| c.randomized = games.clone());
+    coop.brings(1, |c| c.randomized = vec!["a".into(), "x".into(), "c".into()]);
+    coop.everyone_ready();
+    let Err(SetupError::NotYet(why)) = coop.lock() else {
+        panic!("the lock goes through");
+    };
+    assert!(
+        why.contains(&"Blue: made different randomized games from the Host's".to_owned()),
+        "{why:#?}"
+    );
+    assert!(
+        why.contains(&"Green: hasn't made the randomized games yet".to_owned()),
+        "{why:#?}"
+    );
+
+    coop.brings(1, |c| c.randomized = games.clone());
+    coop.brings(2, |c| c.randomized = games.clone());
+    coop.everyone_ready();
+    assert!(coop.lock().is_ok());
+}
+
+#[test]
+fn a_preset_keeps_the_randomizer() {
+    let mut coop = Coop::with(&["Red"]);
+    let choice = pactlocke_run::RandomizerChoice {
+        settings: "429...".into(),
+        shared_seed: true,
+        secret: [1; 16],
+    };
+    coop.setup.edit(|r| r.randomizer = Some(choice.clone())).unwrap();
+    coop.setup.choose(pactlocke_run::Preset::Hardcore).unwrap();
+    assert_eq!(coop.setup.ruleset().randomizer, Some(choice));
+}
+
+#[test]
 fn the_lock_names_everything_that_doesnt_match() {
     let mut coop = Coop::with(&["Red", "Blue", "Green"]);
     coop.brings(1, |c| c.app_build = "0.0.9".into());
@@ -142,7 +189,6 @@ fn the_lock_names_everything_that_doesnt_match() {
     coop.players[0].check.hack_options = vec![("LEVEL CAP".into(), "ON".into())];
     let host_check = coop.players[0].check.clone();
     coop.send(0, pactlocke_run::SetupMessage::Check(host_check));
-    coop.brings(1, |c| c.randomizer = Some("abc".into()));
     coop.everyone_ready();
 
     let Err(SetupError::NotYet(why)) = coop.lock() else {
@@ -151,7 +197,6 @@ fn the_lock_names_everything_that_doesnt_match() {
     let expected = [
         format!("Blue: Pactlocke 0.0.9, not the Host's {BUILD}"),
         "Blue: the game's LEVEL CAP is not set, not ON".to_owned(),
-        "Blue: a different randomizer output".to_owned(),
         "Green: a different ROM (SHA-1 574fa542ffebb14be69902d1d36f1ec0a4afd71e), not Pokémon FireRed (USA) 1.0"
             .to_owned(),
         "Green: the game's LEVEL CAP is not set, not ON".to_owned(),

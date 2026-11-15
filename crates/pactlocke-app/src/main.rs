@@ -21,6 +21,7 @@ mod links_panel;
 mod lobby_ui;
 mod logger;
 mod player_strip;
+mod randomized;
 mod resume;
 mod rom_library;
 mod rom_report;
@@ -45,8 +46,8 @@ use pactlocke_game::{
 };
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
-    Locked, NewRun, Preset, Ruleset, RunClock, RunCommand, RunEngine, RunEvent, RunLibrary, RunLog, RunSummary,
-    RunView, RunningGame, SystemRunClock,
+    Locked, NewRun, PlayerKey, Preset, Ruleset, RunClock, RunCommand, RunEngine, RunEvent, RunLibrary, RunLog,
+    RunSummary, RunView, RunningGame, SystemRunClock,
 };
 use rom_library::RomLibrary;
 use settings::Settings;
@@ -834,6 +835,8 @@ impl PactlockeApp {
     /// (`coop`), whose Run state goes to the Run log, whose input stream goes
     /// to the other Players, and whose other Players get Shadow Games here.
     /// A Run with friends resumed from its Run file comes with its log as kept there.
+    /// A randomized Run's `rom` is the clean ROM: each Player plays their own
+    /// randomized game made from it, here as on every other Player's app.
     #[allow(clippy::too_many_arguments)]
     fn play_run(
         &self,
@@ -847,7 +850,25 @@ impl PactlockeApp {
     ) -> Result<Playing, String> {
         let name = engine.info().name.clone();
         let ruleset = engine.info().ruleset.clone();
-        let rom: Arc<[u8]> = rom.into();
+        let (rom, core, games) = match (&ruleset.randomizer, coop) {
+            (Some(choice), Some((locked, _))) => {
+                let me = self
+                    .lobbies
+                    .public_key()
+                    .ok_or("This install has no network key, so the Run can't be shared.")?;
+                let players: Vec<PlayerKey> = locked.roster.iter().map(|p| p.key).collect();
+                let games = randomized::make(choice, &rom, &players, &|_| {})?;
+                let games: Vec<(PlayerKey, Arc<[u8]>)> = players.into_iter().zip(games).collect();
+                let own = games
+                    .iter()
+                    .find(|(key, _)| *key == me)
+                    .map(|(_, game)| game.clone())
+                    .ok_or("You aren't in this Run's roster.")?;
+                let core = Self::core_with_rom(&own)?;
+                (own, core, games)
+            }
+            _ => (rom.into(), core, Vec::new()),
+        };
         let icons = theme::Icons::new(profile.clone(), rom.clone());
         let mut running = RunningGame::boot(ProfileGame::new(profile.clone(), rom.clone(), core), engine, clock_ms)
             .map_err(|e| format!("The Run's game couldn't be booted: {e}"))?;
@@ -862,7 +883,13 @@ impl PactlockeApp {
                     .ok_or("This install has no network key, so the Run can't be shared.")?;
                 let outbox = running.stream_as(me);
                 let kept = running.engine().kept_shadows().to_vec();
-                let mut spectate = spectate::Spectate::new(me, locked, &rom, &profile, outbox, &commands, &kept)?;
+                let rom_of = |player: PlayerKey| {
+                    games
+                        .iter()
+                        .find(|(key, _)| *key == player)
+                        .map_or_else(|| rom.clone(), |(_, game)| game.clone())
+                };
+                let mut spectate = spectate::Spectate::new(me, locked, &rom_of, &profile, outbox, &commands, &kept)?;
                 if let Some(log) = resumed {
                     spectate.resumed(log, running.streamed_before());
                 }

@@ -82,13 +82,14 @@ pub struct Spectate {
 
 impl Spectate {
     /// A Shadow Game of every other Player in the lock's roster, each on
-    /// this Player's own copy of the ROM, booted as the Run started, or
+    /// that Player's game (`rom_of`: the Run's ROM, or in a randomized Run
+    /// their randomized game, made here), booted as the Run started, or
     /// from its checkpoint in the Run file (`kept`) on a resume.
     /// `outbox` is this Player's own stream; `commands` reach their Run.
     pub fn new(
         me: PlayerKey,
         locked: &Locked,
-        rom: &Arc<[u8]>,
+        rom_of: &dyn Fn(PlayerKey) -> Arc<[u8]>,
         profile: &Arc<GameProfile>,
         outbox: Arc<Mutex<Vec<InputChunk>>>,
         commands: &Sender<RunCommand>,
@@ -100,8 +101,9 @@ impl Spectate {
         let diverged: Arc<Mutex<Vec<(PlayerKey, u64)>>> = Arc::default();
         for player in locked.roster.iter().filter(|p| p.key != me) {
             let mut core = MgbaCore::new();
-            core.load_rom(rom).map_err(|e| e.to_string())?;
-            let game = ProfileGame::new(profile.clone(), rom.clone(), core);
+            let rom = rom_of(player.key);
+            core.load_rom(&rom).map_err(|e| e.to_string())?;
+            let game = ProfileGame::new(profile.clone(), rom, core);
             let shadow = match kept.iter().find(|(p, _)| *p == player.key) {
                 Some((_, checkpoint)) => {
                     hub.starts_at(player.key, checkpoint.at);

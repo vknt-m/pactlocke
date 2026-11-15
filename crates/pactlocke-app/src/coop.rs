@@ -7,9 +7,10 @@ use std::path::PathBuf;
 use eframe::egui;
 use pactlocke_game::{CapabilityReport, LevelCap, MAX_LEVEL, Rule};
 use pactlocke_net::{APP_VERSION, HostNode, JoinNode, Message, PeerKey, RunAdvert, new_key};
+use pactlocke_randomizer::Recipe;
 use pactlocke_run::{
-    Locked, LogBody, LogEntry, LogError, PlayerKey, Presence, Preset, Ruleset, RunEvent, RunLog, RunSetup, SetupCheck,
-    SetupMessage, SetupPlayer, SetupView, Signer, Submission,
+    Locked, LogBody, LogEntry, LogError, PlayerKey, Presence, Preset, RandomizerChoice, Ruleset, RunEvent, RunLog,
+    RunSetup, SetupCheck, SetupMessage, SetupPlayer, SetupView, Signer, Submission,
 };
 
 /// How often the Host sends setup again, for a Player who reconnected.
@@ -42,7 +43,7 @@ fn own_check(game_sha1: Option<String>) -> SetupCheck {
         app_build: APP_VERSION.to_owned(),
         game_sha1,
         hack_options: Vec::new(),
-        randomizer: None,
+        randomized: Vec::new(),
     }
 }
 
@@ -98,6 +99,8 @@ pub struct HostCoop {
     error: Option<String>,
     /// Input stream messages from Players, for Spectate: from whom, and the bytes.
     stream_inbox: Vec<(PlayerKey, Vec<u8>)>,
+    /// Every Player's randomized game, made here, for a randomized Run.
+    maker: crate::randomized::Maker,
 }
 
 impl HostCoop {
@@ -132,6 +135,7 @@ impl HostCoop {
             started: false,
             error: None,
             stream_inbox: Vec::new(),
+            maker: crate::randomized::Maker::default(),
         };
         let mut nonce = [0; 16];
         nonce.copy_from_slice(&new_key()[..16]);
@@ -175,6 +179,7 @@ impl HostCoop {
             started: true,
             error: None,
             stream_inbox: Vec::new(),
+            maker: crate::randomized::Maker::default(),
         }
     }
 
@@ -235,6 +240,7 @@ impl HostCoop {
                 setup.leave(&key);
             }
         }
+        self.make_randomized_games();
         for (from, message) in node.take_inbox() {
             match message {
                 Message::Setup(bytes) => {
@@ -330,6 +336,38 @@ impl HostCoop {
         })
     }
 
+    /// Makes every Player's randomized game for the Ruleset as it is now,
+    /// and tells setup their SHA-1s once made.
+    fn make_randomized_games(&mut self) {
+        let Some(setup) = &mut self.setup else {
+            return;
+        };
+        let view = setup.view();
+        if view.locked.is_some() {
+            return;
+        }
+        let players: Vec<PlayerKey> = view.players.iter().map(|p| p.key).collect();
+        let rom = &self.rom;
+        self.maker.want(
+            view.ruleset.randomizer.as_ref(),
+            &players,
+            Some(&view.game_sha1),
+            || {
+                let rom = rom.clone();
+                move || Ok(rom)
+            },
+        );
+        let me = view.players[0].clone();
+        let made = self.maker.made();
+        if me.check.randomized != made {
+            let check = SetupCheck {
+                randomized: made,
+                ..me.check
+            };
+            setup.receive(&me.key, SetupMessage::Check(check));
+        }
+    }
+
     /// Input stream messages since the last call: from whom, and the bytes.
     pub fn take_stream(&mut self) -> Vec<(PlayerKey, Vec<u8>)> {
         std::mem::take(&mut self.stream_inbox)
@@ -421,6 +459,12 @@ impl HostCoop {
             ui.add(egui::DragValue::new(&mut ruleset.retries).range(0..=pactlocke_run::MAX_RETRIES));
         });
         crate::rules_text::description(ui, &crate::rules_text::retries(&ruleset), None);
+        randomizer_choice(
+            ui,
+            &mut ruleset.randomizer,
+            pactlocke_randomizer::clean_dump(&self.rom).is_some(),
+        );
+        self.maker.show(ui);
         if let Some(caps) = ruleset.level_caps.as_mut() {
             ui.indent("level caps", |ui| {
                 egui::Grid::new("coop level caps").num_columns(4).show(ui, |ui| {
@@ -568,6 +612,8 @@ pub struct JoinCoop {
     error: Option<String>,
     /// Input stream messages from the Host, for Spectate.
     stream_inbox: Vec<Vec<u8>>,
+    /// Every Player's randomized game, made here, for a randomized Run.
+    maker: crate::randomized::Maker,
 }
 
 /// What one of this Player's waiting entries says.
@@ -612,6 +658,7 @@ impl JoinCoop {
             started: false,
             error: None,
             stream_inbox: Vec::new(),
+            maker: crate::randomized::Maker::default(),
         }
     }
 
@@ -715,6 +762,21 @@ impl JoinCoop {
     /// setup and log entries, and returns the Run to start once the
     /// countdown is over.
     pub fn pump(&mut self, node: &JoinNode, now_ms: i64) -> Option<CoopStart> {
+        if let Some(view) = &self.view
+            && view.locked.is_none()
+        {
+            let players: Vec<PlayerKey> = view.players.iter().map(|p| p.key).collect();
+            let rom = self.rom.clone();
+            let base = self.check.game_sha1.clone();
+            self.maker
+                .want(view.ruleset.randomizer.as_ref(), &players, base.as_deref(), || {
+                    move || {
+                        let path = rom.ok_or("Choose your ROM first: the randomized games are made from it.")?;
+                        std::fs::read(&path).map_err(|e| format!("Couldn't read {}: {e}", path.display()))
+                    }
+                });
+            self.check.randomized = self.maker.made();
+        }
         let connected = !node.view().players.is_empty();
         if connected && (!self.connected || self.check_sent.as_ref() != Some(&self.check)) {
             node.send(Message::Setup(SetupMessage::Check(self.check.clone()).to_bytes()));
@@ -933,6 +995,10 @@ impl JoinCoop {
         if !ruleset.sync_gates.is_empty() {
             ui.label(format!("Sync Gates: {}", ruleset.sync_gates.join(", ")));
         }
+        if let Some(choice) = &ruleset.randomizer {
+            ui.label(randomizer_line(choice));
+        }
+        self.maker.show(ui);
         ui.separator();
         if let Some(ready) = ready_section(ui, &view, &self.me()) {
             self.set_ready(node, ready);
@@ -941,6 +1007,62 @@ impl JoinCoop {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
     }
+}
+
+/// What setup says of a randomized Run.
+fn randomizer_line(choice: &RandomizerChoice) -> String {
+    let what = Recipe::of(&choice.settings).map_or_else(
+        || "with the Host's own FVX settings".to_owned(),
+        |r| format!("randomizing {}", r.describe()),
+    );
+    let seed = if choice.shared_seed {
+        "Shared Seed: everyone plays the same game"
+    } else {
+        "each Player plays a different game"
+    };
+    format!("Randomized ({what}); {seed}.")
+}
+
+/// The Host's randomizer choice: on or off, Shared Seed, and what is randomized.
+/// Only a clean original game (`clean`) can be randomized.
+fn randomizer_choice(ui: &mut egui::Ui, choice: &mut Option<RandomizerChoice>, clean: bool) {
+    let mut on = choice.is_some();
+    ui.add_enabled(clean, egui::Checkbox::new(&mut on, "Randomize the game"))
+        .on_disabled_hover_text(
+            "Only an unmodified FireRed, LeafGreen, Emerald, Ruby or Sapphire (USA 1.0) can be randomized.",
+        );
+    if on != choice.is_some() {
+        *choice = on.then(|| {
+            let mut secret = [0; 16];
+            secret.copy_from_slice(&new_key()[..16]);
+            RandomizerChoice {
+                settings: Recipe::default().settings_string(),
+                shared_seed: false,
+                secret,
+            }
+        });
+    }
+    let Some(chosen) = choice.as_mut() else {
+        return;
+    };
+    ui.indent("randomizer", |ui| {
+        ui.checkbox(&mut chosen.shared_seed, "Shared Seed")
+            .on_hover_text("Every Player gets the same randomized game; otherwise each gets a different one.");
+        let Some(mut recipe) = Recipe::of(&chosen.settings) else {
+            ui.weak("The Host's own FVX settings.");
+            return;
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut recipe.starters, "Starters");
+            ui.checkbox(&mut recipe.wild, "Wild Pokémon");
+            ui.checkbox(&mut recipe.trainers, "Trainers");
+            ui.checkbox(&mut recipe.statics, "Statics");
+            ui.checkbox(&mut recipe.types, "Types");
+            ui.checkbox(&mut recipe.base_stats, "Base stats");
+        });
+        chosen.settings = recipe.settings_string();
+        ui.weak(randomizer_line(chosen));
+    });
 }
 
 /// Every Player's Ready and what doesn't match; returns this Player's new
