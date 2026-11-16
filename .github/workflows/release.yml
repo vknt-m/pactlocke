@@ -123,7 +123,8 @@ jobs:
   release:
     name: Draft release
     needs: [build, source]
-    if: ${{ !failure() && !cancelled() }}
+    # Every platform's file, or no draft at all.
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.source.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
