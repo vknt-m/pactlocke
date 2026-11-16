@@ -19,11 +19,13 @@ const TICK: Duration = Duration::from_millis(8);
 /// A Shadow Game's state, for the side panel and Spectate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShadowStatus {
+    /// Whether it still matches the Player's game.
     pub state: ShadowState,
     /// Well behind where the Player is, fast-forwarding.
     pub catching_up: bool,
     /// Frames run, and the frame after the newest received.
     pub frame: u64,
+    /// The frame after the newest received.
     pub received: u64,
     /// The boot of the Player's game it follows.
     pub boot: u32,

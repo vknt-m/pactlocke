@@ -48,10 +48,16 @@ pub enum ShadowState {
     Matched,
     /// Its hash and the Player's differed at this real frame boundary: it
     /// can't be watched until it is built again.
-    Diverged { frame: u64 },
+    Diverged {
+        /// The real frame boundary the hashes differed at.
+        frame: u64,
+    },
     /// The Player booted their game again (a resume, a crash rebuild): this
     /// Shadow can't follow a new boot yet, so it can't be watched.
-    Restarted { boot: u32 },
+    Restarted {
+        /// The Player's new boot.
+        boot: u32,
+    },
 }
 
 /// A copy of one Player's game, replayed from their input stream.
@@ -613,9 +619,13 @@ enum Item {
 pub struct ShadowCheckpoint {
     /// The boot and frame boundary of the Player's game it was taken at.
     pub at: crate::GamePoint,
+    /// The core's savestate and save memory.
     pub core: Checkpoint,
+    /// Every ROM patch active then, by address.
     pub patches: Vec<(u32, Vec<u8>)>,
+    /// The PIDs it had seen in the Player's party or PC.
     pub owned: Vec<u32>,
+    /// The PIDs it had seen fainted.
     pub fainted: Vec<u32>,
 }
 
@@ -648,6 +658,7 @@ pub struct Seen {
     pub party: Vec<SeenPokemon>,
     /// Their Area, and what they were doing, at the last look.
     pub area: Option<String>,
+    /// What they were doing at the last look.
     pub doing: crate::Doing,
     /// Where they stand and how they look, on the overworld, for their Partner Avatar.
     pub avatar: Option<SeenAvatar>,
@@ -656,20 +667,29 @@ pub struct Seen {
 /// A Player as their Partner Avatar shows them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeenAvatar {
+    /// Where they stand.
     pub at: pactlocke_game::Whereabouts,
+    /// Their own sprite, as their game drew it last.
     pub sprite: pactlocke_game::SpriteImage,
+    /// The species of the Pokémon that leads their party, for their Follower.
     pub lead: Option<u16>,
 }
 
 /// A party Pokémon as a Shadow Game last showed it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeenPokemon {
+    /// The Pokémon's personality value.
     pub pid: u32,
     /// The species number, for its party icon.
     pub species: u16,
+    /// Its species name, as the game shows it.
     pub species_name: String,
+    /// Its nickname, as the game holds it.
     pub nickname: String,
+    /// Its level.
     pub level: u8,
+    /// Its HP now; 0 is fainted.
     pub hp: u16,
+    /// Its HP when full.
     pub max_hp: u16,
 }

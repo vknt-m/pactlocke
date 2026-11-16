@@ -25,12 +25,14 @@ pub struct Shadow {
     /// Their name in the roster.
     pub name: String,
     runner: ShadowRunner,
+    /// A developer's made-up Run (`--demo-coop`): what to show instead of the runner's status.
+    demo: Option<ShadowStatus>,
 }
 
 impl Shadow {
     /// Where their Shadow Game stands.
     pub fn status(&self) -> ShadowStatus {
-        self.runner.status()
+        self.demo.clone().unwrap_or_else(|| self.runner.status())
     }
 
     /// Where its frames are published while watched.
@@ -128,6 +130,7 @@ impl Spectate {
                 key: player.key,
                 name: player.name.clone(),
                 runner: ShadowRunner::spawn(shadow, Box::new(SystemRunClock), tell),
+                demo: None,
             });
         }
         Ok(Self {
@@ -348,6 +351,20 @@ impl pactlocke_emu::AudioSink for Silent {
     fn push(&mut self, _samples: &[i16], _sample_rate: u32) {}
 }
 
+/// A vote under way, in a banner that stands out from the rest of the panel.
+fn vote_banner(ui: &mut eframe::egui::Ui, contents: impl FnOnce(&mut eframe::egui::Ui)) {
+    let colour = ui.visuals().warn_fg_color;
+    eframe::egui::Frame::new()
+        .fill(colour.gamma_multiply(0.12))
+        .stroke(eframe::egui::Stroke::new(1.0, colour))
+        .corner_radius(5.0)
+        .inner_margin(6)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            contents(ui);
+        });
+}
+
 /// Retries in a Run with other Players: what is left of the pool, and the
 /// vote. Returns this Player's vote when they cast one.
 pub fn votes(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey, online: bool) -> Option<RunEvent> {
@@ -359,8 +376,8 @@ pub fn votes(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey, online: boo
     let players = log.active().len();
     let mut cast = None;
     match log.vote() {
-        Some(vote) => {
-            ui.label(format!(
+        Some(vote) => vote_banner(ui, |ui| {
+            ui.strong(format!(
                 "Retry vote: back to Run Checkpoint {} · {} of {players} said Yes",
                 vote.call,
                 vote.yes.len()
@@ -381,7 +398,7 @@ pub fn votes(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey, online: boo
                     }
                 });
             }
-        }
+        }),
         None => {
             let latest = log.latest_complete();
             let start = ui.add_enabled(
@@ -427,7 +444,19 @@ pub enum DropoutAsk {
 impl Spectate {
     /// Whether this Player's app has gone quiet long enough to show offline.
     pub fn shows_offline(&self, player: &PlayerKey) -> bool {
-        self.presence.offline(player, SystemRunClock.now_ms())
+        // A made-up Run's Players are never heard from, and never offline.
+        let demo = self.shadows.iter().any(|s| s.demo.is_some());
+        !demo && self.presence.offline(player, SystemRunClock.now_ms())
+    }
+
+    /// Shows a developer's made-up Run: each other Player's Shadow Game
+    /// reports this status, whatever its own game is doing.
+    pub fn show_demo(&mut self, statuses: Vec<(PlayerKey, ShadowStatus)>) {
+        for (key, status) in statuses {
+            if let Some(shadow) = self.shadows.iter_mut().find(|s| s.key == key) {
+                shadow.demo = Some(status);
+            }
+        }
     }
 
     /// Stop offering a Dropout vote for this Player.
@@ -464,22 +493,24 @@ pub fn flag_votes(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey, online
         } else {
             roster_name(log, &vote.flag.player)
         };
-        ui.label(format!(
-            "Vote to clear the cheat flag on {whom}, at frame {}: {} · {} of {} said Yes",
-            vote.flag.at.frame,
-            vote.flag.cheat.describe(),
-            vote.yes.len(),
-            voters.len()
-        ));
-        if voters.contains(&me) && !vote.yes.contains(&me) && online {
-            ui.horizontal(|ui| {
-                for (text, yes) in [("Yes", true), ("No", false)] {
-                    if ui.button(text).clicked() {
-                        cast = Some(flag_vote(&vote.flag, yes));
+        vote_banner(ui, |ui| {
+            ui.strong(format!(
+                "Vote to clear the cheat flag on {whom}, at frame {}: {} · {} of {} said Yes",
+                vote.flag.at.frame,
+                vote.flag.cheat.describe(),
+                vote.yes.len(),
+                voters.len()
+            ));
+            if voters.contains(&me) && !vote.yes.contains(&me) && online {
+                ui.horizontal(|ui| {
+                    for (text, yes) in [("Yes", true), ("No", false)] {
+                        if ui.button(text).clicked() {
+                            cast = Some(flag_vote(&vote.flag, yes));
+                        }
                     }
-                }
-            });
-        }
+                });
+            }
+        });
     }
     cast
 }
@@ -535,23 +566,25 @@ pub fn dropouts(ui: &mut eframe::egui::Ui, log: &RunLog, spectate: &Spectate, on
     let mut cast = None;
     if let Some((leaving, yes)) = log.dropout_vote() {
         let voters = log.active().len().saturating_sub(1);
-        ui.label(format!(
-            "Dropout vote: {} leaves the Run · {} of {voters} said Yes",
-            name(&leaving),
-            yes.len()
-        ));
-        if leaving != me && !yes.contains(&me) && online {
-            ui.horizontal(|ui| {
-                for (text, answer) in [("Yes", true), ("No", false)] {
-                    if ui.button(text).clicked() {
-                        cast = Some(DropoutAsk::Vote(RunEvent::DropoutVote {
-                            player: leaving,
-                            yes: answer,
-                        }));
+        vote_banner(ui, |ui| {
+            ui.strong(format!(
+                "Dropout vote: {} leaves the Run · {} of {voters} said Yes",
+                name(&leaving),
+                yes.len()
+            ));
+            if leaving != me && !yes.contains(&me) && online {
+                ui.horizontal(|ui| {
+                    for (text, answer) in [("Yes", true), ("No", false)] {
+                        if ui.button(text).clicked() {
+                            cast = Some(DropoutAsk::Vote(RunEvent::DropoutVote {
+                                player: leaving,
+                                yes: answer,
+                            }));
+                        }
                     }
-                }
-            });
-        }
+                });
+            }
+        });
         return cast;
     }
     if !log.dropout_allowed() {

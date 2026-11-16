@@ -70,7 +70,9 @@ impl Relays {
 pub struct LobbyView {
     /// The Host's current invite link, once the endpoint is up.
     pub invite_link: Option<String>,
+    /// What the Run is, once known.
     pub run: Option<RunAdvert>,
+    /// Every Player in the lobby.
     pub players: Vec<LobbyPlayer>,
     /// The Host's: every Player who has said hello, by key and name.
     pub roster: Vec<(PeerKey, String)>,
@@ -84,7 +86,9 @@ pub struct LobbyView {
 /// through a relay, and how long a message takes there and back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PeerLink {
+    /// Whether messages go straight to the other Player, not through a relay.
     pub direct: bool,
+    /// How long a message takes there and back, in milliseconds.
     pub ping_ms: u32,
 }
 
@@ -422,6 +426,7 @@ impl HostNode {
         self.worker.send(HostCommand::Lock);
     }
 
+    /// The lobby as the UI shows it now.
     pub fn view(&self) -> LobbyView {
         self.worker.view()
     }
@@ -723,6 +728,7 @@ impl JoinNode {
         self.worker.send(JoinCommand::Send(message));
     }
 
+    /// The lobby as the UI shows it now.
     pub fn view(&self) -> LobbyView {
         self.worker.view()
     }

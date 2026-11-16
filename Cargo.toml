@@ -8,6 +8,12 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 publish = false
 
+# A smaller, slightly faster app for a slower release build. Symbols are kept
+# so a crash report still names its functions.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
 # The determinism check hashes ~100 MB per run; keep it quick in debug builds.
 [profile.dev.package.sha2]
 opt-level = 3

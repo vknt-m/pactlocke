@@ -20,7 +20,9 @@ const HEADER: usize = 7;
 /// What a Run is, as the Host tells joiners.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunAdvert {
+    /// The Run's name.
     pub name: String,
+    /// The name of the game the Run is played on.
     pub game_name: String,
     /// The SHA-1 of the ROM every Player must bring.
     pub game_sha1: String,
@@ -38,6 +40,7 @@ impl RunAdvert {
 pub enum RomStatus {
     /// Not told yet.
     NotYet,
+    /// The same ROM as the Run's game.
     Matches,
     /// A different ROM: it can't be played in this Run.
     Wrong,
@@ -65,8 +68,11 @@ impl RomStatus {
 /// A Player in the lobby, as everyone sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LobbyPlayer {
+    /// The Player's name, as shown.
     pub name: String,
+    /// Whether this Player is the Host.
     pub host: bool,
+    /// Whether their ROM is the Run's game.
     pub rom: RomStatus,
 }
 
@@ -78,7 +84,10 @@ pub enum Refusal {
     /// Three Players already.
     RunFull,
     /// A different app version; the joiner must update to the Host's.
-    Version { host_version: String },
+    Version {
+        /// The Host's Pactlocke version.
+        host_version: String,
+    },
     /// Malformed messages, or too many too fast.
     Misbehaving,
     /// The Ruleset and roster are locked: nobody joins now.
@@ -109,15 +118,29 @@ impl fmt::Display for Refusal {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
     /// A joiner's first message.
-    Hello { app_version: String, name: String },
+    Hello {
+        /// The joiner's Pactlocke version.
+        app_version: String,
+        /// The name the joiner wants to be shown by.
+        name: String,
+    },
     /// The Host lets the joiner in.
-    Welcome { run: RunAdvert },
+    Welcome {
+        /// What the Run is.
+        run: RunAdvert,
+    },
     /// The Host closes the connection, saying why.
     Refused(Refusal),
     /// A joiner says which ROM they brought.
-    RomCheck { sha1: String },
+    RomCheck {
+        /// The SHA-1 of the joiner's ROM.
+        sha1: String,
+    },
     /// The lobby as it is now, from the Host to everyone.
-    Lobby { players: Vec<LobbyPlayer> },
+    Lobby {
+        /// Every Player in the lobby, the Host included.
+        players: Vec<LobbyPlayer>,
+    },
     /// Run setup (the Ruleset, Ready, the lock), which the lobby carries
     /// without reading: the Run engine's setup messages.
     Setup(Vec<u8>),
@@ -132,11 +155,15 @@ pub enum Message {
 /// Why bytes aren't a message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireError {
+    /// Shorter than a message's header.
     TooShort,
+    /// Longer than [`MAX_MESSAGE`].
     TooLong,
+    /// Doesn't start with Pactlocke's magic bytes.
     NotPactlocke,
     /// Another protocol version: the apps don't match.
     Protocol(u16),
+    /// A kind of message this version doesn't know.
     UnknownKind(u8),
     /// The payload doesn't read as that kind of message.
     BadPayload,

@@ -1,6 +1,7 @@
 //! The real game interface: driven only by Game Profile data, over a game's
 //! memory (normally the core adapter).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::caps::MAX_LEVEL;
@@ -32,16 +33,22 @@ pub struct ProfileGame<M> {
     /// The clean ROM, for undoing table patches.
     rom: Arc<[u8]>,
     memory: M,
+    /// The last Pokémon read whole at each party and PC address. A frame can
+    /// end while the game has one decrypted in place or half written; the
+    /// Pokémon there is then the one last read whole.
+    last_whole: HashMap<u32, Pokemon>,
     /// The trainer battle whose RNG is pinned for Shared Seed, if one is coming.
     pin: Option<Pinned>,
 }
 
 impl<M: Memory> ProfileGame<M> {
+    /// A game on `memory`, read through `profile`, with its clean `rom`.
     pub fn new(profile: Arc<GameProfile>, rom: impl Into<Arc<[u8]>>, memory: M) -> Self {
         Self {
             profile,
             rom: rom.into(),
             memory,
+            last_whole: HashMap::new(),
             pin: None,
         }
     }
@@ -51,10 +58,12 @@ impl<M: Memory> ProfileGame<M> {
         &self.rom
     }
 
+    /// The memory the game is read from.
     pub fn memory(&self) -> &M {
         &self.memory
     }
 
+    /// The memory the game is read from, to change.
     pub fn memory_mut(&mut self) -> &mut M {
         &mut self.memory
     }
@@ -182,11 +191,26 @@ impl<M: Memory> ProfileGame<M> {
         self.u8(bit.at) & bit.mask != 0
     }
 
-    /// Reads a Pokémon at `addr`; party Pokémon also carry their stats.
-    fn pokemon(&mut self, addr: u32, in_party: bool) -> Pokemon {
+    /// The Pokémon at `addr` if it reads whole, else the one last read whole
+    /// there, if any.
+    fn whole_or_last(&mut self, addr: u32, in_party: bool) -> Option<Pokemon> {
+        match self.decode(addr, in_party) {
+            (pokemon, true) => {
+                self.last_whole.insert(addr, pokemon.clone());
+                Some(pokemon)
+            }
+            (_, false) => self.last_whole.get(&addr).cloned(),
+        }
+    }
+
+    /// Reads a Pokémon at `addr`; party Pokémon also carry their stats. Says
+    /// too whether it read whole: an encrypted one's checksum matches, as
+    /// stored or as the game left it decrypted in place mid-read. Otherwise
+    /// the frame ended while the game was writing it.
+    fn decode(&mut self, addr: u32, in_party: bool) -> (Pokemon, bool) {
         let layout = self.profile.layout.clone();
         if !in_party && layout.box_format == BoxFormat::Compressed {
-            return self.compressed_pokemon(addr);
+            return (self.compressed_pokemon(addr), true);
         }
         let size = if in_party {
             layout.party_slot_size
@@ -218,7 +242,7 @@ impl<M: Memory> ProfileGame<M> {
                 is_egg,
                 stats,
             };
-            return pokemon;
+            return (pokemon, true);
         }
 
         // The four substructures, in Growth, Attacks, EVs, Misc order.
@@ -228,17 +252,32 @@ impl<M: Memory> ProfileGame<M> {
         } else {
             b"GAEM"
         };
-        let key = if layout.encrypted { pid ^ ot_id } else { 0 };
-        for (position, kind) in order.iter().enumerate() {
-            let which = b"GAEM".iter().position(|k| k == kind).unwrap();
-            let start = at(layout.substructures) + position * SUBSTRUCTURE_SIZE;
-            for (i, chunk) in raw[start..start + SUBSTRUCTURE_SIZE].chunks(4).enumerate() {
-                let plain = u32::from_le_bytes(chunk.try_into().unwrap()) ^ key;
-                subs[which][i * 4..i * 4 + 4].copy_from_slice(&plain.to_le_bytes());
+        let stored_sum = u16::from_le_bytes([raw[at(layout.checksum)], raw[at(layout.checksum) + 1]]);
+        let mut decrypt = |key: u32| {
+            for (position, kind) in order.iter().enumerate() {
+                let which = b"GAEM".iter().position(|k| k == kind).unwrap();
+                let start = at(layout.substructures) + position * SUBSTRUCTURE_SIZE;
+                for (i, chunk) in raw[start..start + SUBSTRUCTURE_SIZE].chunks(4).enumerate() {
+                    let plain = u32::from_le_bytes(chunk.try_into().unwrap()) ^ key;
+                    subs[which][i * 4..i * 4 + 4].copy_from_slice(&plain.to_le_bytes());
+                }
             }
-        }
+            subs
+        };
+        let (subs, whole) = if layout.encrypted {
+            let stored = decrypt(pid ^ ot_id);
+            if checksum(&stored) == stored_sum {
+                (stored, true)
+            } else {
+                let in_place = decrypt(0);
+                let whole = checksum(&in_place) == stored_sum;
+                (if whole { in_place } else { stored }, whole)
+            }
+        } else {
+            (decrypt(0), true)
+        };
         let [growth, _, _, misc] = subs;
-        Pokemon {
+        let pokemon = Pokemon {
             pid,
             ot_id,
             species: u16::from_le_bytes([growth[0], growth[1]]) & layout.species_mask,
@@ -246,7 +285,8 @@ impl<M: Memory> ProfileGame<M> {
             met_section: u16::from(misc[1]),
             is_egg,
             stats,
-        }
+        };
+        (pokemon, whole)
     }
 
     fn patch_sites(&self, rule: &'static str, method: Option<&Method>) -> Result<Vec<PatchSite>, GameError> {
@@ -332,7 +372,11 @@ impl<M: Memory> Game for ProfileGame<M> {
 
     fn party(&mut self) -> Vec<Pokemon> {
         (0..self.party_count())
-            .map(|slot| self.pokemon(self.party_slot_addr(slot), true))
+            .map(|slot| {
+                let addr = self.party_slot_addr(slot);
+                self.whole_or_last(addr, true)
+                    .unwrap_or_else(|| self.decode(addr, true).0)
+            })
             .collect()
     }
 
@@ -347,7 +391,9 @@ impl<M: Memory> Game for ProfileGame<M> {
                 }
                 // A slot with the flag but no species holds nothing: Emerald
                 // leaves its last one so for a frame while it moves its save data.
-                let pokemon = self.pokemon(addr, false);
+                let Some(pokemon) = self.whole_or_last(addr, false) else {
+                    continue;
+                };
                 if pokemon.species != 0 {
                     stored.push(StoredPokemon {
                         box_number: box_index + 1,
@@ -405,8 +451,11 @@ impl<M: Memory> Game for ProfileGame<M> {
         let mut party = Vec::new();
         for slot in 0..u32::from(PARTY_SIZE) {
             let addr = base + slot * slot_size;
-            if self.has_species(addr) {
-                party.push(self.pokemon(addr, true));
+            // Not the last one read whole: that may be the last battle's.
+            if self.has_species(addr)
+                && let (pokemon, true) = self.decode(addr, true)
+            {
+                party.push(pokemon);
             }
         }
         party
@@ -1089,4 +1138,12 @@ fn hold_message() -> Vec<u8> {
     message.extend(line("to be ready..."));
     message.push(crate::text::END);
     message
+}
+
+/// The game's checksum of a Pokémon: its decrypted substructures summed as
+/// 16-bit words.
+fn checksum(subs: &[[u8; SUBSTRUCTURE_SIZE]; 4]) -> u16 {
+    subs.iter().flat_map(|sub| sub.chunks(2)).fold(0u16, |sum, word| {
+        sum.wrapping_add(u16::from_le_bytes([word[0], word[1]]))
+    })
 }

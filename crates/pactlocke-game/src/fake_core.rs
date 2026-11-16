@@ -22,6 +22,7 @@ pub const SAVE_KEYS: Keys = Keys(Keys::START.0 | Keys::SELECT.0);
 /// How big the fake game's save memory is.
 const SAVE_LEN: usize = 8;
 
+/// The fake emulator core: see the module's docs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FakeCore {
     frames: u64,

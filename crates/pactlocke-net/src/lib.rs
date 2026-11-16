@@ -2,6 +2,7 @@
 //! bounded, versioned wire format, over iroh (identity by key, no accounts,
 //! no server). The lobby is plain state machines; the transport only carries
 //! bytes, so tests run it in memory.
+#![warn(missing_docs)]
 
 mod invite;
 mod lobby;

@@ -60,12 +60,17 @@ impl RunEngine {
             return;
         };
         let still_here: BTreeSet<u32> = party.iter().chain(&pc).map(|p| p.pid).collect();
+        let own_id = game.trainer_id();
         // A trade puts the new Pokémon in the party slot of the one given away.
         let traded_away = |slot: usize| known.party.get(slot).filter(|old| !still_here.contains(old));
         let new: Vec<(Option<String>, Pokemon)> = party
             .iter()
             .enumerate()
             .map(|(slot, p)| (traded_away(slot), p))
+            // One of the Player's own in the slot of one gone is lent for a
+            // scene (Wally's Zigzagoon): the game puts the party back after.
+            // A trade's comes from someone else.
+            .filter(|(old, p)| old.is_none() || p.ot_id != own_id)
             .chain(pc.iter().map(|p| (None, p)))
             .filter(|(_, p)| !known.pids.contains(&p.pid))
             .map(|(old, p)| (old.and_then(|old| known.names.get(old).cloned()), p.clone()))

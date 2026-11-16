@@ -7,7 +7,10 @@
 //! starts the UI, draws a few frames and quits (used by CI). For a developer
 //! looking at the UI: `--shot FILE` saves the window as a PNG once it has
 //! settled and quits, `--demo-run ROM` starts a solo Run on that ROM straight
-//! away with the side panel open, and `--open settings` opens Settings.
+//! away with the side panel open, and `--open WHAT` opens Settings
+//! (`settings`, `sound`) or one of the side panel's tabs (`party`, `links`,
+//! `areas`, `graveyard`, `ruleset`). `--demo-coop ROM` is `--demo-run` shown
+//! as a made-up Run with two more Players.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -15,6 +18,7 @@ mod areas_panel;
 mod audio;
 mod coop;
 mod data_dir;
+mod demo;
 mod game_over;
 mod gamepad;
 mod headless;
@@ -75,93 +79,56 @@ fn main() -> std::process::ExitCode {
             .collect();
         return headless::main(&args);
     }
-    let opengl = std::env::args_os().any(|a| a == OPENGL_FLAG);
-    if opengl {
-        logger::init_continuing();
-    } else {
-        logger::init();
-    }
-    let Err(e) = windowed(opengl) else {
-        return std::process::ExitCode::SUCCESS;
-    };
-    log::error!("The window couldn't open ({}): {e}", renderer_name(opengl));
-    log::logger().flush();
-    // A graphics driver wgpu can't use: start again drawing with OpenGL. A
-    // new process, since a window's event loop can only be made once.
-    if !opengl {
-        let restarted = std::env::current_exe().and_then(|exe| {
-            std::process::Command::new(exe)
-                .args(std::env::args_os().skip(1))
-                .arg(OPENGL_FLAG)
-                .spawn()
-        });
-        match restarted {
-            Ok(_) => {
-                log::info!("Starting again with OpenGL");
-                return std::process::ExitCode::SUCCESS;
-            }
-            Err(r) => log::error!("Couldn't start again with OpenGL: {r}"),
+    match windowed() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Pactlocke couldn't start: {e}");
+            std::process::ExitCode::FAILURE
         }
     }
-    log::logger().flush();
-    rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Error)
-        .set_title("Pactlocke couldn't start")
-        .set_description(format!(
-            "Pactlocke couldn't open its window: {e}\n\nUpdating your graphics driver may fix this. \
-             The details are in {}.",
-            logger::path().display()
-        ))
-        .show();
-    std::process::ExitCode::FAILURE
 }
 
-/// Asks for the window to be drawn with OpenGL rather than wgpu: given by the
-/// app itself when it starts again because wgpu couldn't draw.
-const OPENGL_FLAG: &str = "--opengl";
+/// NVIDIA Optimus and AMD switchable graphics run a program on a laptop's
+/// dedicated GPU when its .exe exports these flags set to 1 (build.rs exports
+/// them). Without them, a laptop's integrated GPU, and its OpenGL driver, can
+/// get the app, and one such driver crashed it while wgpu looked for a GPU.
+#[cfg(windows)]
+mod gpu_preference {
+    #[unsafe(no_mangle)]
+    #[used]
+    #[allow(non_upper_case_globals)]
+    pub static NvOptimusEnablement: u32 = 1;
 
-fn renderer_name(opengl: bool) -> &'static str {
-    if opengl { "OpenGL" } else { "wgpu" }
+    #[unsafe(no_mangle)]
+    #[used]
+    #[allow(non_upper_case_globals)]
+    pub static AmdPowerXpressRequestHighPerformance: u32 = 1;
 }
 
-fn windowed(opengl: bool) -> eframe::Result {
-    log::info!("Drawing with {}", renderer_name(opengl));
+fn windowed() -> eframe::Result {
+    logger::init();
+
     let mut smoke = false;
     let (mut rom, mut shot, mut demo, mut demo_lobby, mut open) = (None, None, None, None, None);
+    let mut demo_coop = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
-            Some(OPENGL_FLAG) => {}
             Some("--smoke") => smoke = true,
             Some("--shot") => shot = args.next().map(PathBuf::from),
             Some("--demo-run") => demo = args.next().map(PathBuf::from),
             Some("--demo-lobby") => demo_lobby = args.next().map(PathBuf::from),
+            Some("--demo-coop") => demo_coop = args.next().map(PathBuf::from),
             Some("--open") => open = args.next().and_then(|a| a.into_string().ok()),
             _ => rom = Some(PathBuf::from(arg)),
         }
     }
 
-    // wgpu draws with DirectX 12 or Vulkan, never OpenGL: merely looking for
-    // an OpenGL adapter crashes AMD's OpenGL driver (atio6axx.dll) on some
-    // PCs. OpenGL proper is the `--opengl` start. `WGPU_BACKEND` still overrides.
-    let mut wgpu_setup = eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle();
-    wgpu_setup.instance_descriptor.backends =
-        eframe::wgpu::Backends::from_env().unwrap_or(eframe::wgpu::Backends::PRIMARY);
-    let wgpu_options = eframe::egui_wgpu::WgpuConfiguration {
-        wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(wgpu_setup),
-        ..Default::default()
-    };
     let options = eframe::NativeOptions {
-        wgpu_options,
         viewport: egui::ViewportBuilder::default()
             .with_title("Pactlocke")
             .with_inner_size([1100.0, 600.0])
             .with_min_inner_size([480.0, 320.0]),
-        renderer: if opengl {
-            eframe::Renderer::Glow
-        } else {
-            eframe::Renderer::Wgpu
-        },
         ..Default::default()
     };
     eframe::run_native(
@@ -178,8 +145,22 @@ fn windowed(opengl: bool) -> eframe::Result {
             if let Some(rom) = demo_lobby {
                 app.demo_lobby(&rom);
             }
-            if open.as_deref() == Some("settings") {
-                app.settings_dialog = Some(SettingsDialog::new(&app.settings, Category::General));
+            if let Some(rom) = demo_coop
+                && let Err(e) = app.demo_coop(&rom)
+            {
+                app.error = Some(e);
+            }
+            match open.as_deref() {
+                Some("settings") => {
+                    app.settings_dialog = Some(SettingsDialog::new(&app.settings, Category::General));
+                }
+                Some("sound") => app.settings_dialog = Some(SettingsDialog::new(&app.settings, Category::Sound)),
+                Some("party") => app.panel_tab = side_panel::Tab::Party,
+                Some("links") => app.panel_tab = side_panel::Tab::Links,
+                Some("areas") => app.panel_tab = side_panel::Tab::Areas,
+                Some("graveyard") => app.panel_tab = side_panel::Tab::Graveyard,
+                Some("ruleset") => app.panel_tab = side_panel::Tab::Ruleset,
+                _ => {}
             }
             app.shot = shot.map(|path| (path, SHOT_FRAMES));
             Ok(Box::new(app))
@@ -418,6 +399,8 @@ struct PactlockeApp {
     resuming: Option<Resuming>,
     /// `--shot`: where to save the window, and frames until then; then set once saved.
     shot: Option<(PathBuf, u32)>,
+    /// `--demo-coop`: what this Player's own Run is shown as having, in place of the real one.
+    demo_view: Option<RunView>,
     shot_saved: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -459,6 +442,7 @@ impl PactlockeApp {
             resuming: None,
             waiting_kept: Vec::new(),
             shot: None,
+            demo_view: None,
             shot_saved: Arc::default(),
             settings,
         };
@@ -599,6 +583,40 @@ impl PactlockeApp {
     }
 
     /// `--demo-lobby`: hosts a Lobby on this ROM at once.
+    /// `--demo-coop`: a solo Run on this ROM, shown as a made-up Run with two
+    /// more Players, so the side panel can be looked at with friends in it.
+    fn demo_coop(&mut self, path: &Path) -> Result<(), String> {
+        let mut draft = self.draft_for(path)?;
+        draft.name = "Hoenn with friends".to_owned();
+        let (rom, profile, caps) = (draft.rom.clone(), draft.profile.clone(), draft.level_caps.clone());
+        self.start_run(draft);
+        self.panel_shown = true;
+        let secret = self.lobbies.demo_secret().ok_or("This install has no network key.")?;
+        let me = self.lobbies.public_key().ok_or("This install has no network key.")?;
+        let made = demo::coop(
+            secret,
+            &self.lobbies.name,
+            &profile.name,
+            &profile.sha1,
+            &caps,
+            profile.sync_gate_names(),
+            SystemRunClock.now_ms(),
+        )?;
+        let locked = made.log.locked().ok_or("The demo's Run log has no lock.")?;
+        let playing = self.playing.as_mut().ok_or("The demo's Run didn't start.")?;
+        let Play::Run { commands, .. } = &playing.play else {
+            return Err("The demo's Run didn't start.".to_owned());
+        };
+        let rom: Arc<[u8]> = rom.into();
+        let mut spectate =
+            spectate::Spectate::new(me, &locked, &|_| rom.clone(), &profile, Arc::default(), commands, &[])?;
+        spectate.show_demo(made.shadows);
+        playing.spectate = Some(spectate);
+        self.lobbies.show_demo(made.log, made.reaches);
+        self.demo_view = Some(made.view);
+        Ok(())
+    }
+
     fn demo_lobby(&mut self, path: &Path) {
         match self.draft_for(path) {
             Ok(draft) => self.host_lobby(&draft),
@@ -801,7 +819,7 @@ impl PactlockeApp {
             let engine = RunEngine::resume(Box::new(file), Box::new(SystemRunClock)).map_err(|e| e.to_string())?;
             let resume = resume::Resuming::begin(engine, path, &mut self.lobbies, SystemRunClock.now_ms())?;
             self.panel_shown = true;
-            self.panel_tab = side_panel::Tab::Lobby;
+            self.panel_tab = side_panel::Tab::Ruleset;
             Ok(Resuming {
                 resume,
                 profile,
@@ -1312,6 +1330,9 @@ impl PactlockeApp {
                 {
                     act = Some(Menu::Retry);
                 }
+                if check(ui, "Mute", self.mute_shortcut(), self.settings.muted) {
+                    act = Some(Menu::Mute);
+                }
                 ui.separator();
                 if item(ui, "Take a screenshot", "F12", playing.is_some()) {
                     act = Some(Menu::Screenshot);
@@ -1371,6 +1392,12 @@ impl PactlockeApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(playing) = &self.playing {
                     ui.weak(format!("{}x", self.effective_speed().multiplier()));
+                    if self.settings.muted {
+                        ui.weak("Muted").on_hover_text(format!(
+                            "The sound is off. Emulation > Mute {} turns it back on.",
+                            self.mute_shortcut()
+                        ));
+                    }
                     ui.separator();
                     rom_report::status_label(ui, &playing.identity);
                     ui.separator();
@@ -1393,6 +1420,10 @@ impl PactlockeApp {
             Menu::Suspend => self.suspend_and_quit(),
             Menu::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Menu::Pause => self.paused = !self.paused,
+            Menu::Mute => {
+                self.settings.muted = !self.settings.muted;
+                self.settings.save();
+            }
             Menu::Speed(speed) => self.set_speed(speed),
             Menu::Retry => {
                 if let Some(Playing {
@@ -1441,6 +1472,12 @@ impl PactlockeApp {
         }
     }
 
+    /// The key that mutes, as the menu shows it: M, unless the Player put a
+    /// button on M, which then stays the button's.
+    fn mute_shortcut(&self) -> &'static str {
+        if self.settings.uses_key(egui::Key::M) { "" } else { "M" }
+    }
+
     /// The keyboard shortcuts the menus show, unless a text field has the keys.
     fn shortcuts(&mut self, ctx: &egui::Context) {
         // Settings may be waiting for a key to rebind: no shortcut takes it.
@@ -1457,6 +1494,8 @@ impl PactlockeApp {
             (K::new(M::NONE, Key::F11), Menu::Fullscreen),
             (K::new(M::NONE, Key::F12), Menu::Screenshot),
         ];
+        let mute = (!self.settings.uses_key(Key::M)).then_some((K::new(M::NONE, Key::M), Menu::Mute));
+        let acts = acts.into_iter().chain(mute);
         let mut fired = Vec::new();
         ctx.input_mut(|i| {
             for (shortcut, act) in acts {
@@ -1827,7 +1866,7 @@ impl PactlockeApp {
                     .char_limit(settings::NAME_LIMIT),
             );
             field.request_focus();
-            ui.weak("Settings → General changes it any time.");
+            ui.weak("Settings › General changes it any time.");
             let named = !self.name_draft.trim().is_empty();
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             done = ui.add_enabled(named, egui::Button::new("Continue")).clicked() || (enter && named);
@@ -2057,6 +2096,7 @@ enum Menu {
     Suspend,
     Exit,
     Pause,
+    Mute,
     Speed(Speed),
     Retry,
     Screenshot,
@@ -2085,9 +2125,9 @@ fn item(ui: &mut egui::Ui, text: &str, shortcut: &str, enabled: bool) -> bool {
 /// A menu item that is on or off, with a tick when on; whether it was clicked.
 fn check(ui: &mut egui::Ui, text: &str, shortcut: &str, on: bool) -> bool {
     let label = if on {
-        format!("✔ {text}")
+        format!("• {text}")
     } else {
-        format!("    {text}")
+        format!("   {text}")
     };
     item(ui, &label, shortcut, true)
 }
@@ -2185,7 +2225,7 @@ fn partner_tiles(ui: &mut egui::Ui, playing: &mut Playing) -> Option<usize> {
         });
     }
     ui.add_space(6.0);
-    ui.weak("View → Partner view turns this off.");
+    ui.weak("View › Partner view turns this off.");
     watch
 }
 
@@ -2233,6 +2273,7 @@ fn panel_contents(
     lobbies: &mut lobby_ui::Lobbies,
     tab: &mut side_panel::Tab,
     speed: u8,
+    demo_view: Option<&RunView>,
 ) -> side_panel::Asks {
     let Some(playing) = playing else {
         side_panel::lobby_only(ui, lobbies);
@@ -2242,6 +2283,7 @@ fn panel_contents(
         rom_report::rules_panel(ui, &playing.identity);
         return side_panel::Asks::default();
     };
+    let view = demo_view.cloned().unwrap_or(view);
     let locked_ruleset = lobbies.log().and_then(|l| l.locked()).map(|l| l.ruleset);
     let ruleset = match (&playing.spectate, locked_ruleset) {
         (Some(_), Some(locked)) => locked,
@@ -2262,7 +2304,7 @@ fn panel_contents(
 impl eframe::App for PactlockeApp {
     /// The window's close button or Exit: a Run with friends is suspended
     /// and its network left, so Resume goes on exactly where the Player stopped.
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+    fn on_exit(&mut self) {
         self.close_run();
     }
 
@@ -2275,7 +2317,7 @@ impl eframe::App for PactlockeApp {
             egui::Panel::bottom("error").show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.colored_label(ui.visuals().error_fg_color, error);
-                    if ui.small_button("✕").clicked() {
+                    if ui.small_button("×").clicked() {
                         self.error = None;
                     }
                 });
@@ -2297,8 +2339,13 @@ impl eframe::App for PactlockeApp {
                 }
             }
         }
-        let muted = self.settings.mute_fast_forward && self.fast_forward;
-        audio::set_gain(&self.gain, if muted { 0.0 } else { self.settings.volume });
+        // The volume follows the Settings slider as it moves, before OK.
+        let volume = self
+            .settings_dialog
+            .as_ref()
+            .map_or(self.settings.volume, |d| d.draft.volume);
+        let muted = self.settings.muted || (self.settings.mute_fast_forward && self.fast_forward);
+        audio::set_gain(&self.gain, if muted { 0.0 } else { volume });
 
         // Pause: asked for, Settings open in a solo game, or a solo game unfocused.
         if let Some(playing) = self.playing.as_mut() {
@@ -2320,6 +2367,7 @@ impl eframe::App for PactlockeApp {
             let mut closed = false;
             let title = self.playing.as_ref().map_or_else(String::new, |p| p.name.clone());
             let (mut playing, lobbies, tab) = (self.playing.as_mut(), &mut self.lobbies, &mut self.panel_tab);
+            let demo_view = self.demo_view.as_ref();
             ctx.show_viewport_immediate(
                 egui::ViewportId::from_hash_of("side panel window"),
                 egui::ViewportBuilder::default()
@@ -2327,7 +2375,7 @@ impl eframe::App for PactlockeApp {
                     .with_inner_size([400.0, 760.0]),
                 |ui, _class| {
                     egui::CentralPanel::default_margins().show(ui, |ui| {
-                        asks = panel_contents(ui, playing.as_deref_mut(), lobbies, tab, speed);
+                        asks = panel_contents(ui, playing.as_deref_mut(), lobbies, tab, speed, demo_view);
                     });
                     closed = ui.ctx().input(|i| i.viewport().close_requested());
                 },
@@ -2337,11 +2385,14 @@ impl eframe::App for PactlockeApp {
             }
         } else if show_panel {
             let (playing, lobbies, tab) = (self.playing.as_mut(), &mut self.lobbies, &mut self.panel_tab);
+            let demo_view = self.demo_view.as_ref();
             let shown = egui::Panel::right("side panel")
                 .resizable(true)
                 .default_size(self.settings.panel_width)
                 .size_range(settings::PANEL_WIDTHS.0..=settings::PANEL_WIDTHS.1)
-                .show(ui, |ui| asks = panel_contents(ui, playing, lobbies, tab, speed));
+                .show(ui, |ui| {
+                    asks = panel_contents(ui, playing, lobbies, tab, speed, demo_view)
+                });
             let width = shown.response.rect.width();
             if (width - self.settings.panel_width).abs() > 1.0 && !ctx.input(|i| i.pointer.any_down()) {
                 self.settings.panel_width = width;
@@ -2377,8 +2428,11 @@ impl eframe::App for PactlockeApp {
                 }
                 if let (Play::Run { commands, .. }, Some(log)) = (&playing.play, self.lobbies.log()) {
                     for command in spectate.follow(log) {
-                        // The emulator thread only stops when the Run is closed.
-                        let _ = commands.send(command);
+                        // A made-up Run's log is only shown: nothing in it reaches the game.
+                        if self.demo_view.is_none() {
+                            // The emulator thread only stops when the Run is closed.
+                            let _ = commands.send(command);
+                        }
                     }
                 }
                 // Streams are passed on from the UI thread: keep it awake.
@@ -2419,7 +2473,7 @@ impl eframe::App for PactlockeApp {
                 self.stop_playing();
             }
             self.panel_shown = true;
-            self.panel_tab = side_panel::Tab::Lobby;
+            self.panel_tab = side_panel::Tab::Ruleset;
         }
         self.was_in_lobby = joined;
         if self.settings.gamepad && self.playing.is_some() {

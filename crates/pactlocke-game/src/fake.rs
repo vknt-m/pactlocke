@@ -36,16 +36,25 @@ const PC_BOX_SLOTS: u8 = 30;
 const DEAD_BOX: u8 = 14;
 const NICKNAME_LENGTH: usize = 10;
 
+/// A scripted game for tests: a test sets what the rules engine reads, and
+/// the changes the engine applies show in its fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FakeGame {
+    /// The Area the Player is in.
     pub area: Option<Area>,
+    /// The Player's party.
     pub party: Vec<Pokemon>,
+    /// The Pokémon in the PC.
     pub pc: Vec<StoredPokemon>,
+    /// The battle that is on, if one is.
     pub battle: Option<Battle>,
+    /// The opponent's party.
     pub opponent_party: Vec<Pokemon>,
+    /// Whether a script is running, and where it is.
     pub script: ScriptContext,
     /// The running script's return addresses, innermost first.
     pub script_calls: Vec<u32>,
+    /// The badges the Player holds.
     pub badges: Badges,
     /// The level cap stage the Player is at (see [`Game::cap_stage`]).
     pub cap_stage: usize,
@@ -65,6 +74,7 @@ pub struct FakeGame {
     pub option_values: BTreeMap<String, Vec<String>>,
     /// The rules the game does through its own options: none by default.
     pub native_options: Vec<crate::NativeOption>,
+    /// The Player's trainer ID.
     pub trainer_id: u32,
     /// The game's play time in frames.
     pub play_time: u32,
@@ -76,13 +86,19 @@ pub struct FakeGame {
     pub evolutions: BTreeMap<u16, Vec<u16>>,
     /// The Gift and Static catalogue, as a Game Profile lists it.
     pub sources: Vec<SourceDef>,
+    /// Whether the Player is on the overworld, where Pokémon can be moved safely.
     pub safe_point: bool,
+    /// Whether the Bag holds any kind of Poké Ball.
     pub holds_poke_balls: bool,
 
     // What applied changes have switched on.
+    /// Whether ball throws are refused.
     pub catches_blocked: bool,
+    /// The level cap set, if one is.
     pub level_cap: Option<u8>,
+    /// Whether only balls keep a use in wild battles.
     pub wild_items_banned: bool,
+    /// Whether the Bag is refused in trainer battles.
     pub bag_locked: bool,
     /// Times the nickname prompt's cursor was kept on YES.
     pub nickname_cursor_kept: u32,
@@ -98,12 +114,16 @@ pub struct FakeGame {
     /// Partner Avatars: where the Player stands, their sprite, and room to
     /// draw (`None`, as on a Romhack, draws nothing).
     pub whereabouts: Option<crate::Whereabouts>,
+    /// The Player's own sprite as the game drew it last.
     pub player_sprite: Option<crate::SpriteImage>,
+    /// Where the game lets Partner Avatars be drawn.
     pub avatar_room: Option<crate::AvatarRoom>,
     /// Whether the game has its own randomizer, the seed Pactlocke gave it,
     /// and whether a trainer battle is triggered with its party not yet made.
     pub own_randomizer: bool,
+    /// The seed Pactlocke gave the game's own randomizer.
     pub shared_seed: Option<u32>,
+    /// Whether a trainer battle is triggered with its party not yet made.
     pub trainer_battle_coming: bool,
     /// The RNG states Pactlocke pinned, one a frame.
     pub rng_pins: Vec<u32>,

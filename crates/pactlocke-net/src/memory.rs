@@ -9,6 +9,7 @@ use crate::wire::Refusal;
 
 /// The Host and every joiner, connected through memory.
 pub struct MemoryNet {
+    /// The Host's lobby.
     pub host: HostLobby,
     joiners: BTreeMap<PeerKey, JoinLobby>,
     connected: BTreeMap<PeerKey, bool>,
@@ -19,6 +20,7 @@ pub struct MemoryNet {
 }
 
 impl MemoryNet {
+    /// A net with only the Host in it.
     pub fn new(host: HostLobby) -> Self {
         Self {
             host,
@@ -63,6 +65,7 @@ impl MemoryNet {
         self.deliver_from_joiner(peer, bytes);
     }
 
+    /// A joiner's connection drops.
     pub fn disconnect(&mut self, peer: PeerKey) {
         self.connected.insert(peer, false);
         let actions = self.host.disconnected(peer);
@@ -80,14 +83,17 @@ impl MemoryNet {
         std::mem::take(&mut self.host_inbox)
     }
 
+    /// Moves the net's clock on by `ms` milliseconds.
     pub fn advance_ms(&mut self, ms: i64) {
         self.now_ms += ms;
     }
 
+    /// A joiner's lobby, by key.
     pub fn joiner(&self, peer: PeerKey) -> &JoinLobby {
         &self.joiners[&peer]
     }
 
+    /// A joiner's lobby, by key, to change.
     pub fn joiner_mut(&mut self, peer: PeerKey) -> &mut JoinLobby {
         self.joiners.get_mut(&peer).expect("a joiner")
     }

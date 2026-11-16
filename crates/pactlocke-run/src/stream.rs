@@ -83,6 +83,7 @@ pub struct InputChunk {
     pub player: PlayerKey,
     /// Which boot of their game, from 1: each boot's stream starts at frame 0.
     pub boot: u32,
+    /// The first frame the chunk covers.
     pub first_frame: u64,
     /// The keys held for each frame from `first_frame` on.
     pub keys: Vec<Keys>,
@@ -102,7 +103,9 @@ pub struct InputChunk {
 /// the first `after` changes this chunk stamps there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Mark {
+    /// The frame boundary it was taken at.
     pub frame: u64,
+    /// How many of this chunk's changes stamped there come before it.
     pub after: u16,
 }
 
@@ -128,15 +131,20 @@ impl InputChunk {
 /// Someone is missing part of a Player's stream: everything from `from_frame` on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StreamWant {
+    /// Whose stream is wanted.
     pub player: PlayerKey,
+    /// Which boot of their game.
     pub boot: u32,
+    /// The first frame missing.
     pub from_frame: u64,
 }
 
 /// What the input stream's network messages carry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamMessage {
+    /// A stretch of a Player's input stream.
     Chunk(InputChunk),
+    /// A request for part of a Player's stream.
     Want(StreamWant),
 }
 
@@ -710,6 +718,7 @@ fn trim_front(chunk: &mut InputChunk, from: u64) {
 /// each Player's stream on to everyone else.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outgoing {
+    /// To one Player.
     To(PlayerKey, StreamMessage),
     /// To every Player in the Run but this one.
     AllBut(PlayerKey, StreamMessage),

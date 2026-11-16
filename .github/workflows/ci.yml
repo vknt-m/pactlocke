@@ -68,6 +68,13 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # Broken links in doc comments fail here.
+      - name: Docs
+        if: runner.os == 'Linux'
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
       - name: Tests, including the determinism check
         run: cargo test --workspace
 

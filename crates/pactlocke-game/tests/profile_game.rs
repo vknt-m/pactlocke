@@ -51,6 +51,53 @@ fn the_party_is_read_and_decrypted() {
     assert_eq!(party[1].stats.unwrap().hp, 0);
 }
 
+/// `mon`'s party form as the game leaves it while it reads it: decrypted in place.
+fn decrypted_in_place(mon: &TestMon) -> [u8; 100] {
+    let mut bytes = mon.party_bytes();
+    let key = mon.pid ^ mon.ot_id;
+    for word in bytes[0x20..0x50].chunks_mut(4) {
+        let plain = u32::from_le_bytes((&*word).try_into().unwrap()) ^ key;
+        word.copy_from_slice(&plain.to_le_bytes());
+    }
+    bytes
+}
+
+#[test]
+fn a_party_pokemon_the_game_has_decrypted_in_place_reads_the_same() {
+    // A frame can end in the middle of the game's own read of a Pokémon.
+    let mut game = at_overworld();
+    set_party(game.memory_mut(), &[bulbasaur()]);
+    game.memory_mut().put(PARTY, &decrypted_in_place(&bulbasaur()));
+
+    assert_eq!(game.party(), vec![bulbasaur_read()]);
+}
+
+#[test]
+fn a_half_written_party_pokemon_reads_as_the_one_last_read_whole() {
+    let mut game = at_overworld();
+    set_party(game.memory_mut(), &[bulbasaur()]);
+    assert_eq!(game.party(), vec![bulbasaur_read()]);
+
+    // A frame ends while the game writes the slot: its checksum doesn't match.
+    let mut half = rattata().party_bytes();
+    half[0x20] ^= 0xFF;
+    game.memory_mut().put(PARTY, &half);
+    assert_eq!(game.party(), vec![bulbasaur_read()], "not a garbled species");
+
+    set_party(game.memory_mut(), &[rattata()]);
+    assert_eq!(game.party()[0].species, 19, "once written whole, the new one");
+}
+
+#[test]
+fn a_half_written_pc_pokemon_never_read_whole_is_not_listed() {
+    let mut game = at_overworld();
+    let mut half = bulbasaur().party_bytes();
+    half[0x24] ^= 0x5A;
+    game.memory_mut().put(PC_STORAGE + 4, &half[..80]);
+
+    assert_eq!(game.pc(), vec![], "garbage isn't a Pokémon (a Gift, to the Run)");
+}
+
 #[test]
 fn the_area_is_the_current_region_map_section_after_renames() {
     let mut game = at_overworld();

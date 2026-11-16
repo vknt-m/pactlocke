@@ -118,7 +118,7 @@ pub fn screen(ui: &mut egui::Ui, over: &GameOverView, view: &RunView, log: Optio
             ui.add_space(12.0);
             graveyard(ui, view, log, me);
             ui.add_space(12.0);
-            ui.weak("File → Close Run goes back to your Runs. This Run can't be resumed.");
+            ui.weak("File › Close Run goes back to your Runs. This Run can't be resumed.");
         });
     });
 }

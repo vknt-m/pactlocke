@@ -52,6 +52,10 @@ fn a_boot_takes_a_checkpoint_and_so_does_each_in_game_save() {
         "a new game's blank cartridge isn't a save"
     );
     player.plays(30);
+    // A save is written over several looks; its checkpoint comes once it stops changing.
+    player.engine.save_memory_seen(&[1, 0xFF, 0xFF]);
+    player.engine.save_memory_seen(&[1, 2, 3]);
+    assert!(!player.engine.checkpoint_wanted(), "still being written");
     player.engine.save_memory_seen(&[1, 2, 3]);
     assert!(player.engine.checkpoint_wanted(), "the game was saved");
     checkpoint_if_wanted(&mut player);
@@ -109,6 +113,7 @@ fn after_a_crash_the_game_is_rebuilt_from_the_last_checkpoint_and_the_presses_af
     checkpoint_if_wanted(&mut player);
     player.engine.save_memory_seen(&[0xFF]);
     plays_keys(&mut player, &[Keys::A; 10]);
+    player.engine.save_memory_seen(&[9]);
     player.engine.save_memory_seen(&[9]);
     checkpoint_if_wanted(&mut player);
 
@@ -178,6 +183,7 @@ fn a_checkpoint_holds_the_patches_active_when_it_was_taken() {
     player.leaves_battle();
     player.meets_wild(PIDGEY);
     player.engine.save_memory_seen(&[0xFF]);
+    player.engine.save_memory_seen(&[7]);
     player.engine.save_memory_seen(&[7]);
     checkpoint_if_wanted(&mut player);
 

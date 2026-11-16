@@ -21,21 +21,61 @@ const OWN_FIELDS: [&str; 6] = ["schema", "id", "name", "game_code", "sha1", "sta
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProfileError {
     /// Not valid TOML, or not a valid profile.
-    Format { file: String, message: String },
+    Format {
+        /// The profile's file.
+        file: String,
+        /// What is wrong with it.
+        message: String,
+    },
     /// Written for a profile format this build doesn't read.
-    Schema { file: String, found: i64 },
+    Schema {
+        /// The profile's file.
+        file: String,
+        /// The schema it is written for.
+        found: i64,
+    },
     /// Extends a profile that doesn't exist.
-    UnknownParent { file: String, parent: String },
+    UnknownParent {
+        /// The profile's file.
+        file: String,
+        /// The parent it names.
+        parent: String,
+    },
     /// Extends a profile that itself extends another; one parent at most.
-    ParentChain { file: String, parent: String },
+    ParentChain {
+        /// The profile's file.
+        file: String,
+        /// The parent it names.
+        parent: String,
+    },
     /// Inherits a field every profile must set itself.
-    MissingOwnField { file: String, field: &'static str },
+    MissingOwnField {
+        /// The profile's file.
+        file: String,
+        /// The field it leaves out.
+        field: &'static str,
+    },
     /// Two profiles share an id or a SHA-1.
-    Duplicate { file: String, what: String },
+    Duplicate {
+        /// The profile's file.
+        file: String,
+        /// What it shares: its id or its SHA-1.
+        what: String,
+    },
     /// Well-formed, but contradicts itself.
-    Invalid { file: String, message: String },
+    Invalid {
+        /// The profile's file.
+        file: String,
+        /// What is wrong with it.
+        message: String,
+    },
     /// A file or folder of profiles can't be read.
-    Unreadable { file: String, message: String },
+    Unreadable {
+        /// The file or folder.
+        file: String,
+        /// Why it can't be read.
+        message: String,
+    },
 }
 
 impl fmt::Display for ProfileError {
@@ -70,11 +110,18 @@ impl std::error::Error for ProfileError {}
 pub enum RomIdentity {
     /// A ROM with a Game Profile.
     Profiled {
+        /// The ROM's Game Profile.
         profile: Arc<GameProfile>,
+        /// What each rule can do on this exact ROM.
         capabilities: CapabilityReport,
     },
     /// A ROM no profile matches.
-    Unprofiled { sha1: String, verdict: Unprofiled },
+    Unprofiled {
+        /// The ROM's SHA-1, lowercase hex.
+        sha1: String,
+        /// Why it can't be played.
+        verdict: Unprofiled,
+    },
 }
 
 /// Why a ROM with no Game Profile can't be played. (One laid out like a
@@ -93,8 +140,11 @@ pub enum Unprofiled {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TestedRomhack {
+    /// The Romhack's name.
     pub name: String,
+    /// The version tested.
     pub version: String,
+    /// Who made it.
     pub author: String,
     /// The Game Profile of the game it patches.
     pub base: String,
@@ -108,6 +158,8 @@ const BUNDLED_ROMHACKS: &str = include_str!("../romhacks.toml");
 /// Ids of the profiles made for Untested Romhacks start with this.
 pub const UNTESTED_PREFIX: &str = "untested-";
 
+/// Every Game Profile the app can use: the bundled ones, the developer's
+/// local ones, and the tested Romhacks list.
 #[derive(Debug, Clone, Default)]
 pub struct ProfileStore {
     profiles: Vec<Arc<GameProfile>>,

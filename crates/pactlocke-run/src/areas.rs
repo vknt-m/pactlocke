@@ -15,6 +15,7 @@ pub struct AreaEncounter {
     pub area: String,
     /// The Pokémon met there.
     pub species: u16,
+    /// Its species name, as the game shows it.
     pub species_name: String,
     /// Whether the Player caught it.
     pub caught: bool,

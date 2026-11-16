@@ -1,5 +1,6 @@
 //! Game Profiles, the capability report, and the game interface: the rules
 //! engine's view of one Player's game.
+#![warn(missing_docs)]
 
 mod capability;
 mod caps;
@@ -40,6 +41,8 @@ pub use text::{decode as decode_text, encode as encode_text};
 /// the profile's merges and renames.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Area {
+    /// The Area's region-map section.
     pub id: u16,
+    /// The Area's name as Players see it.
     pub name: String,
 }

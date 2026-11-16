@@ -64,6 +64,9 @@ pub struct Lobbies {
     addresses_written: bool,
     /// The lobby as last written to the app's log, to note each change once.
     noted: String,
+    /// A developer's made-up Run (`--demo-coop`): its Run log, and how each
+    /// other Player's app would be reached. No network is behind it.
+    demo: Option<(pactlocke_run::RunLog, Vec<(PlayerKey, crate::player_strip::Reach)>)>,
 }
 
 /// How long a joiner waits before reconnecting to the Host.
@@ -107,7 +110,18 @@ impl Lobbies {
             alone_since: None,
             addresses_written: false,
             noted: String::new(),
+            demo: None,
         }
+    }
+
+    /// This install's secret key, for signing a developer's made-up Run.
+    pub fn demo_secret(&self) -> Option<[u8; 32]> {
+        self.key.as_ref().ok().copied()
+    }
+
+    /// Shows a developer's made-up Run as if this app were in its Lobby.
+    pub fn show_demo(&mut self, log: pactlocke_run::RunLog, reaches: Vec<(PlayerKey, crate::player_strip::Reach)>) {
+        self.demo = Some((log, reaches));
     }
 
     /// Whether this app is in a lobby, as Host or joiner.
@@ -316,7 +330,7 @@ impl Lobbies {
         match (&self.host, &self.join) {
             (Some(_), _) => true,
             (None, Some((_, coop))) => coop.connected(),
-            (None, None) => false,
+            (None, None) => self.demo.is_some(),
         }
     }
 
@@ -560,7 +574,7 @@ impl Lobbies {
         match (&self.host, &self.join) {
             (Some((_, coop)), _) => Some(coop.log()),
             (None, Some((_, coop))) => Some(coop.log()),
-            (None, None) => None,
+            (None, None) => self.demo.as_ref().map(|(log, _)| log),
         }
     }
 
@@ -572,7 +586,10 @@ impl Lobbies {
             (Some((node, _)), _) => node.links().into_iter().find(|(peer, _)| peer.0 == player)?.1,
             (None, Some((node, coop))) if coop.host() == player => node.link()?,
             (None, Some(_)) => return Some(Reach::ViaHost),
-            (None, None) => return None,
+            (None, None) => {
+                let (_, reaches) = self.demo.as_ref()?;
+                return reaches.iter().find(|(key, _)| *key == player).map(|(_, reach)| *reach);
+            }
         };
         Some(if link.direct {
             Reach::Direct { ping_ms: link.ping_ms }
@@ -738,7 +755,7 @@ impl Lobbies {
                 };
             });
             ui.weak(format!(
-                "Joining as {}. Settings → General changes your name.",
+                "Joining as {}. Settings › General changes your name.",
                 self.name
             ));
             if let Some(error) = &prompt.error {
@@ -792,7 +809,28 @@ impl Lobbies {
             (Some((host, _)), _) => (host.view(), true),
             (None, Some((join, _))) => (join.view(), false),
             (None, None) => {
-                ui.weak("Not in a Lobby: the Run's network has been left.");
+                match self.demo.as_ref().and_then(|(log, _)| log.locked()) {
+                    // A developer's made-up Run: who is in it, with no network to show.
+                    Some(locked) => {
+                        ui.strong(&locked.run_name);
+                        ui.weak(&locked.game_name);
+                        ui.separator();
+                        ui.weak(format!("Players · {}", locked.roster.len()));
+                        for (index, player) in locked.roster.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                crate::theme::dot(ui, index);
+                                ui.label(&player.name);
+                                if index == 0 {
+                                    ui.weak("Host");
+                                }
+                                ui.label("ROM matches");
+                            });
+                        }
+                    }
+                    None => {
+                        ui.weak("Not in a Lobby: the Run's network has been left.");
+                    }
+                }
                 return;
             }
         };
@@ -1116,6 +1154,15 @@ mod tests {
         });
         let log = apps[2].log().unwrap();
         assert_eq!(log.host(), blue);
+        // The Graveyard tab reads every Player's Dead from the log, newest first.
+        let graves = pactlocke_run::graves(log);
+        let pids = |player| {
+            graves
+                .get(player)
+                .map(|dead| dead.iter().map(|g| g.pid).collect::<Vec<_>>())
+        };
+        assert_eq!(pids(&green), Some(vec![0xC2, 0xC1]));
+        assert_eq!(pids(&red), None, "Red has no Deaths yet");
         assert_eq!(apps[2].host_key(), Some(blue), "Green's streams go through Blue");
         assert!(log.bodies().any(|(by, body)| by == blue && body == LogBody::Takeover));
 

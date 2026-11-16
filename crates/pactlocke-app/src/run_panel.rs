@@ -1,28 +1,8 @@
-//! Pieces of the side panel during a Run: the Graveyard, the must-nickname
+//! Pieces of the side panel during a Run: the must-nickname
 //! prompt, and how long ago something happened.
 
 use eframe::egui;
-use pactlocke_run::{NicknameWanted, RunCommand, RunView};
-
-/// The Dead, newest first, with what killed each.
-pub fn graveyard(ui: &mut egui::Ui, view: &RunView, now: i64) {
-    if view.graveyard.is_empty() {
-        ui.weak("No one has died yet.");
-    }
-    for grave in &view.graveyard {
-        ui.horizontal_wrapped(|ui| {
-            ui.colored_label(crate::theme::DANGER, egui::RichText::new(&grave.name).strong());
-            if grave.name != grave.species_name {
-                ui.weak(format!("({})", grave.species_name));
-            }
-        });
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!("Killed by {}", grave.killed_by));
-            ui.weak(ago(now - grave.at_ms));
-        });
-        ui.add_space(4.0);
-    }
-}
+use pactlocke_run::{NicknameWanted, RunCommand};
 
 /// "just now", "5 min ago", "3 h ago", "2 days ago".
 pub fn ago(ms: i64) -> String {

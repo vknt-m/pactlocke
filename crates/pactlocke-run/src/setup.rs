@@ -25,8 +25,10 @@ pub enum Preset {
 }
 
 impl Preset {
+    /// Every preset, in the order setup offers them.
     pub const ALL: [Preset; 3] = [Preset::ClassicNuzlocke, Preset::SoulLink, Preset::Hardcore];
 
+    /// The preset's name as Players see it.
     pub fn name(self) -> &'static str {
         match self {
             Preset::ClassicNuzlocke => "Classic Nuzlocke",
@@ -180,7 +182,9 @@ pub struct SetupCheck {
 pub struct SetupPlayer {
     /// Their install's key: their identity in the roster and the Run log.
     pub key: [u8; 32],
+    /// Their name, as shown.
     pub name: String,
+    /// What they bring: their ROM and app, checked against the Host's.
     pub check: SetupCheck,
     /// The Ruleset version they said Ready to, if they did.
     #[serde(default)]
@@ -190,24 +194,33 @@ pub struct SetupPlayer {
 /// One thing a Player has that doesn't match the Host's.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mismatch {
+    /// The Player's name.
     pub player: String,
+    /// What doesn't match, as a sentence.
     pub what: String,
 }
 
 /// A locked Run's roster, in join order: the Host first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RosterEntry {
+    /// The Player's install key.
     pub key: [u8; 32],
+    /// Their name, as shown.
     pub name: String,
 }
 
 /// The lock: what every Player plays by, and when every game starts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Locked {
+    /// The Run's name.
     pub run_name: String,
+    /// The name of the game it is played on.
     pub game_name: String,
+    /// The SHA-1 of the ROM every Player plays.
     pub game_sha1: String,
+    /// The Ruleset, locked for the rest of the Run.
     pub ruleset: Ruleset,
+    /// Every Player in the Run, in join order: the Host first.
     pub roster: Vec<RosterEntry>,
     /// When every game starts from a new game, after the countdown; every
     /// game's clock starts here too.
@@ -217,14 +230,21 @@ pub struct Locked {
 /// What every Player sees of setup.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetupView {
+    /// The Run's name.
     pub run_name: String,
+    /// The name of the game it is played on.
     pub game_name: String,
+    /// The SHA-1 of the ROM every Player must bring.
     pub game_sha1: String,
+    /// The Ruleset as the Host has it now.
     pub ruleset: Ruleset,
     /// Goes up with every change; Ready is said to a version.
     pub version: u64,
+    /// Every Player in setup, the Host first.
     pub players: Vec<SetupPlayer>,
+    /// What Players have that doesn't match the Host's.
     pub mismatches: Vec<Mismatch>,
+    /// The lock, once the Host has locked the Ruleset and roster.
     pub locked: Option<Locked>,
     /// The game's own options the Ruleset's rules are done with.
     #[serde(default)]
@@ -232,6 +252,7 @@ pub struct SetupView {
 }
 
 impl SetupView {
+    /// Whether the Player with this key has said Ready to the Ruleset as it is now.
     pub fn is_ready(&self, key: &[u8; 32]) -> bool {
         self.players
             .iter()
@@ -249,12 +270,15 @@ pub enum SetupMessage {
     Check(SetupCheck),
     /// From a Player: Ready to this Ruleset version.
     Ready {
+        /// The Ruleset version they are Ready to.
         version: u64,
     },
+    /// From a Player: not Ready after all.
     Unready,
 }
 
 impl SetupMessage {
+    /// The message as it crosses the network.
     pub fn to_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(self).expect("a setup message serialises")
     }
@@ -523,6 +547,7 @@ impl RunSetup {
         Ok(locked)
     }
 
+    /// The Ruleset as the Host has it now.
     pub fn ruleset(&self) -> &Ruleset {
         &self.ruleset
     }

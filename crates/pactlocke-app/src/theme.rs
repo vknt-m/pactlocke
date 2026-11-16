@@ -14,6 +14,8 @@ pub const PLAYER_COLOURS: [Color32; 3] = [
     Color32::from_rgb(0xA9, 0x8B, 0xF0),
     Color32::from_rgb(0x4F, 0xB8, 0x73),
 ];
+/// A rule that is on in the Ruleset.
+pub const ON: Color32 = Color32::from_rgb(0x57, 0xB9, 0x7A);
 /// Violations, and Dead Pokémon.
 pub const DANGER: Color32 = Color32::from_rgb(0xE5, 0x48, 0x4D);
 /// Cheat flags.
@@ -33,6 +35,15 @@ pub fn chip(ui: &mut egui::Ui, name: &str, index: usize) -> egui::Response {
         .inner_margin(egui::Margin::symmetric(6, 1))
         .show(ui, |ui| ui.label(text))
         .response
+}
+
+/// A tick, drawn: the app's font has no tick character.
+pub fn tick(ui: &mut egui::Ui, colour: Color32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(12.0), egui::Sense::hover());
+    let at = |x: f32, y: f32| Pos2::new(rect.left() + x, rect.top() + y);
+    let stroke = Stroke::new(1.8, colour);
+    ui.painter().line_segment([at(2.0, 6.5), at(5.0, 9.5)], stroke);
+    ui.painter().line_segment([at(5.0, 9.5), at(10.5, 3.0)], stroke);
 }
 
 /// A small dot in a Player's colour.

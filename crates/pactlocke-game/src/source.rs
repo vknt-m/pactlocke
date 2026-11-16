@@ -8,13 +8,17 @@ use serde::Deserialize;
 /// flag) in the frame the Pokémon arrives or the battle starts.
 pub const SOURCE_WINDOW: u32 = 0x100;
 
+/// What kind of source a catalogue entry is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     /// The first Pokémon: always allowed, whichever one is picked.
     Starter,
+    /// A Pokémon the game hands the Player.
     Gift,
+    /// An egg the game hands the Player: a Gift too.
     Egg,
+    /// A scripted, one-off battle with a specific Pokémon.
     Static,
 }
 
@@ -44,7 +48,9 @@ impl SourceKind {
 pub struct Source {
     /// Stable across Players: the same Gift or Static has the same key in every game.
     pub key: String,
+    /// The source's name as Players see it.
     pub name: String,
+    /// Whether it is the starter, a Gift, an egg or a Static.
     pub kind: SourceKind,
 }
 
@@ -52,8 +58,11 @@ pub struct Source {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceDef {
+    /// Stable across Players: see [`Source::key`].
     pub key: String,
+    /// The source's name as Players see it.
     pub name: String,
+    /// Whether it is the starter, a Gift, an egg or a Static.
     pub kind: SourceKind,
     /// The instructions (`givemon`, `giveegg`, `setwildbattle`) that belong to it;
     /// a choice of several Pokémon is several instructions of one source.

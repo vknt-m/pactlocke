@@ -479,8 +479,9 @@ impl Table {
     pub fn saves(&mut self, i: usize) {
         self.apps[i].running.run_frame(pactlocke_game::SAVE_KEYS);
         self.tick();
-        // The running game looks for a save every second.
-        self.plays(i, 70);
+        // The running game looks for a save every second, and checkpoints
+        // it at the next look that finds it written.
+        self.plays(i, 130);
     }
 
     /// The Run's shared tallies as Player `i`'s app recomputes them.

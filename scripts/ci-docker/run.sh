@@ -41,12 +41,17 @@ EOF
 rustc --version
 cargo clippy --version
 
+docs() {
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+}
+
 time_zones() {
 	TZ=Pacific/Kiritimati cargo test -p pactlocke-mgba && TZ=America/Los_Angeles cargo test -p pactlocke-mgba
 }
 
 step "Formatting" cargo fmt --all --check
 step "Clippy" cargo clippy --workspace --all-targets -- -D warnings
+step "Docs" docs
 step "Tests" cargo test --workspace
 step "Core tests in other time zones" time_zones
 step "Build the app" cargo build -p pactlocke-app

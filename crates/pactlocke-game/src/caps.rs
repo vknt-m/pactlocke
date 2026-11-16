@@ -11,6 +11,7 @@ use crate::profile::{GameProfile, ROM_BASE};
 pub struct LevelCap {
     /// Who the cap is for, such as "Brock".
     pub name: String,
+    /// The level no Pokémon may pass at this stage.
     pub level: u8,
 }
 
@@ -19,6 +20,7 @@ pub struct LevelCap {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LevelCapDef {
+    /// Who the cap is for, such as "Brock".
     pub name: String,
     /// The trainers of this stage (several where the team depends on the
     /// starter); the default cap is the strongest Pokémon among them.

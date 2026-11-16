@@ -4,6 +4,7 @@ use pactlocke_game::{Change, FakeCore, FakeGame, Game, ProfileGame};
 /// A game the Run engine can both read and change. Only the Run engine calls
 /// [`LiveGame::apply`], at a frame boundary, after stamping the change.
 pub trait LiveGame: Game {
+    /// Makes one change to the game: a write to RAM or a ROM patch.
     fn apply(&mut self, change: &Change);
 }
 
@@ -11,9 +12,11 @@ pub trait LiveGame: Game {
 /// a Player plays in a Run. The core is what runs frames, is checkpointed
 /// and is hashed for the Player's Shadow Games.
 pub trait PlayedGame: LiveGame + Send {
+    /// The kind of emulator core the game runs on.
     type Core: CoreAdapter;
     /// The emulator core the game runs on.
     fn core(&self) -> &Self::Core;
+    /// The emulator core the game runs on, to drive.
     fn core_mut(&mut self) -> &mut Self::Core;
     /// Puts the ROM's own bytes back over a patch, as a Retry does before
     /// it restores a checkpoint's patch set.

@@ -18,8 +18,11 @@ pub enum Member {
     Pending,
     /// Caught (or given) this Pokémon from it.
     Caught {
+        /// The Pokémon's personality value.
         pid: u32,
+        /// Its species number.
         species: u16,
+        /// Its species name, as the game shows it.
         species_name: String,
         /// Their Shadow Game here has shown it (always so for this Player's own).
         judged: bool,
@@ -27,12 +30,16 @@ pub enum Member {
         dead: bool,
     },
     /// Missed or lost it (`skipped`: chose to skip it): the Link is broken.
-    Missed { skipped: bool },
+    Missed {
+        /// Whether the Player chose to skip it.
+        skipped: bool,
+    },
 }
 
 /// The Link of one source: every Player's part.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Link {
+    /// The source every member's Encounter is from.
     pub source: SourceRef,
     /// A Gift (rather than an Area or a Static): one a Player may choose to skip.
     pub gift: bool,
@@ -62,6 +69,7 @@ impl Link {
 /// One of this Player's Pokémon whose Link waits on another Player's catch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WaitingOnLink {
+    /// The Pokémon's personality value.
     pub pid: u32,
     /// What it waits for, to finish a sentence: "until Blue catches on Route 1".
     pub until: String,
@@ -243,6 +251,7 @@ pub struct LinkKeeper {
 }
 
 impl LinkKeeper {
+    /// The Links as this Player sees them.
     pub fn new(me: PlayerKey) -> Self {
         Self { me }
     }

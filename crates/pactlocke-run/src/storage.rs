@@ -12,10 +12,15 @@ use crate::{CheckpointReason, LogEntry, PlayerKey, Recorded, Ruleset, ShadowChec
 /// What a Run is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunInfo {
+    /// The Run's name.
     pub name: String,
+    /// The name of the game it is played on.
     pub game_name: String,
+    /// The SHA-1 of the ROM it is played on.
     pub game_sha1: String,
+    /// Where the ROM was when the Run started, to offer it again on resume.
     pub rom_path: Option<String>,
+    /// The Run's Ruleset.
     pub ruleset: Ruleset,
     /// Unix time in milliseconds.
     pub created_ms: i64,
@@ -26,7 +31,9 @@ pub struct RunInfo {
 /// frame `frame`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stamped {
+    /// The frame boundary it landed at.
     pub frame: u64,
+    /// The write or patch.
     pub change: Change,
 }
 
@@ -34,9 +41,13 @@ pub struct Stamped {
 /// `first_frame` on, and the changes stamped in that stretch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputBatch {
+    /// Which boot of the game, counting from 1.
     pub boot: u32,
+    /// The first frame the stretch covers.
     pub first_frame: u64,
+    /// The keys held for each frame from `first_frame` on.
     pub keys: Vec<Keys>,
+    /// The changes stamped in the stretch, in order.
     pub stamped: Vec<Stamped>,
 }
 
@@ -47,7 +58,9 @@ pub struct InputBatch {
 /// crash can be rebuilt from it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredCheckpoint {
+    /// Why it was taken.
     pub reason: CheckpointReason,
+    /// Which boot of the game it was taken in.
     pub boot: u32,
     /// The frame boundary it was taken at: frames run in its boot before it.
     pub frame: u64,
@@ -57,14 +70,18 @@ pub struct StoredCheckpoint {
     pub clock_ms: i64,
     /// Every ROM patch active then, by address.
     pub patches: Vec<(u32, Vec<u8>)>,
+    /// The core's savestate and save memory.
     pub core: Checkpoint,
 }
 
 /// Everything kept about a Run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredRun {
+    /// What the Run is.
     pub info: RunInfo,
+    /// Every event this Player's game recorded, in order.
     pub events: Vec<Recorded>,
+    /// The local input stream, in stretches.
     pub inputs: Vec<InputBatch>,
     /// The game's save memory as last seen, to boot the game with on resume.
     pub save_memory: Option<Vec<u8>>,
@@ -82,6 +99,7 @@ pub struct StoredRun {
     pub shadows: Vec<(PlayerKey, ShadowCheckpoint)>,
 }
 
+/// Why a Run couldn't be stored or loaded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageError {
     /// There is no Run here.
@@ -105,8 +123,11 @@ impl std::error::Error for StorageError {}
 pub trait RunStorage: Send {
     /// Records a new Run's details.
     fn create(&mut self, info: &RunInfo) -> Result<(), StorageError>;
+    /// Records an event.
     fn append(&mut self, event: &Recorded);
+    /// Records a stretch of the local input stream.
     fn record_inputs(&mut self, batch: &InputBatch);
+    /// Keeps the game's save memory as last seen.
     fn store_save_memory(&mut self, save: &[u8]);
     /// Records an event with the checkpoint it refers to, together.
     fn append_with_checkpoint(&mut self, event: &Recorded, checkpoint: &StoredCheckpoint);
@@ -124,6 +145,7 @@ pub trait RunStorage: Send {
     fn keep_waiting(&mut self, waiting: &[Submission]);
     /// Keeps this checkpoint of the Shadow Game of `player`, in place of theirs before.
     fn keep_shadow(&mut self, player: PlayerKey, checkpoint: &ShadowCheckpoint);
+    /// Everything kept about the Run, once every write so far has landed.
     fn load(&mut self) -> Result<StoredRun, StorageError>;
     /// Why a write failed, if one has since the Run was opened.
     fn write_failure(&mut self) -> Option<String>;

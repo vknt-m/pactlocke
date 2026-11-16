@@ -38,13 +38,18 @@ pub fn tab(
             }
             ui.end_row();
             for link in links {
-                let source = egui::Label::new(&link.source.name).wrap();
-                match &link.broken {
-                    Some(why) => ui
-                        .add_sized([90.0, ICON], source)
-                        .on_hover_text(format!("Broken: {why}")),
-                    None => ui.add_sized([90.0, ICON], source),
-                };
+                // A fixed column for the name, wrapped: `add_sized` would justify
+                // a wrapped name, spreading its letters across the column.
+                let source = ui
+                    .allocate_ui_with_layout(
+                        egui::vec2(90.0, ICON),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| ui.add(egui::Label::new(&link.source.name).wrap()),
+                    )
+                    .inner;
+                if let Some(why) = &link.broken {
+                    source.on_hover_text(format!("Broken: {why}"));
+                }
                 for (player, name, _) in players {
                     if let Some(skip) = part(ui, link, player, name, me, icons) {
                         confirming = Some(skip);
@@ -131,7 +136,7 @@ fn part(
             let (mark, why) = if *skipped {
                 ("skip", "skipped it")
             } else {
-                ("✕", "didn't catch it")
+                ("×", "didn't catch it")
             };
             let who = if player == me {
                 "You".to_owned()

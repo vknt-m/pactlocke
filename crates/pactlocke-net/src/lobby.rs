@@ -30,26 +30,36 @@ fn shown_name(name: &str) -> String {
 /// What the Host does about a connection, decided before any message is read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Admission {
+    /// Let the connection in.
     Admit,
+    /// Close the connection, telling the joiner why.
     Refuse(Refusal),
 }
 
 /// Something the Host's transport must do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostAction {
+    /// Send `bytes` to one Player.
     Send {
+        /// The Player to send to.
         to: PeerKey,
+        /// The encoded message.
         bytes: Vec<u8>,
     },
     /// Setup or a log entry from a Player, for the Host's app to read.
     Deliver {
+        /// The Player who sent it.
         from: PeerKey,
+        /// What they sent.
         message: Message,
     },
     /// Send `bytes` (the refusal) and close the connection.
     Close {
+        /// The connection to close.
         peer: PeerKey,
+        /// Why it is closed.
         refusal: Refusal,
+        /// The encoded refusal to send first.
         bytes: Vec<u8>,
     },
 }
@@ -80,6 +90,7 @@ pub struct HostLobby {
 }
 
 impl HostLobby {
+    /// An empty, unlocked lobby for `run`, with no invites out yet.
     pub fn new(run: RunAdvert, host_name: &str, app_version: &str) -> Self {
         Self {
             run,
@@ -294,6 +305,7 @@ impl HostLobby {
             .collect()
     }
 
+    /// What the Run is, as joiners are told.
     pub fn run(&self) -> &RunAdvert {
         &self.run
     }
@@ -336,8 +348,11 @@ impl HostLobby {
 pub enum JoinState {
     /// Connecting, or waiting for the Host's welcome.
     Joining,
+    /// Welcomed by the Host and waiting in the lobby.
     InLobby {
+        /// What the Run is, from the Host's welcome.
         run: RunAdvert,
+        /// Every Player in the lobby, as the Host last sent it.
         players: Vec<LobbyPlayer>,
     },
     /// The Host closed the connection; what to tell the Player.
@@ -396,6 +411,7 @@ impl JoinLobby {
         Self::new(invite, name, app_version, rom_sha1).expect("the same version as this app")
     }
 
+    /// The invite this joiner came in on.
     pub fn invite(&self) -> &Invite {
         &self.invite
     }
@@ -466,6 +482,7 @@ impl JoinLobby {
         wire::encode(message)
     }
 
+    /// Where this joiner is now.
     pub fn state(&self) -> &JoinState {
         &self.state
     }

@@ -62,6 +62,8 @@ pub struct Settings {
     pub gamepad: bool,
     /// 0 to 1.
     pub volume: f32,
+    /// No sound at all, until unmuted: the M key, or Emulation's Mute.
+    pub muted: bool,
     pub mute_fast_forward: bool,
     /// Play the sound of the game you Watch.
     pub watch_sound: bool,
@@ -98,7 +100,8 @@ impl Default for Settings {
             fast_forward_key: egui::Key::Tab.name().to_owned(),
             pause_key: egui::Key::P.name().to_owned(),
             gamepad: true,
-            volume: 0.8,
+            volume: 0.25,
+            muted: false,
             mute_fast_forward: true,
             watch_sound: true,
             output_device: None,
@@ -172,6 +175,12 @@ impl Settings {
     }
 
     /// The key a GBA button is on.
+    /// Whether a GBA button, fast-forward or pause is on this key.
+    pub fn uses_key(&self, key: egui::Key) -> bool {
+        let name = key.name();
+        self.fast_forward_key == name || self.pause_key == name || self.keys.iter().any(|(_, k)| k == name)
+    }
+
     pub fn key_of(&self, button: &str) -> Option<egui::Key> {
         let (_, key) = self.keys.iter().find(|(b, _)| b == button)?;
         egui::Key::from_name(key)

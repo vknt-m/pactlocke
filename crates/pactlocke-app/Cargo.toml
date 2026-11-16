@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 cpal = "0.18.2"
-eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "glow", "default_fonts", "accesskit", "clipboard", "x11", "wayland"] }
+eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "default_fonts", "accesskit", "clipboard", "x11", "wayland"] }
 pactlocke-emu = { path = "../pactlocke-emu" }
 pactlocke-game = { path = "../pactlocke-game" }
 pactlocke-mgba = { path = "../pactlocke-mgba" }

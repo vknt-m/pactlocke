@@ -2,9 +2,12 @@
 
 use crate::event::{AreaRef, DeathCause, DeclineReason, Recorded, ResumedFrom, RunEvent};
 
+/// Everything the side panel shows of a Run.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RunView {
+    /// The Run's name.
     pub name: String,
+    /// The name of the game it is played on.
     pub game_name: String,
     /// Newest first.
     pub feed: Vec<FeedEntry>,
@@ -26,6 +29,7 @@ pub struct RunView {
     pub party: Vec<crate::SeenPokemon>,
     /// Where the Player is and what they are doing, for the Player strip.
     pub area: Option<String>,
+    /// What the Player is doing, for the Player strip.
     pub doing: Doing,
     /// Faint = Dead: this Player's party is wiped, and the game has stopped.
     pub wipe: Option<WipeView>,
@@ -60,6 +64,7 @@ pub struct NativeOptionView {
 }
 
 impl NativeOptionView {
+    /// The view of a native option, with the setting the game holds now.
     pub fn of(native: &pactlocke_game::NativeOption, read: Option<String>) -> Self {
         Self {
             rule: native.rule.name().to_owned(),
@@ -84,6 +89,7 @@ pub struct WipeView {
 /// How a lost Run ended, for the game over screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameOverView {
+    /// How the Run ended, as a sentence.
     pub how: String,
     /// Each Player's longest survivor, in join order.
     pub longest: Vec<crate::Survivor>,
@@ -96,8 +102,10 @@ pub struct GameOverView {
 /// What a Player is doing, as the Player strip shows it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Doing {
+    /// Walking around, or anything else out of battle.
     #[default]
     Exploring,
+    /// In a battle.
     InBattle,
     /// Held at a Sync Gate's hold script.
     AtGate(String),
@@ -127,7 +135,9 @@ impl std::fmt::Display for Doing {
 /// A Pokémon left with its species name, waiting for the Player to name it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NicknameWanted {
+    /// The Pokémon's personality value.
     pub pid: u32,
+    /// Its species name, as the game shows it.
     pub species_name: String,
 }
 
@@ -147,7 +157,11 @@ pub struct LevelCapView {
 pub struct Grave {
     /// The Pokémon's personality value, which identifies it for the whole Run.
     pub pid: u32,
+    /// Its species number, for its party icon.
+    pub species: u16,
+    /// Its nickname, or its species name if it had none.
     pub name: String,
+    /// Its species name, as the game shows it.
     pub species_name: String,
     /// What killed it and where, such as "a wild RATTATA on Route 1".
     pub killed_by: String,
@@ -156,26 +170,50 @@ pub struct Grave {
 }
 
 impl Grave {
-    pub(crate) fn of(recorded: &Recorded) -> Option<Self> {
+    /// The grave a recorded Death makes; `None` for any other event.
+    pub fn of(recorded: &Recorded) -> Option<Self> {
+        Self::of_event(&recorded.event, recorded.at_ms)
+    }
+
+    /// The grave a Death makes, seen at `at_ms`; `None` for any other event.
+    fn of_event(event: &RunEvent, at_ms: i64) -> Option<Self> {
         let RunEvent::Died {
             pid,
+            species,
             name,
             species_name,
             area,
             cause,
             ..
-        } = &recorded.event
+        } = event
         else {
             return None;
         };
         Some(Self {
             pid: *pid,
+            species: *species,
             name: name.clone(),
             species_name: species_name.clone(),
             killed_by: killed_by(cause, area.as_ref()),
-            at_ms: recorded.at_ms,
+            at_ms,
         })
     }
+}
+
+/// Every Player's Dead, newest first, as the shared Run log has them: the
+/// Deaths a Retry undid aren't among them.
+pub fn graves(log: &crate::RunLog) -> std::collections::BTreeMap<crate::PlayerKey, Vec<Grave>> {
+    let mut all: std::collections::BTreeMap<crate::PlayerKey, Vec<Grave>> = Default::default();
+    for (author, event) in log.standing_events() {
+        let at_ms = match &event {
+            RunEvent::Died { at_ms, .. } => *at_ms,
+            _ => 0,
+        };
+        if let Some(grave) = Grave::of_event(&event, at_ms) {
+            all.entry(author).or_default().insert(0, grave);
+        }
+    }
+    all
 }
 
 /// "Route 1: …", or the text alone outside a listed Area.
@@ -215,31 +253,45 @@ fn killed_by(cause: &DeathCause, area: Option<&AreaRef>) -> String {
     }
 }
 
+/// One line of the feed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedEntry {
     /// Unix time in milliseconds.
     pub at_ms: i64,
+    /// What kind of line it is, which sets how it is shown.
     pub kind: FeedKind,
     /// The small icon the feed shows beside it.
     pub icon: FeedIcon,
     /// The other Player it is about, by name; `None` for this Player.
     pub about: Option<String>,
+    /// The line itself, as the Player reads it.
     pub text: String,
 }
 
 /// What a feed line's icon shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeedIcon {
+    /// A catch.
     Catch,
+    /// An Encounter.
     Encounter,
+    /// A Death.
     Death,
+    /// A Link, broken or closed.
     Link,
+    /// A Sync Gate.
     Gate,
+    /// A Retry.
     Retry,
+    /// A Player's speed.
     Speed,
+    /// A Violation.
     Violation,
+    /// A cheat flag.
     Cheat,
+    /// A Gift or trade.
     Gift,
+    /// Something the rules refused, or a problem putting a rule in place.
     Block,
     /// Anything else: the Run itself.
     Run,
@@ -278,12 +330,18 @@ impl FeedIcon {
     }
 }
 
+/// What kind of feed line an event makes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeedKind {
+    /// The Run itself: started, resumed, a rule put in place.
     Run,
+    /// An Encounter used.
     Encounter,
+    /// A catch.
     Catch,
+    /// Something the rules refused: a ball throw, a ready-up, a source closed.
     Block,
+    /// Something the app couldn't do, which is nobody's fault.
     Problem,
     /// A Death, or a Dead Pokémon moved to the Dead box.
     Death,
@@ -323,7 +381,7 @@ impl FeedEntry {
     }
 
     /// What the feed says of an event; some, such as checkpoints, it doesn't show.
-    pub(crate) fn of(recorded: &Recorded) -> Option<Self> {
+    pub fn of(recorded: &Recorded) -> Option<Self> {
         let (kind, text) = match &recorded.event {
             RunEvent::Started { game_name } => (FeedKind::Run, format!("Run started on {game_name}")),
             RunEvent::Resumed { from } => (

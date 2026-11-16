@@ -18,22 +18,31 @@ pub const ROM: std::ops::Range<u32> = ROM_BASE..0x0A00_0000;
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GameProfile {
+    /// The profile format it is written in: see [`SCHEMA_VERSION`].
     pub schema: u32,
+    /// The profile's own id, which a child profile names as its parent.
     pub id: String,
+    /// The game's name as Players see it.
     pub name: String,
     /// The four-letter code in the ROM header, such as `BPRE`.
     pub game_code: String,
+    /// The Game Family it belongs to.
     pub family: Family,
     /// The SHA-1 of the exact ROM, lowercase hex.
     pub sha1: String,
+    /// How far the profile has been tested.
     pub status: SupportStatus,
     /// The id of the profile this one extends.
     #[serde(default)]
     pub parent: Option<String>,
+    /// Where the game keeps what the rules engine reads.
     pub symbols: Symbols,
+    /// How Pokémon, battlers, items and the PC are laid out.
     pub layout: Layout,
+    /// The game's own options, by key.
     #[serde(default)]
     pub options: BTreeMap<String, OptionDef>,
+    /// The enforcement method each game-dependent rule uses.
     #[serde(default)]
     pub rules: RuleMethods,
     /// The game's options Pactlocke sets for a rule beside its method:
@@ -43,6 +52,7 @@ pub struct GameProfile {
     /// The game's region-map sections, by id, with the game's own names.
     #[serde(default, deserialize_with = "hex_keys")]
     pub areas: BTreeMap<u16, String>,
+    /// Names Pactlocke shows instead of the game's own, by section id.
     #[serde(default, deserialize_with = "hex_keys")]
     pub area_renames: BTreeMap<u16, String>,
     /// Sections that count as another section's Area.
@@ -220,14 +230,18 @@ impl GameProfile {
     }
 }
 
+/// A Game Family the profiles cover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum Family {
+    /// FireRed and LeafGreen.
     #[serde(rename = "FRLG")]
     Frlg,
+    /// Ruby, Sapphire and Emerald.
     #[serde(rename = "RSE")]
     Rse,
 }
 
+/// How far a Game Profile has been tested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SupportStatus {
@@ -241,7 +255,9 @@ pub enum SupportStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bit {
+    /// The byte's address.
     pub at: u32,
+    /// The bits of it that count.
     pub mask: u8,
 }
 
@@ -250,7 +266,9 @@ pub struct Bit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Place {
+    /// The address of the game's pointer to the block.
     Pointer(u32),
+    /// The block's own address.
     At(u32),
 }
 
@@ -258,7 +276,9 @@ pub enum Place {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Symbols {
+    /// The Player's party.
     pub party: u32,
+    /// The number of Pokémon in the party.
     pub party_count: u32,
     /// The opponent's party, filled in before a battle starts.
     pub enemy_party: u32,
@@ -273,22 +293,35 @@ pub struct Symbols {
     /// challenge settings.
     #[serde(default)]
     pub save_block_3: Option<Place>,
+    /// The region-map section the Player is in (a byte).
     pub region_map_section: u32,
+    /// The game's main callback pointer (`gMain.callback2`).
     pub main_callback2: u32,
+    /// The callback `main_callback2` holds on the overworld.
     pub overworld_callback: u32,
+    /// The bit that is set while a battle is on.
     pub in_battle: Bit,
+    /// The battle's type flags (`gBattleTypeFlags`).
     pub battle_type_flags: u32,
+    /// The battlers (`gBattleMons`).
     pub battle_mons: u32,
+    /// Each battler's party slot (`gBattlerPartyIndexes`).
     pub battler_party_indexes: u32,
+    /// Each battler's status word that holds Perish Song (`gStatuses3`).
     pub battler_statuses3: u32,
+    /// Each battler's disable struct (`gDisableStructs`), which holds the Perish count.
     pub disable_structs: u32,
+    /// The script context's status (a byte).
     pub script_context_status: u32,
+    /// The script context a running script uses.
     pub script_context: u32,
+    /// The species info table, one entry per species.
     pub species_info: u32,
     /// The species names table, one fixed-length name per species.
     pub species_names: u32,
     /// The evolution table, a fixed number of entries per species.
     pub evolution_table: u32,
+    /// The item table, one entry per item.
     pub items: u32,
     /// The trainer table, one entry per trainer id.
     pub trainers: u32,
@@ -316,7 +349,9 @@ pub struct Symbols {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExpandedFlags {
+    /// The first flag kept there.
     pub first: u16,
+    /// Where that first flag's bit is.
     pub at: u32,
 }
 
@@ -339,7 +374,9 @@ pub enum BoxFormat {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Layout {
+    /// A party Pokémon's size in bytes.
     pub party_slot_size: u32,
+    /// A PC Pokémon's size in bytes.
     pub box_slot_size: u32,
     /// How a PC slot holds a Pokémon: the party form's start (the default) or CFRU's compressed form.
     #[serde(default)]
@@ -355,30 +392,48 @@ pub struct Layout {
     /// species isn't 0.
     #[serde(default)]
     pub plain: Option<PlainPokemon>,
+    /// In a Pokémon: its original trainer's ID.
     pub ot_id: u32,
+    /// In a Pokémon: its nickname.
     pub nickname: u32,
+    /// A nickname's length in bytes.
     pub nickname_length: u32,
+    /// In a Pokémon: the byte holding its egg and has-species bits.
     pub flags: u32,
+    /// The bits of `flags` that mark an egg.
     pub egg_mask: u8,
+    /// The bits of `flags` that mark a slot holding a Pokémon.
     pub has_species_mask: u8,
+    /// In a Pokémon: the checksum of its substructures.
     pub checksum: u32,
+    /// In a Pokémon: where its four substructures start.
     pub substructures: u32,
+    /// In a party Pokémon: its level.
     pub level: u32,
+    /// In a party Pokémon: its HP now.
     pub hp: u32,
+    /// In a party Pokémon: its HP when full.
     pub max_hp: u32,
+    /// A battler's size in bytes.
     pub battle_mon_size: u32,
+    /// In a battler: its HP now.
     pub battle_mon_hp: u32,
+    /// The battle type flags of a trainer battle.
     pub battle_type_trainer: u32,
+    /// The battle type flags of a double battle.
     pub battle_type_double: u32,
     /// Battle types nobody can catch in (catching demos, ghosts): no one's Encounter.
     pub battle_type_uncatchable: u32,
+    /// The bits of a battler's status word that Perish Song sets.
     pub perish_song_status3: u32,
     /// How far apart each battler's status word is from `battler_statuses3`:
     /// `gStatuses3`'s 4, or the battler's size where it keeps its own
     /// volatiles (pokeemerald-expansion).
     #[serde(default = "status_word")]
     pub battler_status_stride: u32,
+    /// A disable struct's size in bytes.
     pub disable_struct_size: u32,
+    /// In a disable struct: the byte holding the Perish count.
     pub perish_timer: u32,
     /// The bits of the byte at `perish_timer` that are the Perish count.
     #[serde(default = "every_bit_of_a_byte")]
@@ -387,11 +442,15 @@ pub struct Layout {
     pub script_context_pointer: u32,
     /// The script context's call depth (a byte) and its stack of return addresses.
     pub script_context_stack_depth: u32,
+    /// In the script context: its stack of return addresses.
     pub script_context_stack: u32,
+    /// One species info entry's size in bytes.
     pub species_info_size: u32,
+    /// One species name's fixed length in the species names table.
     pub species_name_length: u32,
     /// Species in the species tables, counting species 0.
     pub species_count: u16,
+    /// Entries per species in the evolution table.
     pub evolutions_per_species: u32,
     /// Where each species' info points at its own list of evolutions, ended
     /// by method 0xFFFF (pokeemerald-expansion), instead of `evolution_table`.
@@ -399,15 +458,25 @@ pub struct Layout {
     pub evolutions_pointer: Option<u32>,
     /// One evolution entry: its method (0 for none) first, then the target species at `evolution_target`.
     pub evolution_size: u32,
+    /// In an evolution entry: the species it evolves into.
     pub evolution_target: u32,
+    /// In a species info entry: its primary type.
     pub primary_type: u32,
+    /// One item table entry's size in bytes.
     pub item_size: u32,
+    /// Items in the item table.
     pub item_count: u32,
+    /// In an item entry: the Bag pocket it goes in.
     pub item_pocket: u32,
+    /// In an item entry: its use in battle.
     pub item_battle_usage: u32,
+    /// The Poké Balls pocket's number.
     pub ball_pocket: u8,
+    /// How many boxes the PC has.
     pub pc_boxes: u8,
+    /// Slots in each PC box.
     pub pc_box_slots: u8,
+    /// In the PC's storage: where the first box starts.
     pub pc_boxes_offset: u32,
     /// In save block 2.
     pub trainer_id: u32,
@@ -417,10 +486,13 @@ pub struct Layout {
     pub badge_flags: u16,
     /// In save block 1: the event flags, a bit per flag.
     pub event_flags: u32,
+    /// One trainer table entry's size in bytes.
     pub trainer_size: u32,
     /// In a trainer entry: its party flags (a byte), party size and party pointer.
     pub trainer_party_flags: u32,
+    /// In a trainer entry: how many Pokémon its party has.
     pub trainer_party_size: u32,
+    /// In a trainer entry: the pointer to its party.
     pub trainer_party: u32,
     /// In a trainer's party entry: its level (two bytes).
     pub trainer_mon_level: u32,
@@ -430,6 +502,7 @@ pub struct Layout {
     pub type_name_length: u32,
     /// In save block 1: the Bag's Poké Balls pocket, 4 bytes a slot (item, quantity).
     pub balls_pocket: u32,
+    /// Slots in the Poké Balls pocket.
     pub balls_pocket_slots: u8,
     /// The PC box (counting from 1) that holds the Dead.
     pub dead_box: u8,
@@ -463,10 +536,13 @@ fn status_word() -> u32 {
 pub struct OptionDef {
     /// Its in-game name and where to find it, for Run setup.
     pub name: String,
+    /// Where it is in the game's menus.
     pub menu: String,
     /// 1, 2 or 3: which save block holds it.
     pub save_block: u8,
+    /// Its byte's offset in that save block.
     pub offset: u32,
+    /// The bits of that byte that hold it.
     pub mask: u8,
     /// Its settings by name, as the masked byte.
     pub values: BTreeMap<String, u8>,
@@ -484,9 +560,13 @@ pub struct RuleMethods {
     /// The level-100 checks, or a function stubbed (by its `write`) to
     /// return the cap; the first byte of each site is the cap, less its `below_cap`.
     pub level_cap: Option<Method>,
+    /// Refuses the Bag in trainer battles.
     pub no_items_trainer: Option<Method>,
+    /// Leaves only balls a use in wild battles.
     pub no_items_wild: Option<Method>,
+    /// Keeps the battle style on Set.
     pub set_mode: Option<Method>,
+    /// Keeps the nickname prompt's answer on YES.
     pub must_nickname: Option<Method>,
 }
 
@@ -495,19 +575,34 @@ pub struct RuleMethods {
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Method {
     /// ROM bytes checked at load, then rewritten while the rule applies.
-    Patch { sites: Vec<PatchSite> },
+    Patch {
+        /// Every place patched.
+        sites: Vec<PatchSite>,
+    },
     /// A field of every entry in a ROM table zeroed (the item table's battle use).
     ZeroTableField,
     /// One of the game's options forced to a value by Pactlocke.
-    OptionBit { option: String, value: String },
+    OptionBit {
+        /// The option's key in the Game Profile.
+        option: String,
+        /// The setting the rule needs.
+        value: String,
+    },
     /// One of the game's own event flags, set while the rule applies
     /// (Heart and Soul's `FLAG_NO_WILD_CATCHING`).
-    SetFlag { flag: u16 },
+    SetFlag {
+        /// The event flag's number.
+        flag: u16,
+    },
     /// Buttons filtered while a battle script command waits for an answer.
     KeyFilter {
+        /// Where the game keeps the battle script instruction it is at.
         battle_script_pointer: u32,
+        /// The battle script command table.
         command_table: u32,
+        /// The command that draws the yes/no box and waits on it.
         command: u32,
+        /// The command's state byte; the box's cursor is the byte after it.
         battle_communication: u32,
         /// Script positions where a field yes/no box waits for its answer.
         #[serde(default)]
@@ -517,14 +612,21 @@ pub enum Method {
         question: Option<String>,
     },
     /// The game's own option does it; the Player turns it on and the lock checks it.
-    Native { option: String, value: String },
+    Native {
+        /// The option's key in the Game Profile.
+        option: String,
+        /// The setting the rule needs.
+        value: String,
+    },
     /// The game always plays this way (Radical Red's Set battle style): nothing to do.
     Always,
 }
 
+/// One place in the ROM a method patches.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PatchSite {
+    /// The site's address.
     pub at: u32,
     /// What a clean ROM holds there.
     pub expect: HexBytes,

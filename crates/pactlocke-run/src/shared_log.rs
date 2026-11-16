@@ -25,6 +25,7 @@ pub struct Signer {
 }
 
 impl Signer {
+    /// The signer for an install's secret key.
     pub fn from_secret(secret: [u8; 32]) -> Self {
         Self {
             key: SigningKey::from_bytes(&secret),
@@ -49,9 +50,13 @@ pub enum LogBody {
     /// The first entry, by the Host: which Run this is. The nonce makes every
     /// Run's log its own.
     Genesis {
+        /// Random bytes that make this Run's log its own.
         nonce: [u8; 16],
+        /// The Run's name.
         run_name: String,
+        /// The name of the game it is played on.
         game_name: String,
+        /// The SHA-1 of the ROM every Player plays.
         game_sha1: String,
     },
     /// By the Host: the Ruleset and roster are locked.
@@ -63,29 +68,39 @@ pub enum LogBody {
     Takeover,
     /// By the Host, once everyone else voted Yes: `player` leaves the Run
     /// for good. Their Pokémon leave every Link.
-    Dropout { player: PlayerKey },
+    Dropout {
+        /// The Player who leaves.
+        player: PlayerKey,
+    },
     /// By the Host, once everyone voted Yes: a Retry. Every Player goes back
     /// to their part of the `call`th Run Checkpoint, and each Player's
     /// entries after it are void.
-    Retry { call: u64 },
+    Retry {
+        /// Which Run Checkpoint in the log, counting from 1.
+        call: u64,
+    },
 }
 
 /// An entry as its author signed it, before the Host orders it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Submission {
+    /// The key of the Player who wrote it.
     pub author: [u8; 32],
     /// The author's own count of their entries, from 1: each is used once.
     pub counter: u64,
     /// The body, as JSON, exactly as signed.
     pub body: Vec<u8>,
+    /// The author's signature on it.
     pub signature: Vec<u8>,
 }
 
 impl Submission {
+    /// The submission as it crosses the network.
     pub fn to_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(self).expect("a submission serialises")
     }
 
+    /// `None` for bytes that aren't a submission.
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         serde_json::from_slice(bytes).ok()
     }
@@ -98,16 +113,19 @@ pub struct LogEntry {
     pub seq: u64,
     /// The hash of the entry before (zeros for the first).
     pub prev: [u8; 32],
+    /// What its author signed.
     pub submission: Submission,
     /// The Host's signature on this entry's hash.
     pub host_signature: Vec<u8>,
 }
 
 impl LogEntry {
+    /// The entry as it crosses the network and is kept in the Run file.
     pub fn to_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(self).expect("an entry serialises")
     }
 
+    /// `None` for bytes that aren't an entry.
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         serde_json::from_slice(bytes).ok()
     }
@@ -131,37 +149,81 @@ impl LogEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogError {
     /// Entries out of order, missing or repeated.
-    Seq { expected: u64, found: u64 },
+    Seq {
+        /// The place in the log the next entry should have.
+        expected: u64,
+        /// The place the entry says it has.
+        found: u64,
+    },
     /// It doesn't link to the entry before it.
-    Link { seq: u64 },
+    Link {
+        /// The entry's place in the log.
+        seq: u64,
+    },
     /// The Host didn't sign it as ordered.
-    HostSignature { seq: u64 },
+    HostSignature {
+        /// The entry's place in the log.
+        seq: u64,
+    },
     /// Its author didn't sign it as it reads: it was changed or made up.
-    AuthorSignature { seq: u64 },
+    AuthorSignature {
+        /// The entry's place in the log.
+        seq: u64,
+    },
     /// Only the Host may write this kind of entry.
-    NotHost { seq: u64 },
+    NotHost {
+        /// The entry's place in the log.
+        seq: u64,
+    },
     /// Its author isn't in the roster.
-    NotInRoster { seq: u64 },
+    NotInRoster {
+        /// The entry's place in the log.
+        seq: u64,
+    },
     /// Its author already used this counter.
-    Replayed { seq: u64 },
+    Replayed {
+        /// The entry's place in the log.
+        seq: u64,
+    },
     /// Its author's entry before it is missing: the Host left one out.
-    Skipped { seq: u64 },
+    Skipped {
+        /// The entry's place in the log.
+        seq: u64,
+    },
     /// Its body isn't an entry this build can read.
-    Body { seq: u64 },
+    Body {
+        /// The entry's place in the log.
+        seq: u64,
+    },
     /// The log doesn't start with the Run's genesis entry.
     NoGenesis,
     /// The roster was locked twice.
-    LockedAgain { seq: u64 },
+    LockedAgain {
+        /// The entry's place in the log.
+        seq: u64,
+    },
     /// A Retry without everyone's vote, with no Retry left, or to a Run
     /// Checkpoint that isn't the latest every Player took.
-    BadRetry { seq: u64 },
+    BadRetry {
+        /// The entry's place in the log.
+        seq: u64,
+    },
     /// A takeover by someone who isn't next in join order after the Host.
-    BadTakeover { seq: u64 },
+    BadTakeover {
+        /// The entry's place in the log.
+        seq: u64,
+    },
     /// A Dropout not everyone else voted for.
-    BadDropout { seq: u64 },
+    BadDropout {
+        /// The entry's place in the log.
+        seq: u64,
+    },
     /// From a copy of the log without the takeover this copy has there or
     /// after: the copy with the rightful takeover wins.
-    WithoutTakeover { seq: u64 },
+    WithoutTakeover {
+        /// The entry's place in the log.
+        seq: u64,
+    },
 }
 
 impl std::fmt::Display for LogError {
@@ -201,10 +263,13 @@ impl std::error::Error for LogError {}
 /// Counts every Player recomputes from the log, by Player.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Tallies {
+    /// Encounters used.
     pub encounters: BTreeMap<[u8; 32], u32>,
     /// Encounters caught: Gifts and trades aren't catches.
     pub catches: BTreeMap<[u8; 32], u32>,
+    /// Pokémon that died.
     pub deaths: BTreeMap<[u8; 32], u32>,
+    /// Violations.
     pub violations: BTreeMap<[u8; 32], u32>,
 }
 
@@ -484,6 +549,7 @@ impl RunLog {
         }
     }
 
+    /// Every entry in the log, in order.
     pub fn entries(&self) -> &[LogEntry] {
         &self.entries
     }
@@ -984,7 +1050,9 @@ type PlayerKey = [u8; 32];
 /// A moment in one Player's game: a boot of it, and the frame boundary in that boot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GamePoint {
+    /// Which boot of the game, counting from 1.
     pub boot: u32,
+    /// The frame boundary in that boot.
     pub frame: u64,
 }
 
@@ -1031,6 +1099,7 @@ pub struct Part {
 /// A Player's party wiped under Faint = Dead, as the Run log has it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Wiped {
+    /// Whose party it is.
     pub player: PlayerKey,
     /// The last of their Pokémon to die, where and how.
     pub last: crate::LastDeath,
@@ -1100,7 +1169,9 @@ struct FlagState {
 /// A vote under way on clearing a cheat flag: the flag, and who said Yes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlagVote {
+    /// The cheat flag voted on.
     pub flag: crate::Flag,
+    /// The Players who said Yes.
     pub yes: BTreeSet<PlayerKey>,
 }
 

@@ -25,8 +25,11 @@ pub enum BootPlan {
     /// After a crash: the checkpoint, then the keys held for each frame after
     /// it and the changes stamped in that stretch, in order.
     Rebuild {
+        /// The checkpoint to start from.
         from: StoredCheckpoint,
+        /// The keys held for each frame after it.
         keys: Vec<Keys>,
+        /// The changes stamped in that stretch, in order.
         stamped: Vec<Stamped>,
     },
 }
@@ -34,7 +37,9 @@ pub enum BootPlan {
 /// What booting left: the clock the boot runs on and the ROM patches active.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Booted {
+    /// The clock the boot runs on (Unix milliseconds).
     pub clock_ms: i64,
+    /// Every ROM patch active, by address.
     pub patches: BTreeMap<u32, Vec<u8>>,
 }
 

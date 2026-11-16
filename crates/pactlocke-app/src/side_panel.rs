@@ -1,15 +1,16 @@
 //! The side panel during a Run. With other Players, the Player strip, the
 //! next Sync Gate's ready check and any open vote stay fixed at the top, and
 //! everything else is a tab, with the tab bar at the bottom: Feed, Party,
-//! Links, Areas, Graveyard, Ruleset and Lobby. Alone, there is no strip, Links
-//! or Lobby. Before a Run with friends starts, the panel is the Lobby alone.
+//! Links, Areas, Graveyard and Ruleset, which holds the Lobby too. Alone, there
+//! is no strip, Links or Lobby. Before a Run with friends starts, the panel is
+//! the Lobby alone.
 
 use eframe::egui;
 use pactlocke_game::Rule;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use pactlocke_run::{
-    FeedEntry, FeedKind, Link, Member, PlayerKey, Preset, Ruleset, RunClock, RunCommand, RunEvent, RunView,
+    FeedEntry, FeedKind, Grave, Link, Member, PlayerKey, Preset, Ruleset, RunClock, RunCommand, RunEvent, RunView,
     SeenPokemon, SystemRunClock,
 };
 
@@ -27,8 +28,8 @@ pub enum Tab {
     Links,
     Areas,
     Graveyard,
+    /// The Ruleset and, with other Players, the Lobby under it.
     Ruleset,
-    Lobby,
 }
 
 /// What the panel asked for this frame.
@@ -73,19 +74,25 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
         Some(log) if coop => pactlocke_run::area_encounters(log),
         _ => Default::default(),
     };
+    let graves = match lobbies.log() {
+        Some(log) if coop => pactlocke_run::graves(log),
+        _ => Default::default(),
+    };
+    let dead: usize = players.iter().map(|who| graves_of(&run, who, &graves).len()).sum();
     let tabs: Vec<(Tab, String)> = [
         (Tab::Feed, "Feed".to_owned()),
         (Tab::Party, "Party".to_owned()),
         (Tab::Links, format!("Links · {}", links.len())),
         (Tab::Areas, crate::areas_panel::label(&run.view.encounters, &areas)),
-        (Tab::Graveyard, format!("Graveyard · {}", run.view.graveyard.len())),
-        (Tab::Ruleset, "Ruleset".to_owned()),
-        (Tab::Lobby, "Lobby".to_owned()),
+        (Tab::Graveyard, format!("Graveyard · {dead}")),
+        (
+            Tab::Ruleset,
+            if coop { "Ruleset & Lobby" } else { "Ruleset" }.to_owned(),
+        ),
     ]
     .into_iter()
     .filter(|(t, _)| match t {
         Tab::Links => coop && run.ruleset.links,
-        Tab::Lobby => coop,
         _ => true,
     })
     .collect();
@@ -142,13 +149,17 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
 
     // The tab bar at the bottom, the open tab above it.
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-        ui.horizontal_wrapped(|ui| {
-            for (t, label) in &tabs {
-                if ui.selectable_label(tab == t, label).clicked() {
-                    *tab = *t;
+        // Rows laid out here, bottom row first: a wrapped row in a bottom-up
+        // layout puts its second row below the panel, out of sight.
+        for row in tab_rows(ui, &tabs).iter().rev() {
+            ui.horizontal(|ui| {
+                for (t, label) in *row {
+                    if ui.selectable_label(tab == t, label.as_str()).clicked() {
+                        *tab = *t;
+                    }
                 }
-            }
-        });
+            });
+        }
         ui.separator();
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             egui::ScrollArea::vertical()
@@ -186,13 +197,17 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
                             .collect();
                         crate::areas_panel::tab(ui, &areas, &columns, icons);
                     }
-                    Tab::Graveyard => run_panel::graveyard(ui, run.view, now),
+                    Tab::Graveyard => graveyard(ui, &run, &players, &graves, icons, now),
                     Tab::Ruleset => {
                         if let Some(command) = ruleset_tab(ui, &run, lobbies) {
                             asks.command = Some(command);
                         }
-                    }
-                    Tab::Lobby => {
+                        if !coop {
+                            return;
+                        }
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.strong("Lobby");
                         lobbies.lobby_tab(ui, now);
                         if let (Some(spectate), Some(log)) = (run.spectate, lobbies.log()) {
                             let online = lobbies.online();
@@ -208,6 +223,33 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
         });
     });
     asks
+}
+
+/// The tabs split into rows that each fit the panel's width, top row first.
+fn tab_rows<'a>(ui: &egui::Ui, tabs: &'a [(Tab, String)]) -> Vec<&'a [(Tab, String)]> {
+    let spacing = ui.spacing();
+    let (gap, padding, room) = (spacing.item_spacing.x, spacing.button_padding.x, ui.available_width());
+    let mut rows = Vec::new();
+    let (mut start, mut used) = (0, 0.0);
+    for (i, (_, label)) in tabs.iter().enumerate() {
+        let text = egui::WidgetText::from(label.as_str()).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::TextStyle::Button,
+        );
+        let width = text.size().x + 2.0 * padding;
+        if i > start && used + gap + width > room {
+            rows.push(&tabs[start..i]);
+            (start, used) = (i, width);
+        } else {
+            used += if i > start { gap + width } else { width };
+        }
+    }
+    if start < tabs.len() {
+        rows.push(&tabs[start..]);
+    }
+    rows
 }
 
 /// Before a Run with friends starts: the Lobby, beside the home screen.
@@ -301,7 +343,9 @@ pub fn preset_name(ruleset: &Ruleset) -> &'static str {
         .map_or("Custom", Preset::name)
 }
 
-/// The Player strip: each Player's row, and Watch for the others.
+/// The Player strip: a box per Player, side by side, each with their name,
+/// what they are doing, their Area, speed and connection, and Watch for the
+/// others.
 fn strip(
     ui: &mut egui::Ui,
     run: &RunPanel<'_>,
@@ -311,64 +355,140 @@ fn strip(
 ) -> Option<usize> {
     let log = lobbies.log()?;
     let mut watch = None;
-    for who in players {
-        let shadow = spectate.shadows.iter().position(|s| s.key == who.key);
-        let status = shadow.map(|i| spectate.shadows[i].status());
-        let (area, doing) = match &status {
-            _ if who.you => (run.view.area.clone(), run.view.doing.to_string()),
-            Some(status) if status.catching_up => (status.seen.area.clone(), "catching up…".to_owned()),
-            Some(status) => (status.seen.area.clone(), status.seen.doing.to_string()),
-            None => (None, String::new()),
-        };
-        let doing = match log.ready_gate_of(&who.key) {
-            Some(gate) if !doing.starts_with("At ") => format!("Ready at {gate}"),
-            _ => doing,
-        };
-        let speed = if who.you { run.speed } else { log.speed_of(&who.key) };
-        let reach = if !who.you && spectate.shows_offline(&who.key) {
-            Some(player_strip::Reach::Offline)
-        } else {
-            lobbies.reach(who.key)
-        };
-        ui.horizontal(|ui| {
-            theme::dot(ui, who.index);
-            if who.you {
-                ui.strong(format!("{} (you)", who.name));
+    // A line that is cut short with "…" where the box is too narrow, whole on hover.
+    let line = |ui: &mut egui::Ui, text: egui::RichText| {
+        let whole = text.text().to_owned();
+        ui.add(egui::Label::new(text).truncate()).on_hover_text(whole);
+    };
+    ui.columns(players.len().max(1), |columns| {
+        for (who, ui) in players.iter().zip(columns.iter_mut()) {
+            let shadow = spectate.shadows.iter().position(|s| s.key == who.key);
+            let status = shadow.map(|i| spectate.shadows[i].status());
+            let (area, doing) = match &status {
+                _ if who.you => (run.view.area.clone(), run.view.doing.to_string()),
+                Some(status) if status.catching_up => (status.seen.area.clone(), "catching up…".to_owned()),
+                Some(status) => (status.seen.area.clone(), status.seen.doing.to_string()),
+                None => (None, String::new()),
+            };
+            let doing = match log.ready_gate_of(&who.key) {
+                Some(gate) if !doing.starts_with("At ") => format!("Ready at {gate}"),
+                _ => doing,
+            };
+            let speed = if who.you { run.speed } else { log.speed_of(&who.key) };
+            let reach = if !who.you && spectate.shows_offline(&who.key) {
+                Some(player_strip::Reach::Offline)
             } else {
-                ui.strong(&who.name);
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if let Some(i) = shadow {
-                    match spectate.shadows[i].cant_watch() {
-                        None if spectate.watching == Some(i) => {
-                            ui.add_enabled(false, egui::Button::new("Watching"));
-                        }
-                        None => {
-                            if ui.button("Watch").clicked() {
-                                watch = Some(i);
+                lobbies.reach(who.key)
+            };
+            let offline = reach == Some(player_strip::Reach::Offline);
+            egui::Frame::new()
+                .fill(ui.visuals().faint_bg_color)
+                .corner_radius(5.0)
+                .inner_margin(5)
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    ui.horizontal(|ui| {
+                        theme::dot(ui, who.index);
+                        let name = if who.you {
+                            format!("{} (you)", who.name)
+                        } else {
+                            who.name.clone()
+                        };
+                        line(ui, egui::RichText::new(name).strong());
+                    });
+                    // What they are doing leads; where, and how they are reached, follow it.
+                    let doing = egui::RichText::new(if doing.is_empty() { "—" } else { &doing });
+                    line(
+                        ui,
+                        if offline {
+                            egui::RichText::new("Offline").color(ui.visuals().warn_fg_color)
+                        } else {
+                            doing.color(ui.visuals().strong_text_color())
+                        },
+                    );
+                    line(ui, egui::RichText::new(area.unwrap_or_else(|| "—".to_owned())));
+                    let meta = [format!("{speed}x"), player_strip::reach_text(reach, who.you)];
+                    let meta: Vec<&str> = meta.iter().map(String::as_str).filter(|m| !m.is_empty()).collect();
+                    line(ui, egui::RichText::new(meta.join(" · ")).weak().small());
+                    if let Some(i) = shadow {
+                        ui.add_space(2.0);
+                        match spectate.shadows[i].cant_watch() {
+                            None if spectate.watching == Some(i) => {
+                                ui.add_enabled(false, egui::Button::new("Watching").small());
+                            }
+                            None => {
+                                if ui.add(egui::Button::new("Watch").small()).clicked() {
+                                    watch = Some(i);
+                                }
+                            }
+                            Some(why) => {
+                                ui.add_enabled(false, egui::Button::new("Watch").small())
+                                    .on_disabled_hover_text(why);
                             }
                         }
-                        Some(why) => {
-                            ui.add_enabled(false, egui::Button::new("Watch"))
-                                .on_disabled_hover_text(why);
-                        }
                     }
-                }
-            });
-        });
-        ui.horizontal_wrapped(|ui| {
-            ui.add_space(18.0);
-            let meta = [
-                area.unwrap_or_else(|| "—".to_owned()),
-                format!("{speed}x"),
-                player_strip::reach_text(reach, who.you),
-                doing,
-            ];
-            let meta: Vec<&str> = meta.iter().map(String::as_str).filter(|m| !m.is_empty()).collect();
-            ui.weak(meta.join(" · "));
-        });
-    }
+                });
+        }
+    });
     watch
+}
+
+/// A Player's Dead, newest first: their own Graveyard, or the Run log's
+/// Deaths for another Player.
+fn graves_of<'a>(run: &'a RunPanel<'_>, who: &Who, graves: &'a BTreeMap<PlayerKey, Vec<Grave>>) -> &'a [Grave] {
+    if who.you {
+        &run.view.graveyard
+    } else {
+        graves.get(&who.key).map_or(&[][..], Vec::as_slice)
+    }
+}
+
+/// The Graveyard: every Player's Dead as party icons, newest first, each
+/// one's name and what killed it on hover.
+fn graveyard(
+    ui: &mut egui::Ui,
+    run: &RunPanel<'_>,
+    players: &[Who],
+    graves: &BTreeMap<PlayerKey, Vec<Grave>>,
+    icons: &mut Icons,
+    now: i64,
+) {
+    /// How big each Dead Pokémon's icon is.
+    const ICON: f32 = 32.0;
+    if players.iter().all(|who| graves_of(run, who, graves).is_empty()) {
+        ui.weak("No one has died yet.");
+        return;
+    }
+    for who in players {
+        let dead = graves_of(run, who, graves);
+        ui.horizontal(|ui| {
+            theme::dot(ui, who.index);
+            ui.strong(if who.you && players.len() > 1 { "You" } else { &who.name });
+            ui.weak(dead.len().to_string());
+        });
+        if dead.is_empty() {
+            ui.weak("No Deaths.");
+        }
+        ui.horizontal_wrapped(|ui| {
+            for grave in dead {
+                let name = if grave.name == grave.species_name {
+                    grave.name.clone()
+                } else {
+                    format!("{} ({})", grave.name, grave.species_name)
+                };
+                // A Death from a log kept before Deaths were timed has no time.
+                let when = if grave.at_ms > 0 {
+                    format!(" · {}", run_panel::ago(now - grave.at_ms))
+                } else {
+                    String::new()
+                };
+                let tip = format!("{name}\nKilled by {}{when}", grave.killed_by);
+                icons.show(ui, grave.species, ICON, true, &tip);
+            }
+        });
+        ui.add_space(6.0);
+    }
 }
 
 /// Every party's sprites in a row per Player, the Dead in red.
@@ -653,15 +773,28 @@ fn ruleset_tab(ui: &mut egui::Ui, run: &RunPanel<'_>, lobbies: &Lobbies) -> Opti
         (Rule::Links, r.links),
     ];
     for (rule, on) in rules {
-        let row = ui.horizontal_wrapped(|ui| {
-            if on {
-                ui.label("✔");
-                ui.label(rules_text::name(rule));
-            } else {
-                ui.weak("–");
-                ui.weak(rules_text::name(rule));
-            }
-        });
+        let fill = if on {
+            theme::ON.gamma_multiply(0.16)
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        let row = egui::Frame::new()
+            .fill(fill)
+            .corner_radius(4.0)
+            .inner_margin(egui::Margin::symmetric(6, 2))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    if on {
+                        theme::tick(ui, theme::ON);
+                        ui.strong(rules_text::name(rule));
+                    } else {
+                        ui.weak("–");
+                        ui.weak(rules_text::name(rule));
+                        ui.weak(egui::RichText::new("off").small());
+                    }
+                });
+            });
         let help = if on {
             rules_text::detail(rule, r)
         } else {

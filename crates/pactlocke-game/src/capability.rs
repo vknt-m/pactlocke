@@ -10,21 +10,34 @@ use crate::profile::{GameProfile, HexBytes, Method, ROM_BASE};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Rule {
+    /// One Encounter per Area: the first wild Pokémon battled there.
     FirstEncounter,
+    /// A Dupe doesn't use the Area's Encounter and can't be caught.
     DupesClause,
+    /// Gifts other than the starter are allowed.
     Gifts,
+    /// Statics are their own Encounters.
     Statics,
+    /// A Pokémon that faints is Dead.
     FaintIsDead,
+    /// Encounters from the same source are a Link across Players.
     Links,
+    /// No Pokémon passes the level cap.
     LevelCap,
+    /// No items in battle.
     NoItems,
+    /// Every Pokémon is given a nickname.
     MustNickname,
+    /// The battle style stays on Set.
     SetMode,
+    /// The type clause: one Pokémon of each primary type in the party.
     TypeClause,
+    /// Battles no Player starts until every Player is ready.
     SyncGates,
 }
 
 impl Rule {
+    /// Every rule, in the order reports list them.
     pub const ALL: [Rule; 12] = [
         Rule::FirstEncounter,
         Rule::DupesClause,
@@ -96,8 +109,11 @@ impl NativeOption {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuleOptionDef {
+    /// The Pactlocke rule the option is set for.
     pub rule: Rule,
+    /// The option's key in the Game Profile.
     pub option: String,
+    /// The setting the rule needs.
     pub value: String,
     /// Other rules that must be on too.
     #[serde(default)]
@@ -164,7 +180,10 @@ pub enum Capability {
     /// The game's own option does it; Pactlocke sets the option.
     NativeOption(NativeOption),
     /// It can't be used on this ROM.
-    GreyedOut { reason: String },
+    GreyedOut {
+        /// Why, as Run setup tells the Host.
+        reason: String,
+    },
 }
 
 /// Every game-dependent rule's capability on one ROM.
@@ -274,10 +293,12 @@ impl CapabilityReport {
         self
     }
 
+    /// One rule's capability.
     pub fn get(&self, rule: Rule) -> &Capability {
         &self.rules[&rule]
     }
 
+    /// Every rule with its capability, in [`Rule::ALL`]'s order.
     pub fn iter(&self) -> impl Iterator<Item = (Rule, &Capability)> {
         self.rules.iter().map(|(rule, capability)| (*rule, capability))
     }

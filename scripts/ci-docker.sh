@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CI's Linux job, locally, in Docker: no game files committed, the libmgba
-# pin, formatting, clippy with warnings as errors, every test, the core in
+# pin, formatting, clippy and the docs with warnings as errors, every test, the core in
 # other time zones, the app build and a smoke launch under xvfb, on the Rust
 # version rust-toolchain.toml pins.
 #

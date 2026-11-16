@@ -19,57 +19,117 @@ use crate::{PlayedGame, RunEngine, RunEvent, RunView, Stamped, boot_core};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunCommand {
     /// Must nickname: name the Pokémon the side panel asked about.
-    Nickname { pid: u32, name: String },
+    Nickname {
+        /// The Pokémon's personality value.
+        pid: u32,
+        /// The nickname the Player gave.
+        name: String,
+    },
     /// Another Player's Shadow Game here no longer matches their game.
-    OutOfSync { player: String, frame: u64 },
+    OutOfSync {
+        /// The other Player's name.
+        player: String,
+        /// The frame boundary their Shadow Game stopped matching at.
+        frame: u64,
+    },
     /// Another Player's Run Checkpoint, the `call`th in the Run log: this
     /// game is captured with it.
-    JoinCheckpoint { call: u64 },
+    JoinCheckpoint {
+        /// Which Run Checkpoint in the Run log, counting from 1.
+        call: u64,
+    },
     /// A Retry.
-    Retry { to: RetryTo },
+    Retry {
+        /// Where the Retry goes back to.
+        to: RetryTo,
+    },
     /// Links: this Pokémon dies with its Link (`why` says how it broke).
-    LinkDeath { pid: u32, why: String },
+    LinkDeath {
+        /// The Pokémon's personality value.
+        pid: u32,
+        /// What broke the Link, as a sentence.
+        why: String,
+    },
     /// Alone, after a wipe: the Player declines the Retry, and the Run is over.
     EndRun,
     /// With friends: the Run log says the Run is lost, `how`, with each
     /// Player's longest survivor.
-    GameOver { how: String, longest: Vec<crate::Survivor> },
+    GameOver {
+        /// How the Run ended, as a sentence.
+        how: String,
+        /// Each Player's Pokémon that survived the longest.
+        longest: Vec<crate::Survivor>,
+    },
     /// Links: where this Player's Pokémon stand in their Links now. A full
     /// party keeps its slots for linked Pokémon.
     LinkStanding(crate::LinkStanding),
     /// Links: this source's Link broke elsewhere, so it is closed here too.
-    CloseSource { source: crate::SourceRef, why: String },
+    CloseSource {
+        /// The source to close.
+        source: crate::SourceRef,
+        /// Whose Encounter was missed, skipped or lost, as a sentence.
+        why: String,
+    },
     /// The Player skips this Gift, breaking its Link for everyone.
-    Skip { source: crate::SourceRef },
+    Skip {
+        /// The Gift to skip.
+        source: crate::SourceRef,
+    },
     /// Every Player is Ready at this Sync Gate: let it go. With
     /// `checkpoint`, this Player's Ready completed it, so this game calls
     /// the gate's Run Checkpoint.
-    OpenGate { gate: String, checkpoint: bool },
+    OpenGate {
+        /// The Sync Gate's name.
+        gate: String,
+        /// Whether this game calls the gate's Run Checkpoint.
+        checkpoint: bool,
+    },
     /// The Player plays at this speed now (1 to 4).
     Speed(u8),
     /// Another Player plays at this speed now, as the Run log says.
-    OthersSpeed { player: String, speed: u8 },
+    OthersSpeed {
+        /// The other Player's name.
+        player: String,
+        /// Their speed now, 1 to 4 times a GBA's.
+        speed: u8,
+    },
     /// The other Players dropped this Player from the Run.
     DroppedOut,
     /// In a Run with friends: keep this Player's copy of the Run log in the
     /// Run file, these entries replacing any from the one numbered `from` on.
-    KeepLog { from: u64, entries: Vec<crate::LogEntry> },
+    KeepLog {
+        /// The first entry replaced, by its place in the log.
+        from: u64,
+        /// The entries to keep from there on.
+        entries: Vec<crate::LogEntry>,
+    },
     /// In a Run with friends: keep this Player's entries waiting for a Host
     /// in the Run file, in place of those kept before.
     KeepWaiting(Vec<crate::Submission>),
     /// In a Run with friends: keep this checkpoint of the Shadow Game of
     /// `player` in the Run file, in place of theirs before.
     KeepShadow {
+        /// Whose Shadow Game it is.
         player: PlayerKey,
+        /// The checkpoint to keep.
         checkpoint: Box<crate::ShadowCheckpoint>,
     },
     /// A cheat flag the Run log says was cleared by everyone's vote, for the feed.
-    FlagCleared { player: String, frame: u64 },
+    FlagCleared {
+        /// Whose game: their name, or "you".
+        player: String,
+        /// The frame boundary in their game it was raised at.
+        frame: u64,
+    },
     /// A cheat flag in the Run log, for the feed.
     Flagged {
+        /// Whose game: their name, or "you".
         player: String,
+        /// What their game did.
         cheat: crate::Cheat,
+        /// The frame boundary in their game.
         frame: u64,
+        /// Who saw it: their name, "you", or "their own app".
         by: String,
     },
 }
@@ -87,6 +147,7 @@ pub enum RetryTo {
 /// How often the game's save memory is checked for an in-game save.
 const SAVE_CHECK_FRAMES: u64 = 60;
 
+/// A game in a Run: see the module's docs.
 pub struct RunningGame<G: PlayedGame> {
     game: G,
     engine: RunEngine,
@@ -319,6 +380,7 @@ impl<G: PlayedGame> RunningGame<G> {
         self.view.clone()
     }
 
+    /// The Run engine looking at this game.
     pub fn engine(&self) -> &RunEngine {
         &self.engine
     }
@@ -334,6 +396,7 @@ impl<G: PlayedGame> RunningGame<G> {
         self.engine.flush();
     }
 
+    /// The game itself, to drive.
     pub fn game_mut(&mut self) -> &mut G {
         &mut self.game
     }

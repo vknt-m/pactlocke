@@ -166,6 +166,20 @@ fn an_in_game_trade_is_a_gift() {
 }
 
 #[test]
+fn a_pokemon_lent_for_a_scene_is_neither_a_trade_nor_a_gift() {
+    // Wally's catching demo: the game puts a Zigzagoon of the Player's own in
+    // the first party slot, then the party back.
+    let mut player = with_starter(rules(false, false));
+    player.game.trainer_id = 1;
+    let starter = player.game.party[0].clone();
+    player.trades(0, party_pokemon(ABRA, 0xAB, "ZIGZAGOON"));
+    player.trades(0, starter);
+
+    assert_eq!(player.feed(FeedKind::Gift).len(), 1, "only the starter");
+    assert_eq!(player.party_pids(), [STARTER], "nothing released");
+}
+
+#[test]
 fn with_gifts_off_a_traded_in_pokemon_is_released() {
     let mut player = with_starter(rules(false, false));
     player.trades(0, party_pokemon(ABRA, 0xAB, "ABRA"));

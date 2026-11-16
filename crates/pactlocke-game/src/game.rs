@@ -11,6 +11,7 @@ use crate::{Area, Source};
 
 /// Read access to a game's address space.
 pub trait Memory {
+    /// Fills `out` with the bytes at `addr`.
     fn read(&mut self, addr: u32, out: &mut [u8]);
 }
 
@@ -24,16 +25,29 @@ impl<C: CoreAdapter> Memory for C {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
     /// Bytes written through the bus (RAM).
-    Write { addr: u32, bytes: Vec<u8> },
+    Write {
+        /// Where the bytes go.
+        addr: u32,
+        /// The bytes to put there.
+        bytes: Vec<u8>,
+    },
     /// ROM bytes replaced, until patched back.
-    Patch { addr: u32, bytes: Vec<u8> },
+    Patch {
+        /// Where the bytes go.
+        addr: u32,
+        /// The bytes to put there.
+        bytes: Vec<u8>,
+    },
 }
 
 /// Where a Player stands: the map (group and number) and the tile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Whereabouts {
+    /// The map's group and number.
     pub map: (u8, u8),
+    /// The tile's column.
     pub x: i16,
+    /// The tile's row.
     pub y: i16,
 }
 
@@ -41,17 +55,23 @@ pub struct Whereabouts {
 /// whether it is mirrored, and its priority against the background.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpriteImage {
+    /// The 4bpp tiles, in 1D order.
     pub tiles: Vec<u8>,
+    /// The 16-colour palette, as the GBA holds it.
     pub palette: Vec<u8>,
+    /// Whether it is mirrored left to right.
     pub hflip: bool,
+    /// Its priority against the background.
     pub priority: u8,
     /// 32x32 (a bike, surfing, a party icon) rather than 16x32.
     pub square: bool,
 }
 
-/// Hardware OAM, OBJ tiles and OBJ palettes on the GBA's bus.
+/// Hardware OAM on the GBA's bus.
 pub const OAM: u32 = 0x0700_0000;
+/// Hardware OBJ tiles on the GBA's bus.
 pub const OBJ_TILES: u32 = 0x0601_0000;
+/// Hardware OBJ palettes on the GBA's bus.
 pub const OBJ_PALETTES: u32 = 0x0500_0200;
 
 /// The Pokémon that leads the party: the first one alive that isn't an egg.
@@ -62,9 +82,13 @@ pub fn lead_of(party: &[Pokemon]) -> Option<&Pokemon> {
 /// Where a game lets Partner Avatars be drawn (see the profile's `[avatars]`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AvatarRoom {
+    /// Where the Player's own 16x32 sprite's top-left corner is on screen.
     pub anchor: (u16, u16),
+    /// The first hardware OAM entry the game never fills on the overworld.
     pub first_oam: u8,
+    /// The first 4bpp OBJ tile Pactlocke may draw into.
     pub first_tile: u16,
+    /// The OBJ palette slots Pactlocke may load.
     pub palettes: Vec<u8>,
 }
 
@@ -73,49 +97,70 @@ pub struct AvatarRoom {
 pub struct Pokemon {
     /// The personality value, which identifies the Pokémon for the whole Run.
     pub pid: u32,
+    /// The original trainer's ID.
     pub ot_id: u32,
+    /// The species number.
     pub species: u16,
+    /// The nickname, as the game holds it.
     pub nickname: String,
     /// The region-map section it was met in (the game's "met location").
     pub met_section: u16,
+    /// Whether it is still an egg.
     pub is_egg: bool,
     /// Only party Pokémon carry these.
     pub stats: Option<PartyStats>,
 }
 
+/// What only a party Pokémon carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PartyStats {
+    /// Its level.
     pub level: u8,
+    /// Its HP now; 0 is fainted.
     pub hp: u16,
+    /// Its HP when full.
     pub max_hp: u16,
 }
 
 /// A Pokémon in the PC; box and slot count from 1.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredPokemon {
+    /// The box, counting from 1.
     pub box_number: u8,
+    /// The slot in the box, counting from 1.
     pub slot: u8,
+    /// The Pokémon there.
     pub pokemon: Pokemon,
 }
 
+/// What kind of battle is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleKind {
+    /// Against a wild Pokémon.
     Wild,
+    /// Against a trainer.
     Trainer,
     /// A battle nobody can catch in, such as a catching demo or a ghost: no one's Encounter.
     Uncatchable,
 }
 
+/// Whose side of a battle a battler is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
+    /// The Player's side.
     Player,
+    /// The opponent's side.
     Opponent,
 }
 
+/// The battle that is on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Battle {
+    /// What kind of battle it is.
     pub kind: BattleKind,
+    /// Whether it is a double battle.
     pub double: bool,
+    /// The Pokémon out now, on both sides.
     pub battlers: Vec<Battler>,
 }
 
@@ -124,24 +169,31 @@ pub struct Battle {
 pub struct Battler {
     /// The game's battler position: even for the Player's side, odd for the opponent's.
     pub position: u8,
+    /// Whose side it is on.
     pub side: Side,
+    /// The species number.
     pub species: u16,
+    /// Its HP now; 0 is fainted.
     pub hp: u16,
     /// The party slot (from 0) of a Player's battler.
     pub party_slot: Option<u8>,
 }
 
+/// What the game's script engine is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScriptStatus {
     /// No script is running.
     Idle,
+    /// A script is running.
     Running,
     /// A script is waiting, such as on a message box or a battle it started.
     Waiting,
 }
 
+/// The game's script engine: what it is doing, and where.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScriptContext {
+    /// Whether a script is running or waiting.
     pub status: ScriptStatus,
     /// The script instruction it is at, while not idle.
     pub position: Option<u32>,
@@ -152,6 +204,7 @@ pub struct ScriptContext {
 pub struct Badges(pub u8);
 
 impl Badges {
+    /// How many badges the Player holds.
     pub fn count(self) -> u32 {
         self.0.count_ones()
     }
@@ -169,14 +222,21 @@ pub enum GameError {
     NoMethod(&'static str),
     /// The Game Profile lists no Sync Gate by this name.
     NoSuchGate(String),
+    /// No Pokémon in that party slot.
     NoSuchSlot(u8),
+    /// The PC has no box of that number.
     NoSuchBox(u8),
+    /// That box has no empty slot.
     BoxFull(u8),
+    /// No battle is on.
     NotInBattle,
+    /// No battler at that position.
     NoSuchBattler(u8),
+    /// Not a level from 1 to 100.
     BadLevel(u8),
     /// The name is empty, too long, or uses characters the game lacks.
     BadName(String),
+    /// The game has no option of that name, or the option no such setting.
     UnknownOption(String),
 }
 
@@ -199,6 +259,7 @@ impl fmt::Display for GameError {
 
 impl std::error::Error for GameError {}
 
+/// The changes an action asks for, or why it can't be taken.
 pub type Actions = Result<Vec<Change>, GameError>;
 
 /// What the rules engine can read from a game and ask of it.
@@ -207,16 +268,21 @@ pub trait Game {
 
     /// The Area the Player is in, or `None` in a section the profile doesn't list.
     fn area(&mut self) -> Option<Area>;
+    /// The Player's party, in slot order.
     fn party(&mut self) -> Vec<Pokemon>;
+    /// Every Pokémon in the PC.
     fn pc(&mut self) -> Vec<StoredPokemon>;
+    /// The battle that is on, if one is.
     fn battle(&mut self) -> Option<Battle>;
     /// The opponent's party. The game fills it in before a battle starts,
     /// while the battlers still hold the last battle's Pokémon for a while.
     fn opponent_party(&mut self) -> Vec<Pokemon>;
+    /// What the game's script engine is doing, and where.
     fn script(&mut self) -> ScriptContext;
     /// Where a running script returns to from the scripts it has called,
     /// innermost first: a Gift's own script may be a call or two up.
     fn script_calls(&mut self) -> Vec<u32>;
+    /// The badges the Player holds.
     fn badges(&mut self) -> Badges;
     /// Which level cap stage the Player is at: how many of the Game Profile's
     /// stages, in order, they are past (by badges, then Elite Four defeats).
@@ -224,6 +290,7 @@ pub trait Game {
     /// The named option's current setting, if the game has that option and
     /// it holds a known setting.
     fn option(&mut self, name: &str) -> Option<String>;
+    /// The Player's trainer ID.
     fn trainer_id(&mut self) -> u32;
     /// The game's play time in frames. It only runs backwards when the game
     /// is reset to an older save.
@@ -272,6 +339,7 @@ pub trait Game {
     fn dead_box(&mut self) -> u8;
     /// Moves a party Pokémon to the Dead box.
     fn move_to_dead_box(&mut self, party_slot: u8) -> Actions;
+    /// Names a party Pokémon.
     fn write_nickname(&mut self, party_slot: u8, name: &str) -> Actions;
     /// Names a Pokémon in the PC (box and slot counting from 1).
     fn write_pc_nickname(&mut self, box_number: u8, slot: u8, name: &str) -> Actions;

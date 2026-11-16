@@ -6,9 +6,13 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunEvent {
     /// The Run began.
-    Started { game_name: String },
+    Started {
+        /// The name of the game the Run is played on.
+        game_name: String,
+    },
     /// The Run was opened again; the game was booted afresh `from` there.
     Resumed {
+        /// Where the game was booted from.
         #[serde(default)]
         from: ResumedFrom,
     },
@@ -17,10 +21,14 @@ pub enum RunEvent {
     /// a boot) goes in the shared Run log, with the boot and frame boundary
     /// it was taken at, so every app checkpoints that Player's Shadow Game there.
     Checkpoint {
+        /// Why the checkpoint was taken.
         reason: CheckpointReason,
+        /// The checkpoint's SHA-1.
         hash: String,
+        /// The boot of the game it was taken in.
         #[serde(default)]
         boot: u32,
+        /// The frame boundary it was taken at.
         #[serde(default)]
         frame: u64,
     },
@@ -28,39 +36,94 @@ pub enum RunEvent {
     /// `to_seq` (in this Player's own Run file) and whose hash is `hash`.
     /// Everything this Player recorded after it is void. In the shared Run
     /// log it says this Player's game is back.
-    Retried { to_seq: u64, hash: String },
+    Retried {
+        /// The Run Checkpoint's event, in this Player's own Run file.
+        to_seq: u64,
+        /// The Run Checkpoint's SHA-1.
+        hash: String,
+    },
     /// A Retry was called for but couldn't be made.
-    RetryFailed { reason: String },
+    RetryFailed {
+        /// Why the Retry couldn't be made.
+        reason: String,
+    },
     /// The battle that was a source's Encounter is over: `pid` is the
     /// Pokémon caught in it, if one was. With Links, this Player's part of
     /// the source's Link.
-    EncounterOver { source: SourceRef, pid: Option<u32> },
+    EncounterOver {
+        /// The source whose Encounter it was.
+        source: SourceRef,
+        /// The Pokémon caught in it, if one was.
+        pid: Option<u32>,
+    },
     /// The Player chose to skip this Gift: its Link breaks for everyone.
-    Skipped { source: SourceRef },
+    Skipped {
+        /// The Gift skipped.
+        source: SourceRef,
+    },
     /// Links: another Player missed, skipped or lost this source's
     /// Encounter, so it is closed here too (`why` says whose).
-    SourceClosed { source: SourceRef, why: String },
+    SourceClosed {
+        /// The source closed.
+        source: SourceRef,
+        /// Whose Encounter was missed, skipped or lost, as a sentence.
+        why: String,
+    },
     /// The Player changed their speed (1 to 4, times a GBA's).
-    SpeedChanged { speed: u8 },
+    SpeedChanged {
+        /// The speed now, 1 to 4 times a GBA's.
+        speed: u8,
+    },
     /// Another Player changed their speed, as the Run log says.
-    OthersSpeed { player: String, speed: u8 },
+    OthersSpeed {
+        /// The other Player's name.
+        player: String,
+        /// Their speed now, 1 to 4 times a GBA's.
+        speed: u8,
+    },
     /// The Player came to this Sync Gate and is Ready there; it stays so.
-    GateReady { gate: String },
+    GateReady {
+        /// The Sync Gate's name.
+        gate: String,
+    },
     /// The Player came to this Sync Gate but can't ready up, and why.
-    GateRefused { gate: String, reason: String },
+    GateRefused {
+        /// The Sync Gate's name.
+        gate: String,
+        /// Why the Player can't ready up.
+        reason: String,
+    },
     /// Every Player is Ready at this Sync Gate: its battle runs here now.
-    GateOpened { gate: String },
+    GateOpened {
+        /// The Sync Gate's name.
+        gate: String,
+    },
     /// A Sync Gate couldn't be held or let go in this game.
-    GateFailed { gate: String, reason: String },
+    GateFailed {
+        /// The Sync Gate's name.
+        gate: String,
+        /// Why it couldn't be held or let go.
+        reason: String,
+    },
     /// A Player's vote on dropping `player` from the Run for good: the first
     /// Yes starts the vote, everyone but `player` must say Yes, and the
     /// first No ends it.
-    DropoutVote { player: [u8; 32], yes: bool },
+    DropoutVote {
+        /// The Player the vote is on dropping.
+        player: [u8; 32],
+        /// Whether this Player says Yes.
+        yes: bool,
+    },
     /// This Player was dropped from the Run by the others' vote.
     DroppedOut,
     /// A Player's vote on a Retry back to the `call`th Run Checkpoint: the
     /// first Yes starts the vote, and the first No ends it.
-    RetryVote { call: u64, yes: bool },
+    RetryVote {
+        /// Which Run Checkpoint in the Run log, counting from 1.
+        call: u64,
+        /// Whether this Player says Yes.
+        yes: bool,
+    },
     /// The Player suspended and quit; the suspend slot holds where.
     Suspended,
     /// The Run was closed cleanly. A boot that ends without this or
@@ -76,9 +139,11 @@ pub enum RunEvent {
     CheatFlag {
         /// Whose game, or `None` for the Player who logs it.
         player: Option<[u8; 32]>,
+        /// What their game did.
         cheat: crate::Cheat,
         /// The boot of their game, and the frame boundary in it.
         boot: u32,
+        /// The frame boundary in that boot.
         frame: u64,
         /// When it was seen (Unix milliseconds).
         at_ms: i64,
@@ -87,9 +152,13 @@ pub enum RunEvent {
     /// their game's `boot`: everyone else still in the Run must say Yes, the
     /// flagged Player has no say, and the first No ends the vote.
     FlagVote {
+        /// The flagged Player.
         player: [u8; 32],
+        /// What the flag is for.
         cheat: crate::Cheat,
+        /// The boot of their game the flag was raised in.
         boot: u32,
+        /// Whether this Player says Yes.
         yes: bool,
     },
     /// A cheat flag the Run log says was cleared by everyone's vote, for the feed.
@@ -103,6 +172,7 @@ pub enum RunEvent {
     Flagged {
         /// Whose game: their name, or "you".
         player: String,
+        /// What their game did.
         cheat: crate::Cheat,
         /// The frame boundary in their game.
         frame: u64,
@@ -111,26 +181,41 @@ pub enum RunEvent {
     },
     /// Another Player's Shadow Game here stopped matching their game at
     /// this frame boundary, so it can't be watched for now.
-    OutOfSync { player: String, frame: u64 },
+    OutOfSync {
+        /// The other Player's name.
+        player: String,
+        /// The frame boundary their Shadow Game stopped matching at.
+        frame: u64,
+    },
     /// The Player first holds Poké Balls; wild Encounters count from here on.
     PokeBallsObtained,
     /// A wild battle before the Player had Poké Balls: no Encounter is used.
     NotCounted {
+        /// The Area the battle was in.
         area: AreaRef,
+        /// The wild Pokémon's species number.
         species: u16,
+        /// Its species name, as the game shows it.
         species_name: String,
     },
     /// The first wild battle in an Area: its one Encounter is used.
     Encounter {
+        /// The Area whose Encounter is used.
         area: AreaRef,
+        /// The wild Pokémon's species number.
         species: u16,
+        /// Its species name, as the game shows it.
         species_name: String,
     },
     /// A Pokémon joined the party or PC from a wild battle.
     Caught {
+        /// The Area it was caught in, if the Game Profile lists it.
         area: Option<AreaRef>,
+        /// The Pokémon's personality value.
         pid: u32,
+        /// Its species number.
         species: u16,
+        /// Its species name, as the game shows it.
         species_name: String,
         /// When it happened, in Unix milliseconds: for how long each Pokémon
         /// survived (0 in logs from before it was kept).
@@ -140,28 +225,45 @@ pub enum RunEvent {
     /// The dupes clause: a wild battle with a Pokémon from a family the Player
     /// has alive doesn't use the Encounter, and ball throws are refused for it.
     DupeSkipped {
+        /// The Area the battle was in.
         area: AreaRef,
+        /// The wild Pokémon's species number.
         species: u16,
+        /// Its species name, as the game shows it.
         species_name: String,
         /// The species of that family the Player has alive.
         dupe_of: String,
     },
     /// A wild battle in a closed Area: ball throws are refused for it.
     CatchesBlocked {
+        /// The closed Area.
         area: AreaRef,
+        /// The wild Pokémon's species number.
         species: u16,
+        /// Its species name, as the game shows it.
         species_name: String,
     },
     /// A block the rules called for couldn't be applied.
-    BlockFailed { area: Option<AreaRef>, reason: String },
+    BlockFailed {
+        /// The Area the block was for, if it was for one.
+        area: Option<AreaRef>,
+        /// Why it couldn't be applied.
+        reason: String,
+    },
     /// A script gave the Player a Pokémon. `source` is the catalogued Gift it
     /// matched, or `None` for an unknown Gift the Game Profile doesn't list.
     Gift {
+        /// The Pokémon's personality value.
         pid: u32,
+        /// Its species number.
         species: u16,
+        /// Its species name, as the game shows it.
         species_name: String,
+        /// The Area it was given in, if the Game Profile lists it.
         area: Option<AreaRef>,
+        /// The catalogued Gift it matched, if any.
         source: Option<SourceRef>,
+        /// Whether it is the starter, which is always allowed.
         starter: bool,
         /// An egg; one no catalogue lists was bred at the Day Care.
         #[serde(default)]
@@ -173,10 +275,15 @@ pub enum RunEvent {
     },
     /// An in-game trade: the Player gave `gave` and received this Pokémon, a Gift.
     Traded {
+        /// The species name of the Pokémon the Player gave.
         gave: String,
+        /// The received Pokémon's personality value.
         pid: u32,
+        /// Its species number.
         species: u16,
+        /// Its species name, as the game shows it.
         species_name: String,
+        /// The Area the trade was in, if the Game Profile lists it.
         area: Option<AreaRef>,
         /// When it happened, in Unix milliseconds (0 in logs from before it was kept).
         #[serde(default)]
@@ -184,13 +291,18 @@ pub enum RunEvent {
     },
     /// The Ruleset doesn't let the Player keep this Gift, so it is to be released.
     GiftDeclined {
+        /// The Pokémon's personality value.
         pid: u32,
+        /// Its species name, as the game shows it.
         species_name: String,
+        /// Why the Gift isn't kept.
         reason: DeclineReason,
     },
     /// A declined Gift was released.
     Released {
+        /// The Pokémon's personality value.
         pid: u32,
+        /// Its species name, as the game shows it.
         species_name: String,
         /// When it happened, in Unix milliseconds (0 in logs from before it was kept).
         #[serde(default)]
@@ -198,32 +310,48 @@ pub enum RunEvent {
     },
     /// A Violation: a declined Gift couldn't be released.
     ReleaseFailed {
+        /// The Pokémon's personality value.
         pid: u32,
+        /// Its species name, as the game shows it.
         species_name: String,
+        /// Why it couldn't be released.
         reason: String,
     },
     /// The Statics rule: a Static is a bonus Encounter of its own.
     StaticEncounter {
+        /// The Area the battle was in, if the Game Profile lists it.
         area: Option<AreaRef>,
+        /// The Static whose Encounter is used.
         source: SourceRef,
+        /// The Static's species number.
         species: u16,
+        /// Its species name, as the game shows it.
         species_name: String,
     },
     /// A Static whose Encounter is used already: ball throws are refused for it.
     StaticBlocked {
+        /// The Area the battle was in, if the Game Profile lists it.
         area: Option<AreaRef>,
+        /// The Static whose Encounter was used before.
         source: SourceRef,
+        /// The Static's species number.
         species: u16,
+        /// Its species name, as the game shows it.
         species_name: String,
     },
     /// A Pokémon fainted, so it is Dead for the rest of the Run.
     Died {
+        /// The Pokémon's personality value.
         pid: u32,
+        /// Its species number.
         species: u16,
+        /// Its species name, as the game shows it.
         species_name: String,
         /// Its nickname, or its species name if it has none.
         name: String,
+        /// The Area it died in, if the Game Profile lists it.
         area: Option<AreaRef>,
+        /// What made it faint.
         cause: DeathCause,
         /// When it happened, in Unix milliseconds: for how long each Pokémon
         /// survived (0 in logs from before it was kept).
@@ -233,104 +361,199 @@ pub enum RunEvent {
     /// Faint = Dead: every Pokémon in the Player's party is Dead, the last
     /// being `last`, where and how it died. A Retry is offered if one is
     /// left; otherwise it is a game over.
-    PartyWiped { last: crate::LastDeath },
+    PartyWiped {
+        /// The last Pokémon to die, with where and how.
+        last: crate::LastDeath,
+    },
     /// The Run is lost: `how` it ended, and each Player's Pokémon that
     /// survived the longest.
     GameOver {
+        /// How the Run ended, as a sentence.
         how: String,
+        /// Each Player's Pokémon that survived the longest.
         longest: Vec<crate::Survivor>,
         /// This Player's play time by their game's own clock, in milliseconds.
         #[serde(default)]
         play_ms: i64,
     },
     /// A Dead Pokémon was moved from the party to the Dead box.
-    MovedToDeadBox { pid: u32, name: String, box_number: u8 },
+    MovedToDeadBox {
+        /// The Pokémon's personality value.
+        pid: u32,
+        /// Its nickname, or its species name if it has none.
+        name: String,
+        /// The box it went to, counting from 1.
+        box_number: u8,
+    },
     /// A Violation: a Dead Pokémon was back in the party, and was moved to the Dead box again.
-    DeadReturned { pid: u32, name: String, box_number: u8 },
+    DeadReturned {
+        /// The Pokémon's personality value.
+        pid: u32,
+        /// Its nickname, or its species name if it has none.
+        name: String,
+        /// The box it went to, counting from 1.
+        box_number: u8,
+    },
     /// A Violation: the Dead box was full, so a Dead Pokémon went to another box.
-    DeadBoxFull { pid: u32, name: String, box_number: u8 },
+    DeadBoxFull {
+        /// The Pokémon's personality value.
+        pid: u32,
+        /// Its nickname, or its species name if it has none.
+        name: String,
+        /// The box it went to instead, counting from 1.
+        box_number: u8,
+    },
     /// A Violation: a Dead Pokémon couldn't be moved out of the party.
-    DeadBoxFailed { pid: u32, name: String, reason: String },
+    DeadBoxFailed {
+        /// The Pokémon's personality value.
+        pid: u32,
+        /// Its nickname, or its species name if it has none.
+        name: String,
+        /// Why it couldn't be moved.
+        reason: String,
+    },
     /// The Player is at level cap stage `stage` (from 0), so the cap is
     /// `level` until they pass `next`; with `next` `None` every stage is
     /// passed and there is no cap. `raised` when it follows an earlier stage.
     LevelCapSet {
+        /// The stage the Player is at, counting from 0.
         stage: usize,
+        /// The cap until the stage is passed.
         level: u8,
+        /// Who the Player must beat to pass the stage, if anyone is left.
         next: Option<String>,
+        /// Whether the cap follows an earlier stage's.
         raised: bool,
     },
     /// The game's level checks can't be patched, so the cap is only a soft
     /// cap: a Player over it can't ready up at a Sync Gate.
-    SoftCap { reason: String },
+    SoftCap {
+        /// Why the level checks can't be patched.
+        reason: String,
+    },
     /// No items: the Bag is refused in trainer battles and only Poké Balls
     /// work in wild battles. Said once per Run.
     ItemsBanned,
     /// No items couldn't be put in place on this game. Said once per Run.
-    ItemBanFailed { reason: String },
+    ItemBanFailed {
+        /// Why it couldn't be put in place.
+        reason: String,
+    },
     /// Set mode: the battle style was written to Set; `again` when the
     /// Player had changed it back.
-    SetModeForced { again: bool },
+    SetModeForced {
+        /// Whether the Player had changed it back.
+        again: bool,
+    },
     /// Set mode couldn't be forced on this game. Said once per Run.
-    SetModeFailed { reason: String },
+    SetModeFailed {
+        /// Why it couldn't be forced.
+        reason: String,
+    },
     /// A rule the game does through its own option: the option was set for
     /// the rule (said once per Run), or set back (`again`) after the Player
     /// changed a watched one.
     NativeOptionSet {
+        /// The rule's name as Players see it.
         rule: String,
+        /// The option's in-game name.
         name: String,
+        /// The setting the rule needs.
         value: String,
+        /// Whether the Player had changed it and it was set back.
         again: bool,
         /// Pactlocke enforces the rule too: the option goes with its own method.
         #[serde(default)]
         pactlocke_too: bool,
     },
     /// The option couldn't be set. Said once per Run for each option.
-    NativeOptionFailed { rule: String, name: String, reason: String },
+    NativeOptionFailed {
+        /// The rule's name as Players see it.
+        rule: String,
+        /// The option's in-game name.
+        name: String,
+        /// Why it couldn't be set.
+        reason: String,
+    },
     /// Shared Seed: the game's own randomizer has the Run's seed. Said once per Run.
     SeedShared,
     /// The Run's seed couldn't be given to the game. Said once per Run.
-    SeedShareFailed { reason: String },
+    SeedShareFailed {
+        /// Why the seed couldn't be given.
+        reason: String,
+    },
     /// Must nickname: a Pokémon was left with its species name, so the side
     /// panel asks the Player for one.
-    NicknameWanted { pid: u32, species_name: String },
+    NicknameWanted {
+        /// The Pokémon's personality value.
+        pid: u32,
+        /// Its species name, as the game shows it.
+        species_name: String,
+    },
     /// The Player named it from the side panel.
     Nicknamed {
+        /// The Pokémon's personality value.
         pid: u32,
+        /// Its species name, as the game shows it.
         species_name: String,
+        /// The nickname the Player gave it.
         name: String,
     },
     /// A name the Player gave couldn't be used.
     NicknameRefused {
+        /// The Pokémon's personality value.
         pid: u32,
+        /// Its species name, as the game shows it.
         species_name: String,
+        /// The name the Player asked for.
         name: String,
+        /// Why it couldn't be used.
         reason: String,
     },
     /// The type clause: a second Pokémon of a primary type in the party was
     /// moved to the PC. `holder` has that type in the party.
     TypeClauseMoved {
+        /// The moved Pokémon's personality value.
         pid: u32,
+        /// Its nickname, or its species name if it has none.
         name: String,
+        /// The name of the Pokémon that has that type in the party.
         holder: String,
+        /// The type's name, as the game shows it.
         type_name: String,
+        /// The box it went to, counting from 1.
         box_number: u8,
     },
     /// Links: a Pokémon waiting on its Link went to the PC, as the party is
     /// full. `until` finishes the sentence: "until Blue catches on Route 1".
     WaitsForLink {
+        /// The Pokémon's personality value.
         pid: u32,
+        /// Its nickname, or its species name if it has none.
         name: String,
+        /// What it waits for, finishing the sentence.
         until: String,
+        /// The box it went to, counting from 1.
         box_number: u8,
     },
     /// Links: a Pokémon waiting on its Link couldn't be moved out of a full party.
-    LinkWaitFailed { pid: u32, name: String, reason: String },
+    LinkWaitFailed {
+        /// The Pokémon's personality value.
+        pid: u32,
+        /// Its nickname, or its species name if it has none.
+        name: String,
+        /// Why it couldn't be moved.
+        reason: String,
+    },
     /// A Violation: the type clause couldn't move a Pokémon out of the party.
     TypeClauseFailed {
+        /// The Pokémon's personality value.
         pid: u32,
+        /// Its nickname, or its species name if it has none.
         name: String,
+        /// The type's name, as the game shows it.
         type_name: String,
+        /// Why it couldn't be moved.
         reason: String,
     },
 }
@@ -347,7 +570,10 @@ pub enum ResumedFrom {
     /// The suspend slot: exactly where the Player suspended.
     Suspend,
     /// After a crash: the last checkpoint and the button presses recorded after it.
-    Rebuild { frames: u64 },
+    Rebuild {
+        /// How many frames of recorded button presses were replayed.
+        frames: u64,
+    },
 }
 
 /// Why a Run Checkpoint was taken.
@@ -365,7 +591,10 @@ pub enum CheckpointReason {
     SyncGate,
     /// Another Player's Run Checkpoint, the `call`th in the Run log (from
     /// 1): every Player's game is captured with it.
-    Joined { call: u64 },
+    Joined {
+        /// Which Run Checkpoint in the Run log, counting from 1.
+        call: u64,
+    },
 }
 
 impl RunEvent {
@@ -424,6 +653,7 @@ impl RunEvent {
 pub struct SourceRef {
     /// The same in every Player's game for the same Gift or Static.
     pub key: String,
+    /// The source's name as Players see it.
     pub name: String,
 }
 
@@ -466,20 +696,31 @@ pub enum DeclineReason {
 #[serde(tag = "by", rename_all = "snake_case")]
 pub enum DeathCause {
     /// A wild Pokémon; `foe` is its species name.
-    Wild { foe: String },
+    Wild {
+        /// The wild Pokémon's species name.
+        foe: String,
+    },
     /// A trainer's Pokémon; `foe` is its species name.
-    Trainer { foe: String },
+    Trainer {
+        /// The trainer's Pokémon's species name.
+        foe: String,
+    },
     /// Fainting outside battle, which only poison does.
     Poison,
     /// Its Link broke in another Player's game: `why`, such as "Blue's
     /// PIDGEY died" or "Blue didn't catch it".
-    Link { why: String },
+    Link {
+        /// What broke the Link, as a sentence.
+        why: String,
+    },
 }
 
 /// An Area as the log keeps it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AreaRef {
+    /// The Area's region-map section.
     pub id: u16,
+    /// The Area's name as Players see it.
     pub name: String,
 }
 
@@ -504,5 +745,6 @@ pub struct Recorded {
     pub frame: u64,
     /// Unix time in milliseconds.
     pub at_ms: i64,
+    /// What happened.
     pub event: RunEvent,
 }

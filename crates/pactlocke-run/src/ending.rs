@@ -16,6 +16,7 @@ pub struct Survivor {
     pub player: Option<String>,
     /// Its nickname at its Death, or its species name.
     pub name: String,
+    /// Its species name, as the game shows it.
     pub species_name: String,
     /// Milliseconds it lived in the Run.
     pub lived_ms: i64,
@@ -28,7 +29,9 @@ pub struct Survivor {
 pub struct LastDeath {
     /// Its nickname, or its species name.
     pub name: String,
+    /// The Area it died in, if the Game Profile lists it.
     pub area: Option<AreaRef>,
+    /// What made it faint.
     pub cause: DeathCause,
 }
 

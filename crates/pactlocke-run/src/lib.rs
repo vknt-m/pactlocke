@@ -5,6 +5,7 @@
 //!
 //! Dependencies are passed in: the game (through [`LiveGame`]), storage
 //! (through [`RunStorage`]) and the clock (through [`RunClock`]).
+#![warn(missing_docs)]
 
 mod areas;
 mod avatars;
@@ -62,7 +63,7 @@ pub use stream::{
 };
 pub use view::{
     Doing, FeedEntry, FeedIcon, FeedKind, GameOverView, Grave, LevelCapView, NativeOptionView, NicknameWanted, RunView,
-    WipeView,
+    WipeView, graves,
 };
 
 use pactlocke_game::LevelCap;
@@ -211,11 +212,14 @@ impl Ruleset {
 /// What a new Run is started with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewRun {
+    /// The Run's name.
     pub name: String,
+    /// The name of the game it is played on.
     pub game_name: String,
     /// The SHA-1 of the ROM the Run is played on.
     pub game_sha1: String,
     /// Where the ROM was when the Run started, to offer it again on resume.
     pub rom_path: Option<String>,
+    /// The challenge rules chosen for it.
     pub ruleset: Ruleset,
 }

@@ -59,6 +59,9 @@ pub struct RunEngine {
     stamped: Vec<Stamped>,
     /// The save memory as last stored, and as found on resume.
     save_memory: Option<Vec<u8>>,
+    /// An in-game save is being written: the save memory changed at the
+    /// last look, and its Run Checkpoint waits until it stops changing.
+    save_settling: bool,
     view: RunView,
     view_version: u64,
     /// Whether the feed has said the Run file can't be written.
@@ -592,6 +595,7 @@ impl RunEngine {
             last_flush_ms: now,
             stamped: Vec::new(),
             save_memory,
+            save_settling: false,
             view,
             view_version: 0,
             write_failure_shown: false,
@@ -642,6 +646,7 @@ impl RunEngine {
         }
     }
 
+    /// What the Run is.
     pub fn info(&self) -> &RunInfo {
         &self.info
     }
@@ -673,14 +678,22 @@ impl RunEngine {
 
     /// Tells the engine what the game's save memory holds now; it is stored when it changed.
     pub fn save_memory_seen(&mut self, save: &[u8]) {
-        if save.is_empty() || self.save_memory.as_deref() == Some(save) {
+        if save.is_empty() {
+            return;
+        }
+        if self.save_memory.as_deref() == Some(save) {
+            // A Run Checkpoint at every in-game save, once it is written: a
+            // save takes several looks to write, and each Run Checkpoint
+            // has every other Player send their game.
+            if std::mem::take(&mut self.save_settling) {
+                self.checkpoints_due.push_back(CheckpointReason::InGameSave);
+            }
             return;
         }
         self.storage.store_save_memory(save);
-        // A Run Checkpoint at every in-game save. The first save memory a new
-        // game shows is its blank cartridge, not a save.
+        // The first save memory a new game shows is its blank cartridge, not a save.
         if self.save_memory.replace(save.to_vec()).is_some() {
-            self.checkpoints_due.push_back(CheckpointReason::InGameSave);
+            self.save_settling = true;
         }
     }
 
@@ -1137,7 +1150,8 @@ impl RunEngine {
         let fainted: Vec<Pokemon> = game
             .party()
             .into_iter()
-            .filter(|p| !p.is_egg && p.stats.is_some_and(|s| s.hp == 0) && !self.rules.is_dead(p.pid))
+            // No max HP: the game is still making it (Wally's Zigzagoon).
+            .filter(|p| !p.is_egg && p.stats.is_some_and(|s| s.hp == 0 && s.max_hp > 0) && !self.rules.is_dead(p.pid))
             .collect();
         if fainted.is_empty() {
             return;

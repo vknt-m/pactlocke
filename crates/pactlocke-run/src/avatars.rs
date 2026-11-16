@@ -37,7 +37,9 @@ const FOLLOWERS: bool = false;
 /// Another Player's Partner Avatar, as their Shadow Game shows them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartnerAvatar {
+    /// Whose Partner Avatar it is.
     pub player: PlayerKey,
+    /// Where they stand and how they look, as their Shadow Game last showed them.
     pub seen: SeenAvatar,
 }
 
@@ -124,6 +126,7 @@ pub struct Painter {
 }
 
 impl Painter {
+    /// A painter that has drawn nothing yet.
     pub fn new() -> Self {
         Self::default()
     }

@@ -51,9 +51,11 @@ impl fmt::Debug for RunSecret {
 /// What a friend needs to join a Run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invite {
+    /// The Host's key, which is also where to reach them.
     pub host: PeerKey,
     /// The relay the Host is reachable on; `None` for a local test.
     pub relay: Option<String>,
+    /// The Run secret that proves this invite came from the Host.
     pub secret: RunSecret,
     /// The Host's Pactlocke version; a joiner must have the same one.
     pub app_version: String,

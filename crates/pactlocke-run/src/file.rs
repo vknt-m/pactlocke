@@ -112,12 +112,19 @@ pub struct RunId(pub String);
 /// A Run as the home screen lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunSummary {
+    /// Which Run file it is.
     pub id: RunId,
+    /// The Run's name.
     pub name: String,
+    /// The name of the game it is played on.
     pub game_name: String,
+    /// The SHA-1 of the ROM it is played on.
     pub game_sha1: String,
+    /// Where the ROM was when the Run started, to offer it again on resume.
     pub rom_path: Option<String>,
+    /// The Run's Ruleset.
     pub ruleset: Ruleset,
+    /// When the Run was started (Unix milliseconds).
     pub created_ms: i64,
     /// When anything last happened in it.
     pub last_played_ms: i64,
@@ -134,6 +141,7 @@ pub struct RunSummary {
 /// The Run with friends a solo copy was made from: its name, and when.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CopiedFrom {
+    /// That Run's name.
     pub name: String,
     /// Unix time in milliseconds.
     pub at_ms: i64,
@@ -152,6 +160,7 @@ impl RunLibrary {
         Ok(Self { dir })
     }
 
+    /// The folder the Run files are in.
     pub fn dir(&self) -> &Path {
         &self.dir
     }
