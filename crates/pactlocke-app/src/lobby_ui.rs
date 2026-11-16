@@ -1088,10 +1088,12 @@ mod tests {
         );
         for joiner in 1..apps.len() {
             let players = joiner + 1;
+            // The link already used, read before asking for a new one: the
+            // network thread may publish the new link at once.
+            let used = apps[0].invite().map(|(link, _)| link);
             if joiner > 1 {
                 apps[0].new_invite();
             }
-            let used = apps[0].invite().map(|(link, _)| link);
             until(apps, &[], 30, "an invite", |apps| {
                 apps[0]
                     .invite()
