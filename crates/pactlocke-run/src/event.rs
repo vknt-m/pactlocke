@@ -281,9 +281,16 @@ pub enum RunEvent {
         name: String,
         value: String,
         again: bool,
+        /// Pactlocke enforces the rule too: the option goes with its own method.
+        #[serde(default)]
+        pactlocke_too: bool,
     },
     /// The option couldn't be set. Said once per Run for each option.
     NativeOptionFailed { rule: String, name: String, reason: String },
+    /// Shared Seed: the game's own randomizer has the Run's seed. Said once per Run.
+    SeedShared,
+    /// The Run's seed couldn't be given to the game. Said once per Run.
+    SeedShareFailed { reason: String },
     /// Must nickname: a Pokémon was left with its species name, so the side
     /// panel asks the Player for one.
     NicknameWanted { pid: u32, species_name: String },

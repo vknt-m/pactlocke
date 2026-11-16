@@ -10,7 +10,7 @@ use crate::game::{
     ScriptStatus, Side, StoredPokemon,
 };
 use crate::profile::HOLD_SCRIPT_LEN;
-use crate::profile::{BoxFormat, GameProfile, Method, PatchSite, Place, ROM_BASE};
+use crate::profile::{BoxFormat, GameProfile, Method, PatchSite, Place, ROM_BASE, RngPin, SeedVar};
 use crate::{Area, Source, text};
 use crate::{AvatarRoom, OAM, OBJ_PALETTES, OBJ_TILES, SpriteImage, Whereabouts};
 
@@ -32,6 +32,8 @@ pub struct ProfileGame<M> {
     /// The clean ROM, for undoing table patches.
     rom: Arc<[u8]>,
     memory: M,
+    /// The trainer battle whose RNG is pinned for Shared Seed, if one is coming.
+    pin: Option<Pinned>,
 }
 
 impl<M: Memory> ProfileGame<M> {
@@ -40,6 +42,7 @@ impl<M: Memory> ProfileGame<M> {
             profile,
             rom: rom.into(),
             memory,
+            pin: None,
         }
     }
 
@@ -75,10 +78,12 @@ impl<M: Memory> ProfileGame<M> {
     }
 
     fn save_block(&mut self, number: u8) -> u32 {
-        let place = if number == 1 {
-            self.profile.symbols.save_block_1
-        } else {
-            self.profile.symbols.save_block_2
+        let symbols = &self.profile.symbols;
+        let place = match number {
+            1 => symbols.save_block_1,
+            2 => symbols.save_block_2,
+            // The store checked a profile with options in block 3 places it.
+            _ => symbols.save_block_3.expect("save block 3 is placed"),
         };
         self.place(place)
     }
@@ -91,13 +96,29 @@ impl<M: Memory> ProfileGame<M> {
         }
     }
 
-    /// Whether an event flag is set.
-    fn flag(&mut self, flag: u16) -> bool {
+    /// An event flag's byte and its bit there.
+    fn flag_bit(&mut self, flag: u16) -> (u32, u8) {
         let (flags, index) = match self.profile.symbols.expanded_flags {
             Some(expanded) if flag >= expanded.first => (expanded.at, flag - expanded.first),
             _ => (self.save_block(1) + self.profile.layout.event_flags, flag),
         };
-        self.u8(flags + u32::from(index / 8)) & (1 << (index % 8)) != 0
+        (flags + u32::from(index / 8), 1 << (index % 8))
+    }
+
+    /// Whether an event flag is set.
+    fn flag(&mut self, flag: u16) -> bool {
+        let (byte, bit) = self.flag_bit(flag);
+        self.u8(byte) & bit != 0
+    }
+
+    /// The write that sets or clears an event flag.
+    fn set_flag(&mut self, flag: u16, on: bool) -> Change {
+        let (byte, bit) = self.flag_bit(flag);
+        let old = self.u8(byte);
+        Change::Write {
+            addr: byte,
+            bytes: vec![if on { old | bit } else { old & !bit }],
+        }
     }
 
     fn party_count(&mut self) -> u8 {
@@ -148,6 +169,10 @@ impl<M: Memory> ProfileGame<M> {
 
     fn has_species(&mut self, addr: u32) -> bool {
         let layout = &self.profile.layout;
+        if let Some(plain) = layout.plain {
+            let mask = layout.species_mask;
+            return self.u16(addr + plain.species) & mask != 0;
+        }
         let (flags, mask) = (layout.flags, layout.has_species_mask);
         self.u8(addr + flags) & mask != 0
     }
@@ -173,6 +198,28 @@ impl<M: Memory> ProfileGame<M> {
         let word = |offset: u32| u32::from_le_bytes(raw[at(offset)..at(offset) + 4].try_into().unwrap());
         let pid = word(0);
         let ot_id = word(layout.ot_id);
+        let nickname_start = at(layout.nickname);
+        let nickname = text::decode(&raw[nickname_start..nickname_start + layout.nickname_length as usize]);
+        let is_egg = raw[at(layout.flags)] & layout.egg_mask != 0;
+        let stats = in_party.then(|| PartyStats {
+            level: raw[at(layout.level)],
+            hp: u16::from_le_bytes([raw[at(layout.hp)], raw[at(layout.hp) + 1]]),
+            max_hp: u16::from_le_bytes([raw[at(layout.max_hp)], raw[at(layout.max_hp) + 1]]),
+        });
+
+        if let Some(plain) = layout.plain {
+            let species = u16::from_le_bytes([raw[at(plain.species)], raw[at(plain.species) + 1]]);
+            let pokemon = Pokemon {
+                pid,
+                ot_id,
+                species: species & layout.species_mask,
+                nickname,
+                met_section: u16::from(raw[at(plain.met_location)]),
+                is_egg,
+                stats,
+            };
+            return pokemon;
+        }
 
         // The four substructures, in Growth, Attacks, EVs, Misc order.
         let mut subs = [[0u8; SUBSTRUCTURE_SIZE]; 4];
@@ -191,20 +238,13 @@ impl<M: Memory> ProfileGame<M> {
             }
         }
         let [growth, _, _, misc] = subs;
-
-        let nickname_start = at(layout.nickname);
-        let stats = in_party.then(|| PartyStats {
-            level: raw[at(layout.level)],
-            hp: u16::from_le_bytes([raw[at(layout.hp)], raw[at(layout.hp) + 1]]),
-            max_hp: u16::from_le_bytes([raw[at(layout.max_hp)], raw[at(layout.max_hp) + 1]]),
-        });
         Pokemon {
             pid,
             ot_id,
-            species: u16::from_le_bytes([growth[0], growth[1]]),
-            nickname: text::decode(&raw[nickname_start..nickname_start + layout.nickname_length as usize]),
+            species: u16::from_le_bytes([growth[0], growth[1]]) & layout.species_mask,
+            nickname,
             met_section: u16::from(misc[1]),
-            is_egg: raw[at(layout.flags)] & layout.egg_mask != 0,
+            is_egg,
             stats,
         }
     }
@@ -442,8 +482,16 @@ impl<M: Memory> Game for ProfileGame<M> {
     }
 
     fn type_name(&mut self, type_id: u8) -> String {
+        let Some(table) = self.profile.symbols.type_names else {
+            return self
+                .profile
+                .type_name_list
+                .get(usize::from(type_id))
+                .cloned()
+                .unwrap_or_else(|| format!("type {type_id}"));
+        };
         let length = self.profile.layout.type_name_length;
-        let addr = self.profile.symbols.type_names + u32::from(type_id) * length;
+        let addr = table + u32::from(type_id) * length;
         text::decode(&self.bytes(addr, length as usize)).trim_end().to_owned()
     }
 
@@ -455,6 +503,26 @@ impl<M: Memory> Game for ProfileGame<M> {
 
     fn evolutions(&mut self) -> Vec<Vec<u16>> {
         let layout = self.profile.layout.clone();
+        if let Some(pointer) = layout.evolutions_pointer {
+            /// What ends a species' list of evolutions.
+            const END: u16 = 0xFFFF;
+            let info = self.profile.symbols.species_info;
+            return (0..u32::from(layout.species_count))
+                .map(|species| {
+                    let list = self.u32(info + species * layout.species_info_size + pointer);
+                    if !(ROM_BASE..ROM_BASE + 0x0200_0000).contains(&list) {
+                        return Vec::new();
+                    }
+                    (0..layout.evolutions_per_species)
+                        .map(|i| list + i * layout.evolution_size)
+                        .map(|entry| (self.u16(entry), self.u16(entry + layout.evolution_target)))
+                        .take_while(|&(method, _)| method != END)
+                        .map(|(_, into)| into)
+                        .filter(|&into| into != 0 && into < layout.species_count)
+                        .collect()
+                })
+                .collect();
+        }
         let per_species = layout.evolutions_per_species * layout.evolution_size;
         let table = self.bytes(
             self.profile.symbols.evolution_table,
@@ -528,6 +596,9 @@ impl<M: Memory> Game for ProfileGame<M> {
     }
 
     fn block_catches(&mut self, blocked: bool) -> Actions {
+        if let Some(Method::SetFlag { flag }) = self.profile.rules.catch_block {
+            return Ok(vec![self.set_flag(flag, blocked)]);
+        }
         self.toggle("catch blocks", self.profile.rules.catch_block.as_ref(), blocked)
     }
 
@@ -539,7 +610,8 @@ impl<M: Memory> Game for ProfileGame<M> {
             .patch_sites("level caps", self.profile.rules.level_cap.as_ref())?
             .into_iter()
             .map(|site| {
-                let mut bytes = site.expect.0;
+                // A `cmp #100` with the cap for its 100, or a function stubbed to return it.
+                let mut bytes = site.write.unwrap_or(site.expect).0;
                 bytes[0] = level.saturating_sub(site.below_cap);
                 Change::Patch { addr: site.at, bytes }
             })
@@ -568,6 +640,10 @@ impl<M: Memory> Game for ProfileGame<M> {
     }
 
     fn lock_bag_in_trainer_battles(&mut self, locked: bool) -> Actions {
+        // The item table's ban (R.O.W.E.'s only one) bites in every battle.
+        if matches!(self.profile.rules.no_items_trainer, Some(Method::ZeroTableField)) {
+            return Ok(Vec::new());
+        }
         self.toggle(
             "no items in trainer battles",
             self.profile.rules.no_items_trainer.as_ref(),
@@ -584,11 +660,12 @@ impl<M: Memory> Game for ProfileGame<M> {
             return Err(GameError::NoSuchBattler(position));
         }
         let (symbols, layout) = (&self.profile.symbols, &self.profile.layout);
-        let status_addr = symbols.battler_statuses3 + u32::from(position) * 4;
+        let status_addr = symbols.battler_statuses3 + u32::from(position) * layout.battler_status_stride;
         let timer_addr =
             symbols.disable_structs + u32::from(position) * layout.disable_struct_size + layout.perish_timer;
-        let perish = layout.perish_song_status3;
+        let (perish, timer_mask) = (layout.perish_song_status3, layout.perish_timer_mask);
         let status = self.u32(status_addr) | perish;
+        let timer = self.u8(timer_addr) & !timer_mask;
         Ok(vec![
             Change::Write {
                 addr: status_addr,
@@ -596,7 +673,7 @@ impl<M: Memory> Game for ProfileGame<M> {
             },
             Change::Write {
                 addr: timer_addr,
-                bytes: vec![0],
+                bytes: vec![timer],
             },
         ])
     }
@@ -902,6 +979,96 @@ impl<M: Memory> Game for ProfileGame<M> {
         let gates = self.profile.sync_gates.as_ref()?;
         gates.gates.get(index).map(|g| g.name.clone())
     }
+
+    fn has_own_randomizer(&mut self) -> bool {
+        self.profile.own_randomizer.is_some()
+    }
+
+    fn share_seed(&mut self, seed: u32) -> Actions {
+        let own = self
+            .profile
+            .own_randomizer
+            .clone()
+            .ok_or(GameError::NoMethod("Shared Seed"))?;
+        let mut changes = Vec::new();
+        let mut write_if_changed = |game: &mut Self, addr: u32, bytes: Vec<u8>| {
+            if game.bytes(addr, bytes.len()) != bytes {
+                changes.push(Change::Write { addr, bytes });
+            }
+        };
+        let trainer_id = self.save_block(2) + self.profile.layout.trainer_id;
+        if own.seed_is_trainer_id {
+            write_if_changed(self, trainer_id, seed.to_le_bytes().to_vec());
+        }
+        if let Some(byte) = own.trainer_id_byte {
+            write_if_changed(self, trainer_id + u32::from(byte), vec![(seed >> 24) as u8]);
+        }
+        if let Some(SeedVar { var, vars }) = own.seed_var {
+            // The game's own seeds run from 1 to 9998.
+            let value = (1 + seed % 9998) as u16;
+            let addr = self.save_block(1) + vars + u32::from(var.wrapping_sub(0x4000)) * 2;
+            write_if_changed(self, addr, value.to_le_bytes().to_vec());
+        }
+        for site in own.sites {
+            let write = site.write.ok_or(GameError::NoMethod("Shared Seed"))?.0;
+            if self.bytes(site.at, write.len()) != write {
+                changes.push(Change::Patch {
+                    addr: site.at,
+                    bytes: write,
+                });
+            }
+        }
+        for kept in own.keep {
+            if self.option(&kept.option).as_deref() != Some(kept.value.as_str()) {
+                changes.extend(self.set_option(&kept.option, &kept.value)?);
+            }
+        }
+        Ok(changes)
+    }
+
+    fn pin_rng(&mut self, seed: u32) -> Actions {
+        let Some(RngPin { rng, opponent }) = self.profile.own_randomizer.as_ref().and_then(|own| own.rng_pin) else {
+            return Ok(Vec::new());
+        };
+        let trainer = self.u16(opponent);
+        if trainer == 0 {
+            self.pin = None;
+            return Ok(Vec::new());
+        }
+        let party_word = self.u32(self.profile.symbols.enemy_party);
+        let pin = match self.pin {
+            Some(pin) if pin.trainer == trainer => pin,
+            // Triggered: the enemy party as it is now, before the battle makes it.
+            _ => *self.pin.insert(Pinned {
+                trainer,
+                party_word,
+                made: false,
+            }),
+        };
+        if pin.made || party_word != pin.party_word {
+            self.pin = Some(Pinned { made: true, ..pin });
+            return Ok(Vec::new());
+        }
+        Ok(vec![Change::Write {
+            addr: rng,
+            bytes: pinned_rng(seed, trainer).to_le_bytes().to_vec(),
+        }])
+    }
+}
+
+/// A trainer battle's RNG pin: which trainer, the enemy party's first word
+/// when it was triggered, and whether the party has been made since.
+#[derive(Debug, Clone, Copy)]
+struct Pinned {
+    trainer: u16,
+    party_word: u32,
+    made: bool,
+}
+
+/// The RNG state a pinned trainer battle starts from: the same in every
+/// Player's game for the same seed and trainer.
+pub fn pinned_rng(seed: u32, trainer: u16) -> u32 {
+    seed.rotate_left(16) ^ u32::from(trainer).wrapping_mul(0x9E37_79B1)
 }
 
 /// Where must nickname's key filter looks, in battle and on the overworld.

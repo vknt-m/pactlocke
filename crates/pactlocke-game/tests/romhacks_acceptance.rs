@@ -20,7 +20,7 @@ fn gba_files(dir: &Path, found: &mut Vec<PathBuf>) {
 }
 
 /// The tested Romhacks with a bundled Game Profile.
-const PROFILED: [&str; 4] = ["Gaia", "Glazed", "Radical Red", "Unbound"];
+const PROFILED: [&str; 6] = ["Gaia", "Glazed", "Heart and Soul", "R.O.W.E.", "Radical Red", "Unbound"];
 
 #[test]
 fn each_patched_launch_romhack_is_named_and_profiled_or_waits_for_its_game_profile() {
@@ -42,8 +42,13 @@ fn each_patched_launch_romhack_is_named_and_profiled_or_waits_for_its_game_profi
             };
             eprintln!("{}: {}", file.display(), profile.name);
             assert_eq!(profile.status, SupportStatus::Supported, "{}", hack.name);
+            // Every rule is the Romhack's own option or Pactlocke's.
             for (rule, capability) in capabilities.iter() {
-                assert_eq!(capability, &Capability::Enforceable, "{}: {rule:?}", hack.name);
+                assert!(
+                    matches!(capability, Capability::Enforceable | Capability::NativeOption(_)),
+                    "{}: {rule:?} is {capability:?}",
+                    hack.name
+                );
             }
             named.push(hack.name);
             continue;

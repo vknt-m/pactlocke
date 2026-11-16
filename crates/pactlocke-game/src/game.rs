@@ -311,4 +311,16 @@ pub trait Game {
     /// The gate whose hold script is running, if one is: the Player has
     /// come to it while it is closed.
     fn at_gate(&mut self) -> Option<String>;
+
+    // Shared Seed on a Romhack's own randomizer.
+
+    /// Whether the game has its own randomizer Shared Seed can share.
+    fn has_own_randomizer(&mut self) -> bool;
+    /// What gives the Romhack's own randomizer `seed`: the seed where the game
+    /// keeps it, its draws made to depend on it alone, and the modes no seed
+    /// makes the same kept off. Nothing for what is so already.
+    fn share_seed(&mut self, seed: u32) -> Actions;
+    /// The RNG set from `seed` and the coming trainer, from a trainer
+    /// battle's trigger until the enemy party is made; nothing otherwise.
+    fn pin_rng(&mut self, seed: u32) -> Actions;
 }

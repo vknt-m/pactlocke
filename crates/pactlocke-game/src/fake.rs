@@ -28,6 +28,8 @@ const PC_NICKNAME: u32 = 12;
 const NICKNAME_YES: u32 = 13;
 const CLOSE_GATE: u32 = 14;
 const OPEN_GATE: u32 = 15;
+const SHARE_SEED: u32 = 16;
+const PIN_RNG: u32 = 17;
 
 const PC_BOXES: u8 = 14;
 const PC_BOX_SLOTS: u8 = 30;
@@ -98,6 +100,13 @@ pub struct FakeGame {
     pub whereabouts: Option<crate::Whereabouts>,
     pub player_sprite: Option<crate::SpriteImage>,
     pub avatar_room: Option<crate::AvatarRoom>,
+    /// Whether the game has its own randomizer, the seed Pactlocke gave it,
+    /// and whether a trainer battle is triggered with its party not yet made.
+    pub own_randomizer: bool,
+    pub shared_seed: Option<u32>,
+    pub trainer_battle_coming: bool,
+    /// The RNG states Pactlocke pinned, one a frame.
+    pub rng_pins: Vec<u32>,
 
     /// The emulator under the fake: driven by keys and changed by every
     /// change applied, so a copy fed the same input stream matches it.
@@ -149,6 +158,10 @@ impl Default for FakeGame {
             whereabouts: None,
             player_sprite: None,
             avatar_room: None,
+            own_randomizer: false,
+            shared_seed: None,
+            trainer_battle_coming: false,
+            rng_pins: Vec::new(),
             core: FakeCore::default(),
         }
     }
@@ -184,6 +197,8 @@ impl FakeGame {
                 BAN_WILD_ITEMS => self.wild_items_banned = bytes[0] != 0,
                 LOCK_BAG => self.bag_locked = bytes[0] != 0,
                 FAINT_ACTIVE => self.perishing.push(bytes[0]),
+                SHARE_SEED => self.shared_seed = Some(u32::from_le_bytes(bytes[..4].try_into().unwrap())),
+                PIN_RNG => self.rng_pins.push(u32::from_le_bytes(bytes[..4].try_into().unwrap())),
                 CLOSE_GATE => {
                     self.gates_closed.insert(String::from_utf8_lossy(bytes).into_owned());
                 }
@@ -509,5 +524,26 @@ impl Game for FakeGame {
 
     fn at_gate(&mut self) -> Option<String> {
         self.at_gate.clone()
+    }
+
+    fn has_own_randomizer(&mut self) -> bool {
+        self.own_randomizer
+    }
+
+    fn share_seed(&mut self, seed: u32) -> Actions {
+        if !self.own_randomizer {
+            return Err(GameError::NoMethod("Shared Seed"));
+        }
+        if self.shared_seed == Some(seed) {
+            return Ok(Vec::new());
+        }
+        Ok(vec![fake_write(SHARE_SEED, seed.to_le_bytes().to_vec())])
+    }
+
+    fn pin_rng(&mut self, seed: u32) -> Actions {
+        if !self.trainer_battle_coming {
+            return Ok(Vec::new());
+        }
+        Ok(vec![fake_write(PIN_RNG, seed.to_le_bytes().to_vec())])
     }
 }

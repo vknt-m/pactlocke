@@ -453,8 +453,11 @@ fn check(profile: &GameProfile) -> Result<(), String> {
         return Err(format!("game_code {:?} is not four letters", profile.game_code));
     }
     for (name, option) in &profile.options {
-        if !matches!(option.save_block, 1 | 2) {
-            return Err(format!("option {name}: save_block must be 1 or 2"));
+        match option.save_block {
+            1 | 2 => {}
+            3 if profile.symbols.save_block_3.is_some() => {}
+            3 => return Err(format!("option {name}: save_block 3, but no symbols save_block_3")),
+            _ => return Err(format!("option {name}: save_block must be 1, 2 or 3")),
         }
         if let Some((value, _)) = option.values.iter().find(|(_, v)| **v & !option.mask != 0) {
             return Err(format!("option {name}: value {value:?} has bits outside its mask"));
@@ -470,6 +473,16 @@ fn check(profile: &GameProfile) -> Result<(), String> {
         if !ROM.contains(&addr) {
             return Err(format!("symbol {table} {addr:#010X} is not in ROM"));
         }
+    }
+    match profile.symbols.type_names {
+        Some(addr) if !ROM.contains(&addr) => return Err(format!("symbol type_names {addr:#010X} is not in ROM")),
+        Some(_) if !profile.type_name_list.is_empty() => {
+            return Err("give the type names as symbols type_names or as type_name_list, not both".into());
+        }
+        None if profile.type_name_list.is_empty() => {
+            return Err("give the type names as symbols type_names or as type_name_list".into());
+        }
+        _ => {}
     }
     let layout = &profile.layout;
     if layout.box_format == BoxFormat::Compressed && (layout.encrypted || layout.box_slot_size != COMPRESSED_SLOT_SIZE)
@@ -555,7 +568,8 @@ fn check(profile: &GameProfile) -> Result<(), String> {
                             site.at
                         ));
                     }
-                    if switched != site.write.is_some() {
+                    // A level cap site may stub a function to return the cap.
+                    if switched != site.write.is_some() && rule != "level_cap" {
                         let should = if switched { "must" } else { "must not" };
                         return Err(format!(
                             "rule {rule}: site {:#010X} {should} say what it writes",
@@ -588,6 +602,46 @@ fn check(profile: &GameProfile) -> Result<(), String> {
             }
             _ => {}
         }
+    }
+    if let Some(own) = &profile.own_randomizer {
+        for site in &own.sites {
+            let fits = site.write.as_ref().is_some_and(|w| w.0.len() == site.expect.0.len());
+            if !ROM.contains(&site.at) || !fits {
+                return Err(format!(
+                    "own_randomizer: site {:#010X} must be in ROM and write as many bytes as it expects",
+                    site.at
+                ));
+            }
+        }
+        for kept in &own.keep {
+            let known = profile
+                .options
+                .get(&kept.option)
+                .is_some_and(|def| def.values.contains_key(&kept.value));
+            if !known {
+                return Err(format!(
+                    "own_randomizer: no option {:?} with value {:?} to keep",
+                    kept.option, kept.value
+                ));
+            }
+        }
+    }
+    for listed in &profile.rule_options {
+        let def = profile
+            .options
+            .get(&listed.option)
+            .ok_or_else(|| format!("rule option for {:?}: no option {:?}", listed.rule, listed.option))?;
+        if !def.values.contains_key(&listed.value) {
+            return Err(format!(
+                "rule option for {:?}: option {:?} has no value {:?}",
+                listed.rule, listed.option, listed.value
+            ));
+        }
+    }
+    if let Some(plain) = layout.plain
+        && (layout.encrypted || layout.box_format != BoxFormat::Full || plain.species >= layout.box_slot_size)
+    {
+        return Err("layout plain: Pokémon must be unencrypted, in full PC slots, with the species inside one".into());
     }
     for (from, to) in &profile.area_merges {
         if !profile.areas.contains_key(from) || !profile.areas.contains_key(to) {

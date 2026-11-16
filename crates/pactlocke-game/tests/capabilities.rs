@@ -92,6 +92,8 @@ fn a_rule_the_game_has_its_own_option_for_is_a_native_option() {
             menu: "OPTION > BATTLE STYLE".into(),
             value: "set".into(),
             watched: false,
+            with: Vec::new(),
+            pactlocke_too: false,
         })
     );
 }
@@ -124,6 +126,8 @@ watched = true",
             menu: "OPTION > BATTLE STYLE".into(),
             value: "set".into(),
             watched: true,
+            with: Vec::new(),
+            pactlocke_too: false,
         }]
     );
 }

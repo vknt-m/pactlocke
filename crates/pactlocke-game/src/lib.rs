@@ -14,7 +14,7 @@ mod source;
 mod store;
 pub mod text;
 
-pub use capability::{Capability, CapabilityReport, NativeOption, Rule};
+pub use capability::{Capability, CapabilityReport, NativeOption, Rule, RuleOptionDef};
 pub use caps::{LevelCap, LevelCapDef, MAX_LEVEL, level_cap_sites};
 pub use fake::FakeGame;
 pub use fake_core::{FakeCore, SAVE_KEYS};

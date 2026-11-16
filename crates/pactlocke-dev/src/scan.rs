@@ -170,7 +170,12 @@ pub fn scan(rom: &[u8], base: &GameProfile) -> Findings {
             base.symbols.species_names,
             find_species_names(rom, base),
         ),
-        TableFinding::of("type_names", base.symbols.type_names, find_type_names(rom, base)),
+        // A base profile without a type names table gives none to compare against.
+        TableFinding::of(
+            "type_names",
+            base.symbols.type_names.unwrap_or_default(),
+            find_type_names(rom, base),
+        ),
         TableFinding::of("items", base.symbols.items, find_items(rom, base)),
         TableFinding::of(
             "trainers",

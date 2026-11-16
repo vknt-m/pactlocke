@@ -7,7 +7,8 @@ use crate::SourceKind;
 use crate::profile::{GameProfile, HexBytes, Method, ROM_BASE};
 
 /// The Ruleset rules whose enforcement depends on the game.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Rule {
     FirstEncounter,
     DupesClause,
@@ -75,6 +76,35 @@ pub struct NativeOption {
     pub value: String,
     /// Whether a change mid-Run is set back, or the option only set at each boot.
     pub watched: bool,
+    /// Other rules that must be on too for the option to be used (Heart and
+    /// Soul's Nuzlocke mode needs first Encounter and faint = Dead).
+    pub with: Vec<Rule>,
+    /// Whether Pactlocke still enforces the rule its own way: the option
+    /// goes with it rather than replacing it.
+    pub pactlocke_too: bool,
+}
+
+impl NativeOption {
+    /// Whether a Ruleset uses this option: its rule and every one it goes with are on.
+    pub fn in_use(&self, has: impl Fn(Rule) -> bool) -> bool {
+        has(self.rule) && self.with.iter().all(|&rule| has(rule))
+    }
+}
+
+/// An option of the game's that Pactlocke sets for a rule, as a Game Profile
+/// lists it beside the rule methods.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuleOptionDef {
+    pub rule: Rule,
+    pub option: String,
+    pub value: String,
+    /// Other rules that must be on too.
+    #[serde(default)]
+    pub with: Vec<Rule>,
+    /// Whether Pactlocke still enforces the rule its own way.
+    #[serde(default)]
+    pub pactlocke_too: bool,
 }
 
 impl GameProfile {
@@ -105,6 +135,21 @@ impl GameProfile {
                 menu: def.menu.clone(),
                 value: value.clone(),
                 watched: def.watched,
+                with: Vec::new(),
+                pactlocke_too: false,
+            });
+        }
+        for listed in &self.rule_options {
+            let def = &self.options[&listed.option];
+            found.push(NativeOption {
+                rule: listed.rule,
+                option: listed.option.clone(),
+                name: def.name.clone(),
+                menu: def.menu.clone(),
+                value: listed.value.clone(),
+                watched: def.watched,
+                with: listed.with.clone(),
+                pactlocke_too: listed.pactlocke_too,
             });
         }
         found
@@ -126,6 +171,10 @@ pub enum Capability {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityReport {
     rules: BTreeMap<Rule, Capability>,
+    /// The game's options Pactlocke sets for a rule beside its method.
+    rule_options: Vec<NativeOption>,
+    /// Whether the game has its own randomizer, whose seed Shared Seed can share.
+    own_randomizer: bool,
 }
 
 impl CapabilityReport {
@@ -156,7 +205,28 @@ impl CapabilityReport {
                 (rule, capability)
             })
             .collect();
-        Self { rules }
+        let rule_options = profile
+            .native_options()
+            .into_iter()
+            .filter(|native| native.pactlocke_too || !native.with.is_empty())
+            .collect();
+        Self {
+            rules,
+            rule_options,
+            // Shared Seed needs the Romhack's own randomizer, its code as the profile expects.
+            own_randomizer: profile.own_randomizer.as_ref().is_some_and(|own| {
+                matches!(
+                    method_capability(
+                        profile,
+                        Some(&Method::Patch {
+                            sites: own.sites.clone()
+                        }),
+                        rom
+                    ),
+                    Capability::Enforceable
+                )
+            }),
+        }
     }
 
     /// Every rule enforceable, as on a game that can do them all (the fake game in tests).
@@ -166,7 +236,36 @@ impl CapabilityReport {
                 .into_iter()
                 .map(|rule| (rule, Capability::Enforceable))
                 .collect(),
+            rule_options: Vec::new(),
+            own_randomizer: false,
         }
+    }
+
+    /// The same report for a game with its own randomizer.
+    pub fn with_own_randomizer(mut self) -> Self {
+        self.own_randomizer = true;
+        self
+    }
+
+    /// Whether the game has its own randomizer, whose seed Shared Seed can share.
+    pub fn own_randomizer(&self) -> bool {
+        self.own_randomizer
+    }
+
+    /// The same report with an option the game sets for a rule beside its method.
+    pub fn with_rule_option(mut self, native: NativeOption) -> Self {
+        self.rule_options.push(native);
+        self
+    }
+
+    /// Every native option on this ROM: the rules the game does, and the
+    /// options Pactlocke sets beside its own methods.
+    pub fn native_options(&self) -> impl Iterator<Item = &NativeOption> {
+        let natives = self.rules.values().filter_map(|capability| match capability {
+            Capability::NativeOption(native) => Some(native),
+            _ => None,
+        });
+        natives.chain(&self.rule_options)
     }
 
     /// The same report with one rule's capability changed.
@@ -276,7 +375,9 @@ fn method_capability(profile: &GameProfile, method: Option<&Method>, rom: &[u8])
                 }
             }
         }
-        Some(Method::ZeroTableField | Method::OptionBit { .. } | Method::Always) => Capability::Enforceable,
+        Some(Method::ZeroTableField | Method::OptionBit { .. } | Method::SetFlag { .. } | Method::Always) => {
+            Capability::Enforceable
+        }
     }
 }
 

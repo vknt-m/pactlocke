@@ -36,6 +36,10 @@ pub struct GameProfile {
     pub options: BTreeMap<String, OptionDef>,
     #[serde(default)]
     pub rules: RuleMethods,
+    /// The game's options Pactlocke sets for a rule beside its method:
+    /// some only with other rules on, some while Pactlocke enforces the rule too.
+    #[serde(default)]
+    pub rule_options: Vec<crate::RuleOptionDef>,
     /// The game's region-map sections, by id, with the game's own names.
     #[serde(default, deserialize_with = "hex_keys")]
     pub areas: BTreeMap<u16, String>,
@@ -50,12 +54,74 @@ pub struct GameProfile {
     /// The stages a level cap rises through, in order.
     #[serde(default)]
     pub level_caps: Vec<crate::LevelCapDef>,
+    /// The game's type names by type number, for a game that keeps none as
+    /// text (Heart and Soul shows only icons).
+    #[serde(default)]
+    pub type_name_list: Vec<String>,
     /// The battles that can be Sync Gates, and where their hold scripts go.
     #[serde(default)]
     pub sync_gates: Option<SyncGates>,
     /// Partner Avatars and Followers: on the original games only.
     #[serde(default)]
     pub avatars: Option<Avatars>,
+    /// The Romhack's own randomizer, which Shared Seed gives every Player's game
+    /// the same seed for.
+    #[serde(default)]
+    pub own_randomizer: Option<OwnRandomizer>,
+}
+
+/// How a Romhack's own randomizer is seeded, and what makes its draws depend on
+/// the seed alone.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnRandomizer {
+    /// The seed is the trainer ID (Heart and Soul): every Player gets the shared one.
+    #[serde(default)]
+    pub seed_is_trainer_id: bool,
+    /// A script variable holding the seed (R.O.W.E.'s 0x405B, 1 to 9998).
+    #[serde(default)]
+    pub seed_var: Option<SeedVar>,
+    /// A byte of the trainer ID the randomizer also reads (R.O.W.E.'s second).
+    #[serde(default)]
+    pub trainer_id_byte: Option<u8>,
+    /// Code patched while the seed is shared, so draws don't take the live RNG.
+    #[serde(default)]
+    pub sites: Vec<PatchSite>,
+    /// Options kept at a setting while the seed is shared: modes that draw from
+    /// the live RNG, which no seed makes the same.
+    #[serde(default)]
+    pub keep: Vec<OptionSetting>,
+    /// The RNG pinned from a trainer battle's trigger until the enemy party
+    /// changes, for a randomizer that draws teams from it (R.O.W.E.).
+    #[serde(default)]
+    pub rng_pin: Option<RngPin>,
+}
+
+/// A script variable, and where the game keeps its variables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeedVar {
+    pub var: u16,
+    /// In save block 1: variable 0x4000's place, two bytes a variable.
+    pub vars: u32,
+}
+
+/// One of the game's options at one of its settings.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OptionSetting {
+    pub option: String,
+    pub value: String,
+}
+
+/// Where the RNG is and what says a trainer battle is coming.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RngPin {
+    /// `gRngValue`, the game's 32-bit RNG state.
+    pub rng: u32,
+    /// `gTrainerBattleOpponent_A`: the trainer, set once a battle is triggered.
+    pub opponent: u32,
 }
 
 /// What drawing Partner Avatars and Followers needs: where a game keeps the
@@ -203,6 +269,10 @@ pub struct Symbols {
     pub save_block_1: Place,
     /// Save block 2 (trainer ID, play time, options), placed as the PC is.
     pub save_block_2: Place,
+    /// pokeemerald-expansion's save block 3, where Heart and Soul keeps its
+    /// challenge settings.
+    #[serde(default)]
+    pub save_block_3: Option<Place>,
     pub region_map_section: u32,
     pub main_callback2: u32,
     pub overworld_callback: u32,
@@ -222,8 +292,10 @@ pub struct Symbols {
     pub items: u32,
     /// The trainer table, one entry per trainer id.
     pub trainers: u32,
-    /// The type names table, one fixed-length name per type.
-    pub type_names: u32,
+    /// The type names table, one fixed-length name per type; or none, for a
+    /// game that keeps none as text, which gives `type_name_list` instead.
+    #[serde(default)]
+    pub type_names: Option<u32>,
     /// Where the game expands the message it is showing (`gStringVar4`).
     pub message_buffer: u32,
     /// The Bag's Poké Balls pocket, for a game that keeps the Bag in RAM
@@ -274,6 +346,15 @@ pub struct Layout {
     pub box_format: BoxFormat,
     /// Whether the four substructures are shuffled and XOR-encrypted.
     pub encrypted: bool,
+    /// The bits of the species field that are the species (pokeemerald-expansion
+    /// packs the tera type beside it); all of them by default.
+    #[serde(default = "every_bit")]
+    pub species_mask: u16,
+    /// A Pokémon in a plain form of the game's own, with no substructures or
+    /// checksum (R.O.W.E.): where its fields are. A slot holds one when its
+    /// species isn't 0.
+    #[serde(default)]
+    pub plain: Option<PlainPokemon>,
     pub ot_id: u32,
     pub nickname: u32,
     pub nickname_length: u32,
@@ -292,8 +373,16 @@ pub struct Layout {
     /// Battle types nobody can catch in (catching demos, ghosts): no one's Encounter.
     pub battle_type_uncatchable: u32,
     pub perish_song_status3: u32,
+    /// How far apart each battler's status word is from `battler_statuses3`:
+    /// `gStatuses3`'s 4, or the battler's size where it keeps its own
+    /// volatiles (pokeemerald-expansion).
+    #[serde(default = "status_word")]
+    pub battler_status_stride: u32,
     pub disable_struct_size: u32,
     pub perish_timer: u32,
+    /// The bits of the byte at `perish_timer` that are the Perish count.
+    #[serde(default = "every_bit_of_a_byte")]
+    pub perish_timer_mask: u8,
     /// The current script instruction's offset in the script context.
     pub script_context_pointer: u32,
     /// The script context's call depth (a byte) and its stack of return addresses.
@@ -304,6 +393,10 @@ pub struct Layout {
     /// Species in the species tables, counting species 0.
     pub species_count: u16,
     pub evolutions_per_species: u32,
+    /// Where each species' info points at its own list of evolutions, ended
+    /// by method 0xFFFF (pokeemerald-expansion), instead of `evolution_table`.
+    #[serde(default)]
+    pub evolutions_pointer: Option<u32>,
     /// One evolution entry: its method (0 for none) first, then the target species at `evolution_target`.
     pub evolution_size: u32,
     pub evolution_target: u32,
@@ -342,6 +435,28 @@ pub struct Layout {
     pub dead_box: u8,
 }
 
+/// Where a plain Pokémon's fields are, from its start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlainPokemon {
+    /// A halfword holding the species in `species_mask`'s bits.
+    pub species: u32,
+    /// A byte: the region-map section it was met in.
+    pub met_location: u32,
+}
+
+fn every_bit() -> u16 {
+    u16::MAX
+}
+
+fn every_bit_of_a_byte() -> u8 {
+    u8::MAX
+}
+
+fn status_word() -> u32 {
+    4
+}
+
 /// One of the game's own options, such as the battle style.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -349,7 +464,7 @@ pub struct OptionDef {
     /// Its in-game name and where to find it, for Run setup.
     pub name: String,
     pub menu: String,
-    /// 1 or 2: which save block holds it.
+    /// 1, 2 or 3: which save block holds it.
     pub save_block: u8,
     pub offset: u32,
     pub mask: u8,
@@ -366,7 +481,8 @@ pub struct OptionDef {
 pub struct RuleMethods {
     /// Refuses ball throws in a closed Area.
     pub catch_block: Option<Method>,
-    /// The level-100 checks; the first byte of each site is the cap, less its `below_cap`.
+    /// The level-100 checks, or a function stubbed (by its `write`) to
+    /// return the cap; the first byte of each site is the cap, less its `below_cap`.
     pub level_cap: Option<Method>,
     pub no_items_trainer: Option<Method>,
     pub no_items_wild: Option<Method>,
@@ -384,6 +500,9 @@ pub enum Method {
     ZeroTableField,
     /// One of the game's options forced to a value by Pactlocke.
     OptionBit { option: String, value: String },
+    /// One of the game's own event flags, set while the rule applies
+    /// (Heart and Soul's `FLAG_NO_WILD_CATCHING`).
+    SetFlag { flag: u16 },
     /// Buttons filtered while a battle script command waits for an answer.
     KeyFilter {
         battle_script_pointer: u32,

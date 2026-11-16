@@ -45,6 +45,56 @@ pub struct Hack {
     /// A gate whose battle takes its trainer from a script variable, run from
     /// the start of its own script; `None` where every gate names its trainer.
     pub variable_gate: Option<VariableGate>,
+    /// The forms its script commands take.
+    pub scripts: Scripts,
+    /// The Poké Ball's item number.
+    pub poke_ball: u16,
+    /// Presses from power-on through what the hack asks before its intro
+    /// (its own option menus), in `Driver::play`'s words; then A is mashed
+    /// through the rest.
+    pub intro: &'static str,
+    /// The hack's own randomizer, for Shared Seed: how a test turns it on and
+    /// which battle shows its draws. `None` for a hack without one.
+    pub own_randomizer: Option<OwnRandomizer>,
+}
+
+/// How a test turns a hack's own randomizer on, and where its draws show.
+pub struct OwnRandomizer {
+    pub on: RandomizerSwitch,
+    pub shows_in: SeedShows,
+}
+
+/// The setting that turns a hack's randomizer on.
+#[allow(dead_code)]
+pub enum RandomizerSwitch {
+    /// Bits of a byte in save block 3 (Heart and Soul's challenge settings).
+    SaveBlock3 { offset: u32, mask: u8 },
+    /// An event flag (R.O.W.E.'s randomized mode).
+    Flag(u16),
+}
+
+/// The battle whose Pokémon the randomizer draws.
+#[allow(dead_code)]
+pub enum SeedShows {
+    /// A scripted wild battle (a Static).
+    Static,
+    /// The single trainer's team.
+    Trainer,
+}
+
+/// The forms a hack's script commands take.
+#[allow(dead_code)]
+pub enum Scripts {
+    /// The original games': `givemon`, a 5-byte `setwildbattle` and a
+    /// `trainerbattle` whose length goes with its type.
+    Original,
+    /// pokeemerald-expansion 1.15's (Heart and Soul): `callnative
+    /// ScrCmd_createmon` at this address, a 10-byte `setwildbattle` and a
+    /// fixed 41-byte `trainerbattle`.
+    Expansion { createmon: u32 },
+    /// R.O.W.E.'s: the original `givemon` with ability 3, a 10-byte
+    /// `setwildbattle`, and the original `trainerbattle`.
+    Rowe,
 }
 
 /// Where the game keeps track of its sprites (pret's sprite.c, which every
@@ -119,7 +169,6 @@ macro_rules! rom_or_skip {
 const TEXT_SPEED: u32 = 0x14; // in save block 2, bits 0-2
 const PIKACHU: u16 = 25;
 const RATTATA: u16 = 19;
-const POKE_BALL: u16 = 4;
 /// Script commands.
 const GIVEMON: u8 = 0x79;
 const ADDITEM: u8 = 0x44;
@@ -129,6 +178,7 @@ const RELEASEALL: u8 = 0x6B;
 const END: u8 = 0x02;
 const GOTO: u8 = 0x05;
 const TRAINERBATTLE: u8 = 0x5C;
+const CALLNATIVE: u8 = 0x23;
 
 type Running = RunningGame<ProfileGame<MgbaCore>>;
 
@@ -321,6 +371,9 @@ impl Driver {
                     (0..4).for_each(|_| self.frame(keys(key)));
                     (0..wait.parse::<u32>().unwrap()).for_each(|_| self.frame(Keys::NONE));
                 }
+                // `m` mashes: the key held 3 frames of every 16.
+                ["m", key, n] => (0..n.parse::<u32>().unwrap())
+                    .for_each(|i| self.frame(if i % 16 < 3 { keys(key) } else { Keys::NONE })),
                 _ => panic!("bad script line {line:?}"),
             }
         }
@@ -387,6 +440,9 @@ impl Driver {
         let layout = self.profile.layout.clone();
         self.write(context + layout.script_context_stack_depth, &[0]);
         self.write(context + 1, &[1]); // mode: bytecode
+        // pokeemerald-expansion's waitAfterCallNative and breakOnTrainerBattle
+        // (padding in the original games).
+        self.write(context + 3, &[0]);
         self.write(context + layout.script_context_pointer, &at.to_le_bytes());
         self.write(self.profile.symbols.script_context_status, &[0]); // running
         self.write(GAME.field_lock, &[1]);
@@ -418,6 +474,8 @@ fn keys(name: &str) -> Keys {
         "L" => Keys::LEFT,
         "R" => Keys::RIGHT,
         "U" => Keys::UP,
+        "RS" => Keys::R,
+        "S" => Keys::START,
         other => panic!("no key {other}"),
     }
 }
@@ -439,6 +497,7 @@ fn dump_screen(game: &Running, name: &str) {
 /// From power-on through the hack's intro to the Player's first free moment
 /// on the overworld: A, with START now and then to leave a naming screen.
 fn to_the_overworld(d: &mut Driver) {
+    d.play(GAME.intro);
     for frame in 0..80_000u32 {
         if frame > 3000 && frame.is_multiple_of(60) && d.idle() {
             d.play("w 120");
@@ -463,23 +522,59 @@ fn to_the_overworld(d: &mut Driver) {
 
 /// `givemon` a level-`level` Pikachu and `additem` five Poké Balls, as the game's own scripts would.
 fn a_pikachu_and_poke_balls(d: &mut Driver, level: u8) {
-    let mut script = vec![GIVEMON];
-    script.extend(PIKACHU.to_le_bytes());
-    script.extend([level, 0, 0]);
-    script.extend([0; 9]);
+    let mut script = give_pokemon(PIKACHU, level);
     script.push(ADDITEM);
-    script.extend(POKE_BALL.to_le_bytes());
+    script.extend(GAME.poke_ball.to_le_bytes());
     script.extend(5u16.to_le_bytes());
     script.extend([RELEASEALL, END]);
     d.run_script(&script);
     d.until_idle(Keys::A, 3000);
 }
 
+/// The hack's own instruction that gives a level-`level` `species`.
+fn give_pokemon(species: u16, level: u8) -> Vec<u8> {
+    let mut script = Vec::new();
+    match GAME.scripts {
+        Scripts::Original | Scripts::Rowe => {
+            script.push(GIVEMON);
+            script.extend(species.to_le_bytes());
+            script.extend([level, 0, 0]);
+            // The ability argument: R.O.W.E.'s own scripts give 3.
+            let ability: u32 = if matches!(GAME.scripts, Scripts::Rowe) { 3 } else { 0 };
+            script.extend(ability.to_le_bytes());
+            script.extend([0; 5]);
+        }
+        Scripts::Expansion { createmon } => {
+            script.push(CALLNATIVE);
+            script.extend(createmon.to_le_bytes());
+            // The Player's side, the first free slot, the species and level,
+            // then the macro's defaults for nature and gender.
+            script.extend([0, 6]);
+            script.extend(species.to_le_bytes());
+            script.extend(u16::from(level).to_le_bytes());
+            script.extend(0x14u32.to_le_bytes());
+            script.extend([0x1A, 0, 0x02, 0]);
+        }
+    }
+    script
+}
+
+/// The hack's own instruction that sets up a wild battle with a level-`level` `species`.
+fn set_wild_battle(species: u16, level: u8) -> Vec<u8> {
+    let mut script = vec![SETWILDBATTLE];
+    script.extend(species.to_le_bytes());
+    script.extend([level, 0, 0]);
+    // A second Pokémon, for a double: none.
+    if !matches!(GAME.scripts, Scripts::Original) {
+        script.extend([0; 5]);
+    }
+    script
+}
+
 /// A scripted wild battle with a level-`level` Rattata, up to the action menu.
 fn scripted_wild_battle(d: &mut Driver, level: u8) {
-    let mut script = vec![SETWILDBATTLE];
-    script.extend(RATTATA.to_le_bytes());
-    script.extend([level, 0, 0, DOWILDBATTLE, RELEASEALL, END]);
+    let mut script = set_wild_battle(RATTATA, level);
+    script.extend([DOWILDBATTLE, RELEASEALL, END]);
     d.run_script(&script);
     d.until_action_menu(Keys::A, 6000);
 }
@@ -496,14 +591,29 @@ fn win_the_battle(d: &mut Driver) {
     d.until_idle(Keys::B, 6000);
 }
 
-fn catch_site(d: &Driver) -> (u32, Vec<u8>, Vec<u8>) {
-    match &d.profile.rules.catch_block {
-        Some(Method::Patch { sites }) => (
-            sites[0].at,
-            sites[0].expect.0.clone(),
-            sites[0].write.clone().expect("a fixed patch").0,
-        ),
-        other => panic!("the catch block is a patch: {other:?}"),
+/// Whether ball throws are refused now: the catch block's first patch site
+/// patched, or the hack's own no-catching flag set.
+fn catches_refused(d: &mut Driver) -> bool {
+    match d.profile.rules.catch_block.clone() {
+        Some(Method::Patch { sites }) => {
+            let site = &sites[0];
+            let now = d.read(site.at, site.expect.0.len());
+            if now == site.expect.0 {
+                false
+            } else {
+                assert_eq!(Some(now), site.write.clone().map(|w| w.0), "patched");
+                true
+            }
+        }
+        Some(Method::SetFlag { flag }) => {
+            let block = match d.profile.symbols.save_block_1 {
+                Place::Pointer(pointer) => d.u32(pointer),
+                Place::At(addr) => addr,
+            };
+            let byte = block + d.profile.layout.event_flags + u32::from(flag / 8);
+            d.u8(byte) & (1 << (flag % 8)) != 0
+        }
+        other => panic!("the catch block is a patch or a flag: {other:?}"),
     }
 }
 
@@ -554,12 +664,11 @@ fn a_second_battle_in_an_area_has_its_ball_throws_refused_and_the_first_counted(
     );
     win_the_battle(&mut d);
 
-    let (site, clean, patched) = catch_site(&d);
-    assert_eq!(d.read(site, clean.len()), clean);
+    assert!(!catches_refused(&mut d));
     scripted_wild_battle(&mut d, 2);
-    assert_eq!(d.read(site, patched.len()), patched, "ball throws refused in {area}");
+    assert!(catches_refused(&mut d), "ball throws refused in {area}");
     win_the_battle(&mut d);
-    assert_eq!(d.read(site, clean.len()), clean, "lifted after the battle");
+    assert!(!catches_refused(&mut d), "lifted after the battle");
     d.print_feed();
     d.assert_shadow_matched(10);
 }
@@ -572,22 +681,23 @@ fn exp_stops_at_the_level_cap_in_the_hacks_own_battles() {
         Ruleset {
             level_caps: Some(vec![LevelCap {
                 name: "the first leader".into(),
-                level: 5,
+                level: 10,
             }]),
             ..Ruleset::default()
         },
     );
     to_the_overworld(&mut d);
-    a_pikachu_and_poke_balls(&mut d, 5);
-    // Whatever leads (a starter from the intro, or the Pikachu) is at the cap
-    // or under it, and a level-40 foe's EXP would take it well past.
+    a_pikachu_and_poke_balls(&mut d, 10);
+    // Whatever leads (a Pokémon from the intro, or the Pikachu) is at the cap
+    // or under it (R.O.W.E.'s intro gives one at 10), and a level-40 foe's
+    // EXP would take it well past. A lead at the cap learns no move to stop on.
     let lead = d.party_level(0);
-    assert!(lead <= 5, "the lead is level {lead}");
+    assert!(lead <= 10, "the lead is level {lead}");
     scripted_wild_battle(&mut d, 40);
     win_the_battle(&mut d);
     let after = d.party_level(0);
     eprintln!("the lead went from level {lead} to {after}");
-    assert!(after <= 5, "no level past the cap: {after}");
+    assert!(after <= 10, "no level past the cap: {after}");
     d.print_feed();
     d.assert_shadow_matched(10);
 }
@@ -660,12 +770,31 @@ fn shows_text(d: &mut Driver, encoded: &[u8]) -> bool {
 
 /// A script starting a battle with `trainer` (no intro), its line "Go!", then `releaseall`, `end`.
 fn trainer_battle(d: &Driver, trainer: u16) -> Vec<u8> {
-    let text_at = d.next_script + 12;
-    let mut script = vec![TRAINERBATTLE, 3];
-    script.extend(trainer.to_le_bytes());
-    script.extend(0u16.to_le_bytes());
-    script.extend(text_at.to_le_bytes());
+    let mut script = vec![TRAINERBATTLE];
+    let text_at = match GAME.scripts {
+        Scripts::Original | Scripts::Rowe => {
+            let text_at = d.next_script + 12;
+            script.push(3);
+            script.extend(trainer.to_le_bytes());
+            script.extend(0u16.to_le_bytes());
+            script.extend(text_at.to_le_bytes());
+            text_at
+        }
+        Scripts::Expansion { .. } => {
+            // Type 3 (no intro) with its music, then trainer A's local id,
+            // number, intro, defeat line and return address; trainer B's;
+            // and the victory and can't-battle lines and rival flags.
+            let text_at = d.next_script + 43;
+            script.extend([0x34, 0]);
+            script.extend(trainer.to_le_bytes());
+            script.extend(0u32.to_le_bytes());
+            script.extend(text_at.to_le_bytes());
+            script.extend([0; 4 + 1 + 2 + 4 + 4 + 4 + 4 + 4 + 1]);
+            text_at
+        }
+    };
     script.extend([RELEASEALL, END]);
+    assert_eq!(d.next_script + script.len() as u32, text_at);
     script.extend([0xC1, 0xE3, 0xAB, 0xFF]); // "Go!"
     script
 }
@@ -691,6 +820,14 @@ fn in_a_trainer_battle_the_bag_is_refused_and_the_battle_style_is_set() {
     d.run_script(&script);
     d.until_action_menu(Keys::A, 6000);
 
+    // A game that bans items through its own option does so from its own
+    // menus: Pactlocke's part is the option, set in the game.
+    if let Some(Method::Native { option, value }) = d.profile.rules.no_items_trainer.clone() {
+        assert_eq!(d.game.game_mut().option(&option), Some(value), "{option} in battle");
+        d.print_feed();
+        d.assert_shadow_matched(10);
+        return;
+    }
     let battle_screen = d.main_callback();
     assert!(!shows_text(&mut d, &ITEMS_CANT));
     d.play("p R 10\np A 40");
@@ -751,7 +888,13 @@ fn a_held_sync_gate_at_the_hacks_first_leader_lets_the_real_battle_run_once_open
     d.until_action_menu(Keys::A, 6000);
     let battle = d.game.game_mut().battle().expect("the leader's battle");
     assert_eq!(battle.kind, pactlocke_game::BattleKind::Trainer);
-    let trainer = u16::from_le_bytes([clean[2], clean[3]]);
+    // The trainer follows the type in the original form, the flags and local id in expansion's.
+    let at = if matches!(GAME.scripts, Scripts::Expansion { .. }) {
+        3
+    } else {
+        2
+    };
+    let trainer = u16::from_le_bytes([clean[at], clean[at + 1]]);
     eprintln!("{first} (trainer {trainer}) battle on");
     dump_screen(&d.game, "gate-battle");
     d.print_feed();
@@ -811,6 +954,79 @@ fn a_held_gate_that_picks_its_trainer_at_run_time_lets_that_trainers_battle_run_
     d.assert_shadow_matched(10);
 }
 
+/// Turns the hack's own randomizer on, as the Player would in its menus.
+fn randomizer_on(d: &mut Driver, on: &RandomizerSwitch) {
+    let block = |d: &mut Driver, place: Option<Place>| match place.expect("the save block is placed") {
+        Place::Pointer(pointer) => d.u32(pointer),
+        Place::At(addr) => addr,
+    };
+    let (block_3, block_1, flags) = (
+        d.profile.symbols.save_block_3,
+        d.profile.symbols.save_block_1,
+        d.profile.layout.event_flags,
+    );
+    match *on {
+        RandomizerSwitch::SaveBlock3 { offset, mask } => {
+            let at = block(d, block_3) + offset;
+            let now = d.u8(at);
+            d.write(at, &[now | mask]);
+        }
+        RandomizerSwitch::Flag(flag) => {
+            let at = block(d, Some(block_1)) + flags + u32::from(flag / 8);
+            let now = d.u8(at);
+            d.write(at, &[now | 1 << (flag % 8)]);
+        }
+    }
+}
+
+/// A Player's game with Shared Seed `seed`, the hack's randomizer on, and
+/// `wait` frames idled before the battle that shows its draws: the species
+/// of that battle's opponents.
+fn drawn_with(rom: &[u8], seed: u32, wait: u32) -> Vec<u16> {
+    let own = GAME.own_randomizer.as_ref().expect("the hack has its own randomizer");
+    let mut d = run_with(
+        rom.to_vec(),
+        Ruleset {
+            romhack_seed: Some(seed),
+            ..Ruleset::default()
+        },
+    );
+    to_the_overworld(&mut d);
+    randomizer_on(&mut d, &own.on);
+    a_pikachu_and_poke_balls(&mut d, 50);
+    d.play(&format!("w {wait}"));
+    match own.shows_in {
+        SeedShows::Static => scripted_wild_battle(&mut d, 5),
+        SeedShows::Trainer => {
+            let script = trainer_battle(&d, GAME.single_trainer);
+            d.run_script(&script);
+            d.until_action_menu(Keys::A, 6000);
+        }
+    }
+    let drawn = d.game.game_mut().opponent_party().iter().map(|p| p.species).collect();
+    dump_screen(&d.game, &format!("seed-{seed:08x}-{wait}"));
+    d.print_feed();
+    d.assert_shadow_matched(10);
+    drawn
+}
+
+#[test]
+fn shared_seed_draws_the_same_pokemon_in_every_players_game_whenever_they_meet_them() {
+    if GAME.own_randomizer.is_none() {
+        eprintln!("skipped: this hack has no randomizer of its own");
+        return;
+    }
+    let rom = rom_or_skip!();
+    let early = drawn_with(&rom, 0x0BAD_5EED, 10);
+    let late = drawn_with(&rom, 0x0BAD_5EED, 377);
+    eprintln!("drawn: {early:?} and {late:?}");
+    assert!(!early.is_empty());
+    assert_eq!(early, late, "the same seed draws the same, at any moment");
+    let other = drawn_with(&rom, 0x0123_4567, 10);
+    eprintln!("another seed: {other:?}");
+    assert_ne!(early, other, "another seed draws otherwise");
+}
+
 /// The sprite room the Game Profile gives Partner Avatars, checked against
 /// the game's own bookkeeping now: what the game fills is printed, and any
 /// overlap is returned.
@@ -853,6 +1069,10 @@ fn room_taken(d: &mut Driver) -> Vec<String> {
 #[test]
 fn the_room_partner_avatars_take_is_free_on_the_hacks_overworld() {
     let rom = rom_or_skip!();
+    if profiled(&rom).avatars.is_none() {
+        eprintln!("skipped: this hack's Game Profile has no Partner Avatars yet");
+        return;
+    }
     let mut d = run_with(rom, Ruleset::default());
     to_the_overworld(&mut d);
     let mut taken = room_taken(&mut d);
@@ -877,6 +1097,10 @@ fn ram_hash(d: &mut Driver) -> String {
 #[test]
 fn a_partner_avatar_is_drawn_from_their_shadow_game_and_nothing_else_changes() {
     let rom = rom_or_skip!();
+    if profiled(&rom).avatars.is_none() {
+        eprintln!("skipped: this hack's Game Profile has no Partner Avatars yet");
+        return;
+    }
     // A draws partners; a control gets exactly A's presses and draws none; B walks off.
     let mut a = run_with(rom.clone(), Ruleset::default());
     let mut control = run_with(rom.clone(), Ruleset::default());

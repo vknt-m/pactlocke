@@ -584,6 +584,17 @@ impl FeedEntry {
                 name,
                 value,
                 again: false,
+                pactlocke_too: true,
+            } => (
+                FeedKind::Run,
+                format!("{rule}: Pactlocke sets the game's {name} option to {value} as well"),
+            ),
+            RunEvent::NativeOptionSet {
+                rule,
+                name,
+                value,
+                again: false,
+                pactlocke_too: false,
             } => (
                 FeedKind::Run,
                 format!("{rule} is the game's own {name} option, set to {value}"),
@@ -593,9 +604,18 @@ impl FeedEntry {
                 name,
                 value,
                 again: true,
+                ..
             } => (
                 FeedKind::Run,
                 format!("{rule}: the game's {name} was changed, so it is set back to {value}"),
+            ),
+            RunEvent::SeedShared => (
+                FeedKind::Run,
+                "Shared Seed: the game's own randomizer has the Run's seed".to_owned(),
+            ),
+            RunEvent::SeedShareFailed { reason } => (
+                FeedKind::Problem,
+                format!("Shared Seed: the game couldn't be given the Run's seed: {reason}"),
             ),
             RunEvent::NativeOptionFailed { rule, name, reason } => (
                 FeedKind::Problem,

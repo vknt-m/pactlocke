@@ -15,5 +15,9 @@ const GAME: romhack::Hack = romhack::Hack {
     single_trainer: 261,
     test_scripts: 0x09F0_1000,
     sprites: romhack::EMERALD_SPRITES,
+    scripts: romhack::Scripts::Original,
+    poke_ball: 4,
+    intro: "",
+    own_randomizer: None,
     variable_gate: None,
 };

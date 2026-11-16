@@ -108,7 +108,7 @@ pub fn native_options_in_use<'a>(
         let known = in_use
             .iter()
             .any(|n| n.rule == native.rule && n.option == native.option);
-        if ruleset.has(native.rule) && !known {
+        if native.in_use(|rule| ruleset.has(rule)) && !known {
             in_use.push(native.clone());
         }
     }
@@ -117,11 +117,7 @@ pub fn native_options_in_use<'a>(
 
 /// What setup shows every Player of the game's own options in use on this ROM.
 pub fn native_options(ruleset: &Ruleset, capabilities: &CapabilityReport) -> Vec<NativeOptionView> {
-    let natives = capabilities.iter().filter_map(|(_, capability)| match capability {
-        Capability::NativeOption(native) => Some(native),
-        _ => None,
-    });
-    native_options_in_use(ruleset, natives)
+    native_options_in_use(ruleset, capabilities.native_options())
         .iter()
         .map(|native| NativeOptionView::of(native, None))
         .collect()
@@ -130,6 +126,10 @@ pub fn native_options(ruleset: &Ruleset, capabilities: &CapabilityReport) -> Vec
 /// Turns off every rule that can't be chosen, the dependents of a rule
 /// turned off included.
 pub fn settle(ruleset: &mut Ruleset, capabilities: &CapabilityReport, players: usize) {
+    // Shared Seed through the game's own randomizer needs one.
+    if !capabilities.own_randomizer() {
+        ruleset.romhack_seed = None;
+    }
     // Twice: turning a rule off can make another unavailable.
     for _ in 0..2 {
         for rule in CHOOSABLE {
@@ -357,6 +357,7 @@ impl RunSetup {
         ruleset.sync_gates = self.sync_gates.clone();
         // A preset is about the rules; the randomizer stays as the Host set it.
         ruleset.randomizer = self.ruleset.randomizer.clone();
+        ruleset.romhack_seed = self.ruleset.romhack_seed;
         let wanted = ruleset.sync_gates.clone();
         self.edit(|r| *r = ruleset)?;
         self.gates_wanted = wanted;
@@ -524,6 +525,11 @@ impl RunSetup {
 
     pub fn ruleset(&self) -> &Ruleset {
         &self.ruleset
+    }
+
+    /// Whether the game has its own randomizer, whose seed the Host can share.
+    pub fn own_randomizer(&self) -> bool {
+        self.capabilities.own_randomizer()
     }
 
     /// Why a rule can't be chosen now, if it can't.

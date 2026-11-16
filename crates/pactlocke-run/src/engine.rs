@@ -6,6 +6,7 @@ mod links_party;
 mod native_options;
 mod nicknames_and_types;
 mod no_items_and_set_mode;
+mod shared_seed;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -703,7 +704,9 @@ impl RunEngine {
             self.keep_items_banned(game);
             self.keep_set_mode(game);
             self.keep_native_options(game);
+            self.keep_shared_seed(game);
         }
+        self.pin_the_rng(game);
 
         if game.at_safe_overworld_point() {
             self.watch_for_a_reset(game);

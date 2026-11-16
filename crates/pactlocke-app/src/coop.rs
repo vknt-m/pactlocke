@@ -464,6 +464,9 @@ impl HostCoop {
             &mut ruleset.randomizer,
             pactlocke_randomizer::clean_dump(&self.rom).is_some(),
         );
+        if self.setup_mut().own_randomizer() {
+            romromhack_seed_choice(ui, &mut ruleset.romhack_seed);
+        }
         self.maker.show(ui);
         if let Some(caps) = ruleset.level_caps.as_mut() {
             ui.indent("level caps", |ui| {
@@ -998,6 +1001,9 @@ impl JoinCoop {
         if let Some(choice) = &ruleset.randomizer {
             ui.label(randomizer_line(choice));
         }
+        if ruleset.romhack_seed.is_some() {
+            ui.label("Shared Seed: every Player's game randomizes the same way. Pick the same randomizer options in your game as the others.");
+        }
         self.maker.show(ui);
         ui.separator();
         if let Some(ready) = ready_section(ui, &view, &self.me()) {
@@ -1063,6 +1069,22 @@ fn randomizer_choice(ui: &mut egui::Ui, choice: &mut Option<RandomizerChoice>, c
         chosen.settings = recipe.settings_string();
         ui.weak(randomizer_line(chosen));
     });
+}
+
+/// Shared Seed through the game's own randomizer: a seed for every Player's
+/// game, picked now, or none.
+fn romromhack_seed_choice(ui: &mut egui::Ui, seed: &mut Option<u32>) {
+    let mut shared = seed.is_some();
+    ui.checkbox(&mut shared, "Shared Seed (the game's own randomizer)")
+        .on_hover_text(
+            "Every Player's game randomizes the same way. You each pick the same randomizer options in the game.",
+        );
+    if shared != seed.is_some() {
+        *seed = shared.then(|| {
+            let key = new_key();
+            u32::from_le_bytes([key[0], key[1], key[2], key[3]])
+        });
+    }
 }
 
 /// Every Player's Ready and what doesn't match; returns this Player's new

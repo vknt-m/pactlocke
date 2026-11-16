@@ -95,6 +95,8 @@ pub(crate) struct Rules {
     /// those it has said couldn't be.
     natives_said: BTreeSet<String>,
     native_failures_said: BTreeSet<String>,
+    seed_shared_said: bool,
+    seed_failure_said: bool,
     /// Must nickname: Pokémon waiting for the Player to name them, with their species names.
     nickname_wanted: BTreeMap<u32, String>,
     /// Sync Gates every Player is Ready at, and those this Player is Ready at.
@@ -148,6 +150,8 @@ impl Rules {
             set_mode_failed_said: false,
             natives_said: BTreeSet::new(),
             native_failures_said: BTreeSet::new(),
+            seed_shared_said: false,
+            seed_failure_said: false,
             nickname_wanted: BTreeMap::new(),
             open_gates: BTreeSet::new(),
             ready_gates: BTreeSet::new(),
@@ -342,6 +346,16 @@ impl Rules {
         self.native_failures_said.contains(name)
     }
 
+    /// Whether the feed has said the game's own randomizer has the Run's seed.
+    pub fn seed_shared_said(&self) -> bool {
+        self.seed_shared_said
+    }
+
+    /// Whether the feed has said the seed couldn't be given.
+    pub fn seed_failure_said(&self) -> bool {
+        self.seed_failure_said
+    }
+
     /// The level cap now, once one is set.
     pub fn level_cap(&self) -> Option<u8> {
         self.level_cap
@@ -431,6 +445,8 @@ impl Rules {
             RunEvent::NativeOptionFailed { name, .. } => {
                 self.native_failures_said.insert(name.clone());
             }
+            RunEvent::SeedShared => self.seed_shared_said = true,
+            RunEvent::SeedShareFailed { .. } => self.seed_failure_said = true,
             RunEvent::Released { pid, .. } => {
                 self.to_release.remove(pid);
                 self.nickname_wanted.remove(pid);

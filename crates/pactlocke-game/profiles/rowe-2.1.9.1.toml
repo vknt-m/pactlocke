@@ -1,0 +1,859 @@
+# Pokémon R.O.W.E. 2.1.9.1 Experimental by Rioluwott, built on a pre-1.0
+# pokeemerald-expansion and rewritten since; its full source isn't public.
+# Its RAM, tables and scripts were read from this ROM and its RAM:
+# - Pokémon are its own plain, unencrypted form: 0x4C bytes in the party and
+#   0x34 in the PC, the species in the low 12 bits at +0x1C, the egg bit at
+#   +0x27 (0x80) and the met location at +0x2A. Battlers are 0x60 bytes.
+# - Its 1883 species (forms among them) keep 0x40 bytes of info with the
+#   types at +0x0C in the original numbering, and 13-byte names.
+# - It makes its trainers' teams and levels as the Player goes, so each cap
+#   stage's default is its leader's strongest Pokémon measured in the game on
+#   Normal at that point; its own level cap (a badge table) isn't the Run's.
+# - Badges are given in the order they're won (its gyms can be shuffled), so
+#   cap stages and badge counts go by that order.
+# - Rare Candy can't be used at all, so the cap needs no Rare Candy path.
+# - Set mode is its own BATTLE STYLE option (Hard forces Set).
+
+schema = 1
+id = "rowe-2.1.9.1"
+name = "Pokémon R.O.W.E. 2.1.9.1"
+game_code = "BPEE"
+family = "RSE"
+sha1 = "81bd0f4bfa1c04ab2c6faab1bddd10e8a390ea77"
+status = "supported"
+
+[symbols]
+party = 0x02025128
+party_count = 0x02025125
+enemy_party = 0x020252F0              # gEnemyParty, right after the Player's
+pc_storage = { pointer = 0x03004B04 }
+save_block_1 = { pointer = 0x03004AFC }
+save_block_2 = { pointer = 0x03004B00 }
+region_map_section = 0x02037C08        # gMapHeader.regionMapSectionId
+main_callback2 = 0x03002B94            # gMain.callback2
+overworld_callback = 0x080C3EF0        # CB2_Overworld
+in_battle = { at = 0x03002FC9, mask = 0x02 }   # gMain.inBattle
+battle_type_flags = 0x02024B6C
+battle_mons = 0x02024C10
+battler_party_indexes = 0x02024BFA
+battler_statuses3 = 0x02024E64
+disable_structs = 0x02024E74
+script_context_status = 0x0203F6B4     # 0 running, 1 waiting, 2 idle
+script_context = 0x0203F6B8
+species_info = 0x08502C54
+species_names = 0x084180A4
+evolution_table = 0x085B6F60            # gEvolutionTable
+items = 0x08F76D78
+trainers = 0x08407220                   # gTrainers
+type_names = 0x08422A7C
+message_buffer = 0x02021ECC             # gStringVar4
+
+[layout]
+party_slot_size = 0x4C
+box_slot_size = 0x34
+encrypted = false
+species_mask = 0x0FFF                   # species:12, then the form
+plain = { species = 0x1C, met_location = 0x2A }
+ot_id = 0x04
+nickname = 0x08
+nickname_length = 12
+flags = 0x27
+egg_mask = 0x80
+has_species_mask = 0x00                 # a slot holds a Pokémon when its species isn't 0
+checksum = 0x00                         # none
+substructures = 0x00                    # none
+level = 0x3C
+hp = 0x3E
+max_hp = 0x40
+battle_mon_size = 0x60
+battle_mon_hp = 0x2A
+battle_type_trainer = 0x08
+# BATTLE_TYPE_FIRST_BATTLE and _WALLY_TUTORIAL, as in Emerald.
+battle_type_uncatchable = 0x210
+battle_type_double = 0x01
+perish_song_status3 = 0x20
+disable_struct_size = 0x28
+perish_timer = 0x22                     # perishSongTimer:4 beside its start value
+script_context_stack_depth = 0x00
+script_context_stack = 0x0C
+script_context_pointer = 0x08
+species_info_size = 0x40
+species_name_length = 13
+species_count = 1883
+evolutions_per_species = 10
+evolution_size = 8
+evolution_target = 4
+primary_type = 0x0C
+item_size = 0x38
+item_count = 941
+item_pocket = 0x22
+item_battle_usage = 0x28
+ball_pocket = 3
+pc_boxes = 14
+pc_box_slots = 30
+pc_boxes_offset = 4
+trainer_id = 0x0A                      # in save block 2
+play_time = 0x0E                       # in save block 2: hours, minutes, seconds, frames
+badge_flags = 0xE24                    # the first badge won, whichever gym gives it
+event_flags = 0x1754                   # in save block 1
+# Its trainers: party size at +0, flags at +0x28, the party at +0x2C, 0x28
+# bytes a member with no level (each stage gives its default).
+trainer_size = 0x40
+trainer_party_flags = 0x28
+trainer_party_size = 0x00
+trainer_party = 0x2C
+trainer_mon_level = 0x00
+trainer_mon_sizes = [0x28, 0x28, 0x28, 0x28]
+type_name_length = 11
+balls_pocket = 0x6D8                   # in save block 1
+balls_pocket_slots = 16
+dead_box = 14
+
+[options.battle_style]
+name = "BATTLE STYLE"
+menu = "OPTIONS > BATTLE STYLE"
+save_block = 2
+offset = 0x15
+mask = 0x04                            # bit 10 of the options halfword
+values = { shift = 0x00, set = 0x04 }
+watched = true
+
+# Its randomizer modes that draw from the live RNG: flags 0x3C and 0x30.
+[options.true_random]
+name = "TRUE RANDOM"
+menu = "New game > Randomizer > True Random"
+save_block = 1
+offset = 0x175B                        # flag 0x3C
+mask = 0x10
+values = { off = 0x00, on = 0x10 }
+watched = true
+
+[options.party_randomized]
+name = "PARTY RANDOMIZED"
+menu = "New game > Randomizer > Party Randomized"
+save_block = 1
+offset = 0x175A                        # flag 0x30
+mask = 0x01
+values = { off = 0x00, on = 0x01 }
+watched = true
+
+# Its randomizer is seeded by var 0x405B and the trainer ID's second byte, but
+# part of its trainer randomizer draws from Random(); so the RNG is pinned
+# from a trainer battle's trigger until the enemy party is made.
+[own_randomizer]
+seed_var = { var = 0x405B, vars = 0x1BCA }
+trainer_id_byte = 1
+rng_pin = { rng = 0x03004AF0, opponent = 0x02039B32 }   # gRngValue, gTrainerBattleOpponent_A
+keep = [{ option = "true_random", value = "off" }, { option = "party_randomized", value = "off" }]
+
+# Closes an Area: the ball is refused with "The box is full."
+[rules.catch_block]
+method = "patch"
+sites = [{ at = 0x0809C244, expect = "10 B5 00 24", write = "01 20 70 47" }]  # IsPlayerPartyAndPokemonStorageFull -> TRUE
+
+# Its level-100 checks after `movs r1, #0x38` (MON_DATA_LEVEL); the first is in getexp.
+[rules.level_cap]
+method = "patch"
+sites = [
+  { at = 0x08061CE4, expect = "64 28" },
+  { at = 0x0806216A, expect = "64 28" },
+  { at = 0x0809CB58, expect = "64 28" },
+  { at = 0x0821C1C6, expect = "64 28" },
+]
+
+# Only Poké Balls keep a battle use: in its own Bag, that bans items in every battle.
+[rules.no_items_trainer]
+method = "zero_table_field"
+
+[rules.no_items_wild]
+method = "zero_table_field"
+
+[rules.set_mode]
+method = "native"
+option = "battle_style"
+value = "set"
+
+# "Give a nickname?" is answered Yes, as in Emerald.
+[rules.must_nickname]
+method = "key_filter"
+battle_script_pointer = 0x02024DC0   # gBattlescriptCurrInstr
+command_table = 0x0842CC50           # gBattleScriptingCommandsTable
+command = 0x08074709                 # Cmd_trygivecaughtmonnick
+battle_communication = 0x02024F2A
+field_yes_no = [0x082F6957]          # Std_MsgboxYesNo, after its yesnobox
+question = "give a nickname"
+
+# Level cap stages: each next gym leader by badge count, then each Elite Four
+# member and the Champion by flag.
+[[level_caps]]
+name = "Roxanne"
+trainers = [265]
+badges = 1
+level = 15
+
+[[level_caps]]
+name = "Brawly"
+trainers = [266]
+badges = 2
+level = 20
+
+[[level_caps]]
+name = "Wattson"
+trainers = [267]
+badges = 3
+level = 25
+
+[[level_caps]]
+name = "Flannery"
+trainers = [268]
+badges = 4
+level = 28
+
+[[level_caps]]
+name = "Norman"
+trainers = [269]
+badges = 5
+level = 31
+
+[[level_caps]]
+name = "Winona"
+trainers = [270]
+badges = 6
+level = 35
+
+[[level_caps]]
+name = "Tate & Liza"
+trainers = [271]
+badges = 7
+level = 38
+
+[[level_caps]]
+name = "Juan"
+trainers = [272]
+badges = 8
+level = 41
+
+[[level_caps]]
+name = "Sidney"
+trainers = [261]
+flag = 0x4FB   # FLAG_DEFEATED_ELITE_4_SIDNEY
+level = 68
+
+[[level_caps]]
+name = "Phoebe"
+trainers = [262]
+flag = 0x4FC
+level = 69
+
+[[level_caps]]
+name = "Glacia"
+trainers = [263]
+flag = 0x4FD
+level = 69
+
+[[level_caps]]
+name = "Drake"
+trainers = [264]
+flag = 0x4FE
+level = 68
+
+[[level_caps]]
+name = "Champion"
+trainers = [335]
+flag = 0x864   # FLAG_SYS_GAME_CLEAR, set in the Hall of Fame
+level = 74
+
+[sync_gates]
+hold = 0x09D00000
+
+[[sync_gates.gates]]
+name = "Roxanne"
+sites = [{ at = 0x0828E550, expect = "5C 01 09 01 00" }]
+
+[[sync_gates.gates]]
+name = "Brawly"
+sites = [{ at = 0x08275E4D, expect = "5C 01 0A 01 00" }]
+
+[[sync_gates.gates]]
+name = "Wattson"
+sites = [{ at = 0x082884DF, expect = "5C 01 0B 01 00" }]
+
+[[sync_gates.gates]]
+name = "Flannery"
+sites = [{ at = 0x082789CF, expect = "5C 01 0C 01 00" }]
+
+[[sync_gates.gates]]
+name = "Norman"
+sites = [{ at = 0x0827F28F, expect = "5C 03 0D 01 00" }]
+
+[[sync_gates.gates]]
+name = "Winona"
+sites = [{ at = 0x08292043, expect = "5C 01 0E 01 00" }]
+
+[[sync_gates.gates]]
+name = "Tate & Liza"
+sites = [{ at = 0x0829C7E9, expect = "5C 08 0F 01 00" }]
+
+[[sync_gates.gates]]
+name = "Juan"
+sites = [{ at = 0x082A1078, expect = "5C 01 10 01 00" }]
+
+[[sync_gates.gates]]
+name = "Sidney"
+sites = [{ at = 0x082A4936, expect = "5C 03 05 01 00" }]
+
+[[sync_gates.gates]]
+name = "Phoebe"
+sites = [{ at = 0x082A4BA0, expect = "5C 03 06 01 00" }]
+
+[[sync_gates.gates]]
+name = "Glacia"
+sites = [{ at = 0x082A4E41, expect = "5C 03 07 01 00" }]
+
+[[sync_gates.gates]]
+name = "Drake"
+sites = [{ at = 0x082A50CE, expect = "5C 03 08 01 00" }]
+
+[[sync_gates.gates]]
+name = "Wallace"
+sites = [{ at = 0x082A5418, expect = "5C 03 4F 01 00" }]
+
+# The game's region-map sections, in its own words: Emerald's, then Kanto's
+# and the Sevii Islands'.
+[areas]
+0x00 = "Littleroot Town"
+0x01 = "Oldale Town"
+0x02 = "Dewford Town"
+0x03 = "Lavaridge Town"
+0x04 = "Fallarbor Town"
+0x05 = "Verdanturf Town"
+0x06 = "Pacifidlog Town"
+0x07 = "Petalburg City"
+0x08 = "Slateport City"
+0x09 = "Mauville City"
+0x0A = "Rustboro City"
+0x0B = "Fortree City"
+0x0C = "Lilycove City"
+0x0D = "Mossdeep City"
+0x0E = "Sootopolis City"
+0x0F = "Ever Grande City"
+0x10 = "Route 101"
+0x11 = "Route 102"
+0x12 = "Route 103"
+0x13 = "Route 104"
+0x14 = "Route 105"
+0x15 = "Route 106"
+0x16 = "Route 107"
+0x17 = "Route 108"
+0x18 = "Route 109"
+0x19 = "Route 110"
+0x1A = "Route 111"
+0x1B = "Route 112"
+0x1C = "Route 113"
+0x1D = "Route 114"
+0x1E = "Route 115"
+0x1F = "Route 116"
+0x20 = "Route 117"
+0x21 = "Route 118"
+0x22 = "Route 119"
+0x23 = "Route 120"
+0x24 = "Route 121"
+0x25 = "Route 122"
+0x26 = "Route 123"
+0x27 = "Route 124"
+0x28 = "Route 125"
+0x29 = "Route 126"
+0x2A = "Route 127"
+0x2B = "Route 128"
+0x2C = "Route 129"
+0x2D = "Route 130"
+0x2E = "Route 131"
+0x2F = "Route 132"
+0x30 = "Route 133"
+0x31 = "Route 134"
+0x32 = "Underwater"
+0x33 = "Underwater"
+0x34 = "Underwater"
+0x35 = "Underwater"
+0x36 = "Underwater"
+0x37 = "Granite Cave"
+0x38 = "Mt. Chimney"
+0x39 = "Safari Zone"
+0x3A = "Battle Frontier"
+0x3B = "Petalburg Woods"
+0x3C = "Rusturf Tunnel"
+0x3D = "Abandoned Ship"
+0x3E = "New Mauville"
+0x3F = "Meteor Falls"
+0x40 = "Meteor Falls"
+0x41 = "Mt. Pyre"
+0x43 = "Shoal Cave"
+0x44 = "Seafloor Cavern"
+0x45 = "Underwater"
+0x46 = "Victory Road"
+0x47 = "Mirage Island"
+0x48 = "Cave of Origin"
+0x49 = "Southern Island"
+0x4A = "Fiery Path"
+0x4B = "Fiery Path"
+0x4C = "Jagged Pass"
+0x4D = "Jagged Pass"
+0x4E = "Sealed Chamber"
+0x4F = "Underwater"
+0x50 = "Scorched Slab"
+0x51 = "Island Cave"
+0x52 = "Desert Ruins"
+0x53 = "Ancient Tomb"
+0x54 = "Inside of Truck"
+0x55 = "Sky Pillar"
+0x56 = "Secret Base"
+0x58 = "Pallet Town"
+0x59 = "Viridian City"
+0x5A = "Pewter City"
+0x5B = "Cerulean City"
+0x5C = "Lavender Town"
+0x5D = "Vermilion City"
+0x5E = "Celadon City"
+0x5F = "Fuchsia City"
+0x60 = "Cinnabar Island"
+0x61 = "Indigo Plateau"
+0x62 = "Saffron City"
+0x63 = "Route 4"
+0x64 = "Route 10"
+0x65 = "Route 1"
+0x66 = "Route 2"
+0x67 = "Route 3"
+0x68 = "Route 4"
+0x69 = "Route 5"
+0x6A = "Route 6"
+0x6B = "Route 7"
+0x6C = "Route 8"
+0x6D = "Route 9"
+0x6E = "Route 10"
+0x6F = "Route 11"
+0x70 = "Route 12"
+0x71 = "Route 13"
+0x72 = "Route 14"
+0x73 = "Route 15"
+0x74 = "Route 16"
+0x75 = "Route 17"
+0x76 = "Route 18"
+0x77 = "Route 19"
+0x78 = "Route 20"
+0x79 = "Route 21"
+0x7A = "Route 22"
+0x7B = "Route 23"
+0x7C = "Route 24"
+0x7D = "Route 25"
+0x7E = "Viridian Forest"
+0x7F = "Mt. Moon"
+0x80 = "S.S. Anne"
+0x81 = "Underground Path"
+0x82 = "Underground Path"
+0x83 = "Diglett's Cave"
+0x84 = "Victory Road"
+0x85 = "Rocket Hideout"
+0x86 = "Silph Co."
+0x87 = "Pokémon Mansion"
+0x88 = "Safari Zone"
+0x89 = "Pokémon League"
+0x8A = "Rock Tunnel"
+0x8B = "Seafoam Islands"
+0x8C = "Pokémon Tower"
+0x8D = "Cerulean Cave"
+0x8E = "Power Plant"
+0x8F = "One Island"
+0x90 = "Two Island"
+0x91 = "Three Island"
+0x92 = "Four Island"
+0x93 = "Five Island"
+0x94 = "Seven Island"
+0x95 = "Six Island"
+0x96 = "Kindle Road"
+0x97 = "Treasure Beach"
+0x98 = "Cape Brink"
+0x99 = "Bond Bridge"
+0x9A = "Three Isle Port"
+0x9B = "Sevii Isle 6"
+0x9C = "Sevii Isle 7"
+0x9D = "Eight Island"
+0x9E = "Sevii Isle 9"
+0x9F = "Resort Gorgeous"
+0xA0 = "Water Labyrinth"
+0xA1 = "Five Isle Meadow"
+0xA2 = "Memorial Pillar"
+0xA3 = "Outcast Island"
+0xA4 = "Green Path"
+0xA5 = "Water Path"
+0xA6 = "Ruin Valley"
+0xA7 = "Trainer Tower"
+0xA8 = "Canyon Entrance"
+0xA9 = "Sevault Canyon"
+0xAA = "Tanoby Ruins"
+0xAB = "Sevii Isle 22"
+0xAC = "Sevii Isle 23"
+0xAD = "Sevii Isle 24"
+0xAE = "Navel Rock"
+0xAF = "Mt. Ember"
+0xB0 = "Berry Forest"
+0xB1 = "Icefall Cave"
+0xB2 = "Rocket Warehouse"
+0xB3 = "Trainer Tower"
+0xB4 = "Dotted Hole"
+0xB5 = "Lost Cave"
+0xB6 = "Pattern Bush"
+0xB7 = "Altering Cave"
+0xB8 = "Tanoby Chambers"
+0xB9 = "Three Isle Path"
+0xBA = "Tanoby Key"
+0xBB = "Birth Island"
+0xBC = "Monean Chamber"
+0xBD = "Liptoo Chamber"
+0xBE = "Weepth Chamber"
+0xBF = "Dilford Chamber"
+0xC0 = "Scufib Chamber"
+0xC1 = "Rixy Chamber"
+0xC2 = "Viapois Chamber"
+0xC3 = "Ember Spa"
+0xC5 = "Aqua Hideout"
+0xC6 = "Magma Hideout"
+0xC7 = "Mirage Tower"
+0xC8 = "Birth Island"
+0xC9 = "Faraway Island"
+0xCA = "Artisan Cave"
+0xCB = "Marine Cave"
+0xCC = "Underwater"
+0xCD = "Terra Cave"
+0xCE = "Underwater"
+0xCF = "Underwater"
+0xD0 = "Underwater"
+0xD1 = "Desert Underpass"
+0xD2 = "Altering Cave"
+0xD3 = "Navel Rock"
+0xD4 = "Trainer Hill"
+
+# Emerald's sections that share a name, told apart; and Kanto's beside Hoenn's.
+[area_renames]
+0x32 = "Underwater (124)"
+0x33 = "Underwater (126)"
+0x34 = "Underwater (127)"
+0x35 = "Underwater (128)"
+0x36 = "Underwater (Sootopolis)"
+0x45 = "Underwater (Seafloor Cavern)"
+0x4F = "Underwater (134)"
+0xCC = "Underwater (Marine Cave)"
+0xCE = "Underwater (105)"
+0xCF = "Underwater (125)"
+0xD0 = "Underwater (129)"
+0x84 = "Victory Road (Kanto)"
+0x88 = "Safari Zone (Kanto)"
+0xB7 = "Altering Cave (Sevii)"
+
+# One Area per place: a place split over two sections counts as its first.
+[area_merges]
+0x40 = 0x3F
+0x4B = 0x4A
+0x4D = 0x4C
+0x68 = 0x63
+0x6E = 0x64
+0x82 = 0x81
+0xB3 = 0xA7
+0xC8 = 0xBB
+0xD3 = 0xAE
+
+# Gifts (`givemon`, with its ability argument) and Statics (the 10-byte
+# `setwildbattle`), each instruction found in this ROM. The starters are
+# every first-partner choice it offers; some are scripts it may not use.
+[[sources]]
+key = "starter"
+name = "Starter"
+kind = "starter"
+at = [0x0830F10A, 0x0830F12B, 0x0830F14C, 0x0830F16D, 0x0830F18E, 0x0830F1AF, 0x0830F1D0, 0x0830F1F1, 0x0830F212, 0x0830F226, 0x0830F23D, 0x0830F254, 0x0830F26B, 0x0830F282, 0x0830F299, 0x0830F2B0, 0x0830F2C7, 0x0830F2DE, 0x0830F42A, 0x0830F44B, 0x0830F46C, 0x0830F48D, 0x0830F4AE, 0x0830F4CF, 0x0830F4F0, 0x0830F511, 0x0830F532, 0x0830F546, 0x0830F55D, 0x0830F574, 0x0830F58B, 0x0830F5A2, 0x0830F5B9, 0x0830F5D0, 0x0830F5E7, 0x0830F5FE, 0x0830F74A, 0x0830F76B, 0x0830F78C, 0x0830F7AD, 0x0830F7CE, 0x0830F7EF, 0x0830F810, 0x0830F831, 0x0830F852, 0x0830F866, 0x0830F87D, 0x0830F894, 0x0830F8AB, 0x0830F8C2, 0x0830F8D9, 0x0830F8F0, 0x0830F907, 0x0830F91E]
+
+[[sources]]
+key = "togepi_2637d3"
+name = "Togepi"
+kind = "gift"
+at = [0x082637D3]
+
+[[sources]]
+key = "dratini_273038"
+name = "Dratini"
+kind = "gift"
+at = [0x08273038]
+
+[[sources]]
+key = "gible_2730d9"
+name = "Gible"
+kind = "gift"
+at = [0x082730D9]
+
+[[sources]]
+key = "pichu_28b81c"
+name = "Pichu"
+kind = "gift"
+at = [0x0828B81C]
+
+[[sources]]
+key = "kabuto_28c4e7"
+name = "Kabuto"
+kind = "gift"
+at = [0x0828C4E7]
+
+[[sources]]
+key = "omanyte_28c542"
+name = "Omanyte"
+kind = "gift"
+at = [0x0828C542]
+
+[[sources]]
+key = "aerodactyl_28c59d"
+name = "Aerodactyl"
+kind = "gift"
+at = [0x0828C59D]
+
+[[sources]]
+key = "aerodactyl_28c60a"
+name = "Aerodactyl"
+kind = "gift"
+at = [0x0828C60A]
+
+[[sources]]
+key = "lileep_28c668"
+name = "Lileep"
+kind = "gift"
+at = [0x0828C668]
+
+[[sources]]
+key = "anorith_28c6c3"
+name = "Anorith"
+kind = "gift"
+at = [0x0828C6C3]
+
+[[sources]]
+key = "cranidos_28c71e"
+name = "Cranidos"
+kind = "gift"
+at = [0x0828C71E]
+
+[[sources]]
+key = "shieldon_28c779"
+name = "Shieldon"
+kind = "gift"
+at = [0x0828C779]
+
+[[sources]]
+key = "tirtouga_28c7d4"
+name = "Tirtouga"
+kind = "gift"
+at = [0x0828C7D4]
+
+[[sources]]
+key = "archen_28c82f"
+name = "Archen"
+kind = "gift"
+at = [0x0828C82F]
+
+[[sources]]
+key = "tyrunt_28c88a"
+name = "Tyrunt"
+kind = "gift"
+at = [0x0828C88A]
+
+[[sources]]
+key = "amaura_28c8e5"
+name = "Amaura"
+kind = "gift"
+at = [0x0828C8E5]
+
+[[sources]]
+key = "porygon_28c93e"
+name = "Porygon"
+kind = "gift"
+at = [0x0828C93E]
+
+[[sources]]
+key = "porygon_28ca00"
+name = "Porygon"
+kind = "gift"
+at = [0x0828CA00]
+
+[[sources]]
+key = "lileep_28cb2d"
+name = "Lileep"
+kind = "gift"
+at = [0x0828CB2D]
+
+[[sources]]
+key = "anorith_28cbd0"
+name = "Anorith"
+kind = "gift"
+at = [0x0828CBD0]
+
+[[sources]]
+key = "dracozolt_28d815"
+name = "Dracozolt"
+kind = "gift"
+at = [0x0828D815]
+
+[[sources]]
+key = "dracovish_28d894"
+name = "Dracovish"
+kind = "gift"
+at = [0x0828D894]
+
+[[sources]]
+key = "arctozolt_28d913"
+name = "Arctozolt"
+kind = "gift"
+at = [0x0828D913]
+
+[[sources]]
+key = "arctovish_28d992"
+name = "Arctovish"
+kind = "gift"
+at = [0x0828D992]
+
+[[sources]]
+key = "squirtle_29a98b"
+name = "Squirtle"
+kind = "gift"
+at = [0x0829A98B]
+
+[[sources]]
+key = "totodile_29a9a6"
+name = "Totodile"
+kind = "gift"
+at = [0x0829A9A6]
+
+[[sources]]
+key = "mudkip_29a9d0"
+name = "Mudkip"
+kind = "gift"
+at = [0x0829A9D0]
+
+[[sources]]
+key = "piplup_29a9eb"
+name = "Piplup"
+kind = "gift"
+at = [0x0829A9EB]
+
+[[sources]]
+key = "oshawott_29aa03"
+name = "Oshawott"
+kind = "gift"
+at = [0x0829AA03]
+
+[[sources]]
+key = "froakie_29aa1b"
+name = "Froakie"
+kind = "gift"
+at = [0x0829AA1B]
+
+[[sources]]
+key = "popplio_29aa33"
+name = "Popplio"
+kind = "gift"
+at = [0x0829AA33]
+
+[[sources]]
+key = "sobble_29aa4b"
+name = "Sobble"
+kind = "gift"
+at = [0x0829AA4B]
+
+[[sources]]
+key = "quaxly_29aa63"
+name = "Quaxly"
+kind = "gift"
+at = [0x0829AA63]
+
+[[sources]]
+key = "squirtle_29aa77"
+name = "Squirtle"
+kind = "gift"
+at = [0x0829AA77]
+
+[[sources]]
+key = "mudkip_29aa8b"
+name = "Mudkip"
+kind = "gift"
+at = [0x0829AA8B]
+
+[[sources]]
+key = "beldum_29eaa1"
+name = "Beldum"
+kind = "gift"
+at = [0x0829EAA1]
+
+[[sources]]
+key = "castform_2f3229"
+name = "Castform"
+kind = "gift"
+at = [0x082F3229]
+
+[[sources]]
+key = "castform_2f3bec"
+name = "Castform"
+kind = "gift"
+at = [0x082F3BEC]
+
+[[sources]]
+key = "kecleon_26e74e"
+name = "Kecleon"
+kind = "static"
+at = [0x0826E74E]
+
+[[sources]]
+key = "electrode_2b0f22"
+name = "Electrode"
+kind = "static"
+at = [0x082B0F22]
+
+[[sources]]
+key = "electrode_2b0f74"
+name = "Electrode"
+kind = "static"
+at = [0x082B0F74]
+
+[[sources]]
+key = "rotom_2b4f70"
+name = "Rotom"
+kind = "static"
+at = [0x082B4F70]
+
+[[sources]]
+key = "voltorb_2b5046"
+name = "Voltorb"
+kind = "static"
+at = [0x082B5046]
+
+[[sources]]
+key = "voltorb_2b5098"
+name = "Voltorb"
+kind = "static"
+at = [0x082B5098]
+
+[[sources]]
+key = "voltorb_2b50ea"
+name = "Voltorb"
+kind = "static"
+at = [0x082B50EA]
+
+[[sources]]
+key = "kecleon_309d15"
+name = "Kecleon"
+kind = "static"
+at = [0x08309D15]
+
+[[sources]]
+key = "sudowoodo_30a00f"
+name = "Sudowoodo"
+kind = "static"
+at = [0x0830A00F]
+
+[[sources]]
+key = "bonsly_30a09c"
+name = "Bonsly"
+kind = "static"
+at = [0x0830A09C]

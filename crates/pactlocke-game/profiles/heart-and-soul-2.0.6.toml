@@ -1,0 +1,814 @@
+# Pokémon Heart and Soul 2.0.6 by the HnS Development team, built on
+# pokeemerald-expansion 1.15 (its source is public: tag `Release-v2.0.6` of
+# PokemonHnS-Development/pokehns-expansion). Its RAM, tables and scripts are
+# expansion's, read from this ROM and its RAM:
+# - Pokémon are encrypted as in Emerald, but the species is the low 11 bits
+#   beside the tera type; each battler keeps Perish Song in its own volatiles
+#   (0x88-byte battlers); species info is 0x10C bytes with the name at +0x2C
+#   and a pointer to its evolutions at +0xA4; trainers are 0x34 bytes with
+#   0x24-byte party entries; type names aren't kept as text.
+# - Its challenge settings live in save block 3 and can be changed from the PC
+#   at any time, so each one Pactlocke uses is watched.
+# - No items and set mode are its own options; a catch is refused by its own
+#   FLAG_NO_WILD_CATCHING; the cap stubs its GetCurrentLevelCap, whose callers
+#   (EXP, Rare Candy, the Day Care) apply a cap only with its LEVEL CAP option on.
+# - Its Nuzlocke mode (with FAINTING on cemetery and forced nicknames) is used
+#   only when the Ruleset has both first Encounter and faint = Dead.
+# Its scripts keep the original command numbers for what the hold script uses.
+
+schema = 1
+id = "heart-and-soul-2.0.6"
+name = "Pokémon Heart and Soul 2.0.6"
+game_code = "BPEE"
+family = "RSE"
+sha1 = "79ee6df0869c1773c8c6a5f764afc1f8d833d8bb"
+status = "supported"
+type_name_list = [
+  "None", "Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel", "Mystery",
+  "Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark", "Fairy", "Stellar",
+]
+
+[symbols]
+party = 0x02034764
+party_count = 0x020342A4
+enemy_party = 0x020342B4              # gEnemyParty, 1200 bytes before the Player's
+pc_storage = { pointer = 0x030041DC }
+save_block_1 = { pointer = 0x030041D8 }
+save_block_2 = { pointer = 0x030041D4 }
+save_block_3 = { pointer = 0x03000178 }
+region_map_section = 0x02001D20        # gMapHeader.regionMapSectionId
+main_callback2 = 0x03005BDC            # gMain.callback2
+overworld_callback = 0x0819A010        # CB2_Overworld
+in_battle = { at = 0x03006011, mask = 0x02 }   # gMain.inBattle
+battle_type_flags = 0x020000AC
+battle_mons = 0x02000420
+battler_party_indexes = 0x02000144
+battler_statuses3 = 0x0200047C         # gBattleMons[0].volatiles, Perish Song's word
+disable_structs = 0x02000420           # each battler's own volatiles hold the Perish count
+script_context_status = 0x03001FDC     # 0 running, 1 waiting, 2 idle
+script_context = 0x03001FE0
+species_info = 0x087E6544
+species_names = 0x087E6570              # gSpeciesInfo[0].speciesName
+evolution_table = 0x087E6544            # unused: each species points at its own
+items = 0x0878EFC0
+trainers = 0x084C9C8C                   # gTrainers
+message_buffer = 0x0203B8D4             # gStringVar4
+
+[layout]
+party_slot_size = 100
+box_slot_size = 80
+encrypted = true
+species_mask = 0x07FF                   # species:11, then the tera type
+ot_id = 0x04
+nickname = 0x08
+nickname_length = 10
+flags = 0x13
+egg_mask = 0x04
+has_species_mask = 0x02
+checksum = 0x1C
+substructures = 0x20
+level = 0x54
+hp = 0x56
+max_hp = 0x58
+battle_mon_size = 0x88
+battle_mon_hp = 0x2A
+battle_type_trainer = 0x08
+# BATTLE_TYPE_FIRST_BATTLE and _CATCH_TUTORIAL, as in Emerald.
+battle_type_uncatchable = 0x210
+battle_type_double = 0x01
+perish_song_status3 = 0x80              # volatiles.perishSong
+battler_status_stride = 0x88
+disable_struct_size = 0x88
+perish_timer = 0x6E                     # volatiles.perishSongTimer, two bits
+perish_timer_mask = 0x0C
+script_context_stack_depth = 0x00
+script_context_stack = 0x0C
+script_context_pointer = 0x08
+species_info_size = 0x10C
+species_name_length = 0x10C             # read up to its terminator inside the species info
+species_count = 1573                    # NUM_SPECIES, from the ROM's expansion header
+evolutions_per_species = 32
+evolutions_pointer = 0xA4               # gSpeciesInfo[].evolutions, ended by 0xFFFF
+evolution_size = 12                     # struct Evolution: method, param, target, conditions
+evolution_target = 4
+primary_type = 6
+item_size = 0x2C                        # struct ItemInfo
+item_count = 901
+item_pocket = 0x1E                      # importance:2, notConsumed:1, pocket:5
+item_battle_usage = 0x21
+ball_pocket = 0x10
+pc_boxes = 14
+pc_box_slots = 30
+pc_boxes_offset = 4
+trainer_id = 0x0A                      # in save block 2
+play_time = 0x0E                       # in save block 2: hours, minutes, seconds, frames
+badge_flags = 0x880                    # FLAG_BADGE01_GET: Johto's eight
+event_flags = 0x198C                   # in save block 1
+trainer_size = 0x34
+trainer_party_flags = 0x2B             # every party entry is the same size
+trainer_party_size = 0x2B
+trainer_party = 0x08
+trainer_mon_level = 0x1A
+trainer_mon_sizes = [0x24, 0x24, 0x24, 0x24]
+type_name_length = 0
+balls_pocket = 0xA04                   # in save block 1
+balls_pocket_slots = 16
+dead_box = 14
+
+[options.battle_style]
+name = "BATTLE STYLE"
+menu = "OPTION > BATTLE STYLE"
+save_block = 2
+offset = 0x15
+mask = 0x02
+values = { shift = 0x00, set = 0x02 }
+watched = true
+
+# Its challenge settings (save block 3 +0x10 on), changeable from the PC.
+[options.player_items]
+name = "PLAYER ITEMS"
+menu = "DIFFICULTY > PLAYER ITEMS"
+save_block = 3
+offset = 0x17
+mask = 0x20
+values = { allowed = 0x00, banned = 0x20 }
+watched = true
+
+[options.level_cap]
+name = "LEVEL CAP"
+menu = "DIFFICULTY > LEVEL CAP"
+save_block = 3
+offset = 0x18
+mask = 0x60
+values = { off = 0x00, normal = 0x20, hard = 0x40 }
+watched = true
+
+[options.nuzlocke]
+name = "NUZLOCKE"
+menu = "NUZLOCKE > NUZLOCKE"
+save_block = 3
+offset = 0x16
+mask = 0x04
+values = { off = 0x00, on = 0x04 }
+watched = true
+
+[options.fainting]
+name = "FAINTING"
+menu = "NUZLOCKE > FAINTING"
+save_block = 3
+offset = 0x1B
+mask = 0x20
+values = { cemetery = 0x00, release = 0x20 }
+watched = true
+
+[options.nicknaming]
+name = "NICKNAMING"
+menu = "NUZLOCKE > NICKNAMING"
+save_block = 3
+offset = 0x1B
+mask = 0x10
+values = { off = 0x00, on = 0x10 }
+watched = true
+
+[options.chaos]
+name = "CHAOS"
+menu = "RANDOMIZER > CHAOS"
+save_block = 3
+offset = 0x14
+mask = 0x01
+values = { off = 0x00, on = 0x01 }
+watched = true
+
+# Its randomizer is a stateless draw seeded by the trainer ID, except where a
+# caller passes Random32() as the per-call seed: scripted Gifts and Statics,
+# and wild Pokémon when not map-based. Those seven `bl Random32` become
+# `movs r0, #0; nop`. CHAOS re-seeds everything from the live RNG, so it stays off.
+[own_randomizer]
+seed_is_trainer_id = true
+sites = [
+  { at = 0x081C5B72, expect = "29 F0 85 FA", write = "00 20 C0 46" },  # CreateScriptedWildMon
+  { at = 0x0820A9D6, expect = "E4 F7 53 FB", write = "00 20 C0 46" },  # CreateShinyScriptedMon
+  { at = 0x0820AAD6, expect = "E4 F7 D3 FA", write = "00 20 C0 46" },  # ScriptGiveMon
+  { at = 0x0820B29E, expect = "E3 F7 EF FE", write = "00 20 C0 46" },  # ScriptGiveMon
+  { at = 0x0820B2F4, expect = "E3 F7 C4 FE", write = "00 20 C0 46" },  # ScrCmd_createmon
+  { at = 0x0820B862, expect = "E3 F7 0D FC", write = "00 20 C0 46" },  # another scripted Pokémon
+  { at = 0x081F0780, expect = "FE F7 7E FC", write = "00 20 C0 46" },  # RandomizeWildEncounter, not map-based
+]
+keep = [{ option = "chaos", value = "off" }]
+
+# Catches are refused by its own FLAG_NO_WILD_CATCHING: "POKé BALLS cannot be used right now!"
+[rules.catch_block]
+method = "set_flag"
+flag = 0x96B
+
+# GetCurrentLevelCap -> `movs r0, #cap; bx lr`. Its callers apply it only with LEVEL CAP on.
+[rules.level_cap]
+method = "patch"
+sites = [{ at = 0x080EE288, expect = "1D 4B 1B 68", write = "00 20 70 47" }]
+
+# PLAYER ITEMS banned: "Battle items are not allowed under current rules!", balls still thrown.
+[rules.no_items_trainer]
+method = "native"
+option = "player_items"
+value = "banned"
+
+[rules.no_items_wild]
+method = "native"
+option = "player_items"
+value = "banned"
+
+[rules.set_mode]
+method = "native"
+option = "battle_style"
+value = "set"
+
+# "Would you like to give X a nickname?" is answered Yes: command 0xD5.
+[rules.must_nickname]
+method = "key_filter"
+battle_script_pointer = 0x02000128   # gBattlescriptCurrInstr
+command_table = 0x084816F8           # gBattleScriptingCommandsTable
+command = 0x080AE169                 # Cmd_trygivecaughtmonnick
+battle_communication = 0x020001BC
+field_yes_no = [0x08330441]          # Std_MsgboxYesNo, after its yesnobox
+question = "give a nickname"
+
+[[rule_options]]
+rule = "level_cap"
+option = "level_cap"
+value = "normal"
+pactlocke_too = true
+
+# Its Nuzlocke mode, with first Encounter and faint = Dead both on: its
+# cemetery takes the Player's own fainted Pokémon, and its NICKNAMING asks
+# for a name at once. Pactlocke keeps every rule itself as well.
+[[rule_options]]
+rule = "faint_is_dead"
+option = "nuzlocke"
+value = "on"
+with = ["first_encounter"]
+pactlocke_too = true
+
+[[rule_options]]
+rule = "faint_is_dead"
+option = "fainting"
+value = "cemetery"
+with = ["first_encounter"]
+pactlocke_too = true
+
+[[rule_options]]
+rule = "must_nickname"
+option = "nicknaming"
+value = "on"
+with = ["first_encounter", "faint_is_dead"]
+pactlocke_too = true
+
+# Gym leaders on their first battle. Chuck, Jasmine and Pryce may come in
+# any order, with a team for each of the fifth, sixth and seventh badge.
+[[level_caps]]
+name = "Falkner"
+trainers = [0x192]
+badges = 1
+
+[[level_caps]]
+name = "Bugsy"
+trainers = [0x194]
+badges = 2
+
+[[level_caps]]
+name = "Whitney"
+trainers = [0x196]
+badges = 3
+
+[[level_caps]]
+name = "Morty"
+trainers = [0x198]
+badges = 4
+
+[[level_caps]]
+name = "Fifth Gym Leader"
+trainers = [0x1A2, 0x19E, 0x19A]
+badges = 5
+
+[[level_caps]]
+name = "Sixth Gym Leader"
+trainers = [0x1A4, 0x1A0, 0x19C]
+badges = 6
+
+[[level_caps]]
+name = "Seventh Gym Leader"
+trainers = [0x1A5, 0x1A1, 0x19D]
+badges = 7
+
+[[level_caps]]
+name = "Clair"
+trainers = [0x1A6]
+badges = 8
+
+# The game keeps no flag for each Elite Four win: the League is one stage,
+# passed with the Champion (FLAG_IS_CHAMPION).
+[[level_caps]]
+name = "Elite Four and Champion"
+trainers = [0x1B1, 0x1B3, 0x1B5, 0x1B7, 0x1B9]
+flag = 0x89F
+
+[sync_gates]
+hold = 0x09F00000
+
+[[sync_gates.gates]]
+name = "Falkner"
+sites = [{ at = 0x083AE0D5, expect = "5C 34 00 92 01" }]
+
+[[sync_gates.gates]]
+name = "Bugsy"
+sites = [{ at = 0x083B024E, expect = "5C 34 00 94 01" }]
+
+[[sync_gates.gates]]
+name = "Whitney"
+sites = [{ at = 0x083B37CE, expect = "5C 34 00 96 01" }]
+
+[[sync_gates.gates]]
+name = "Morty"
+sites = [{ at = 0x083BDF79, expect = "5C 34 00 98 01" }]
+
+[[sync_gates.gates]]
+name = "Chuck"
+sites = [
+  { at = 0x083C291A, expect = "5C 34 00 A2 01" },
+  { at = 0x083C2948, expect = "5C 34 00 A4 01" },
+  { at = 0x083C2976, expect = "5C 34 00 A5 01" },
+]
+
+[[sync_gates.gates]]
+name = "Jasmine"
+sites = [
+  { at = 0x083BF09E, expect = "5C 34 00 9E 01" },
+  { at = 0x083BF0CC, expect = "5C 34 00 A0 01" },
+  { at = 0x083BF0FA, expect = "5C 34 00 A1 01" },
+]
+
+[[sync_gates.gates]]
+name = "Pryce"
+sites = [
+  { at = 0x083C32B3, expect = "5C 34 00 9A 01" },
+  { at = 0x083C32E1, expect = "5C 34 00 9C 01" },
+  { at = 0x083C330F, expect = "5C 34 00 9D 01" },
+]
+
+[[sync_gates.gates]]
+name = "Clair"
+sites = [{ at = 0x083C4F68, expect = "5C 34 00 A6 01" }]
+
+[[sync_gates.gates]]
+name = "Will"
+sites = [{ at = 0x083D4727, expect = "5C 34 00 B1 01" }]
+
+[[sync_gates.gates]]
+name = "Koga"
+sites = [{ at = 0x083D4B1A, expect = "5C 34 00 B7 01" }]
+
+[[sync_gates.gates]]
+name = "Bruno"
+sites = [{ at = 0x083D4EE4, expect = "5C 34 00 B3 01" }]
+
+[[sync_gates.gates]]
+name = "Karen"
+sites = [{ at = 0x083D529B, expect = "5C 34 00 B5 01" }]
+
+[[sync_gates.gates]]
+name = "Lance"
+sites = [{ at = 0x083D573A, expect = "5C 34 00 B9 01" }]
+
+# The game's region-map sections, in its own words.
+[areas]
+0x02 = "Battle Frontier"
+0x03 = "Birth Island"
+0x04 = "Faraway Island"
+0x06 = "Safari Zone"
+0x07 = "Southern Island"
+0x08 = "Trainer Hill"
+0x09 = "Melemele Isle"
+0x0A = "Akala Isle"
+0x0B = "Ula'ula Isle"
+0x0C = "Poni Isle"
+0x0D = "Alola Sea"
+0x0E = "Akala Cave"
+0x0F = "Akala Forest"
+0x10 = "Poni Cave"
+0x11 = "Ula'ula Cave"
+0x12 = "Ula'ula Cave"
+0x14 = "Pallet Town"
+0x15 = "Viridian City"
+0x16 = "Pewter City"
+0x17 = "Cerulean City"
+0x18 = "Lavender Town"
+0x19 = "Vermilion City"
+0x1A = "Celadon City"
+0x1B = "Fuchsia City"
+0x1C = "Cinnabar Island"
+0x1D = "Indigo Plateau"
+0x1E = "Saffron City"
+0x1F = "Route 1"
+0x20 = "Route 2"
+0x21 = "Route 3"
+0x22 = "Route 4"
+0x23 = "Route 5"
+0x24 = "Route 6"
+0x25 = "Route 7"
+0x26 = "Route 8"
+0x27 = "Route 9"
+0x28 = "Route 10"
+0x29 = "Route 11"
+0x2A = "Route 12"
+0x2B = "Route 13"
+0x2C = "Route 14"
+0x2D = "Route 15"
+0x2E = "Route 16"
+0x2F = "Route 17"
+0x30 = "Route 18"
+0x31 = "Route 19"
+0x32 = "Route 20"
+0x33 = "Route 21"
+0x34 = "Route 22"
+0x35 = "Route 24"
+0x36 = "Route 25"
+0x37 = "Viridian Forest"
+0x38 = "Mt. Moon"
+0x39 = "Diglett's Cave"
+0x3B = "Rock Tunnel"
+0x3C = "Seafoam Islands"
+0x3D = "Cerulean Cave"
+0x3E = "Power Plant"
+0x3F = "New Bark Town"
+0x40 = "Cherrygrove City"
+0x41 = "Violet City"
+0x42 = "Azalea Town"
+0x43 = "Goldenrod City"
+0x44 = "Ecruteak City"
+0x45 = "Olivine City"
+0x46 = "Cianwood City"
+0x47 = "Mahogany Town"
+0x48 = "Blackthorn City"
+0x49 = "Route 26"
+0x4A = "Route 27"
+0x4B = "Route 28"
+0x4C = "Route 29"
+0x4D = "Route 30"
+0x4E = "Route 31"
+0x4F = "Route 32"
+0x50 = "Route 33"
+0x51 = "Route 34"
+0x52 = "Route 35"
+0x53 = "Route 36"
+0x54 = "Route 37"
+0x55 = "Route 38"
+0x56 = "Route 39"
+0x57 = "Route 40"
+0x58 = "Route 41"
+0x59 = "Route 42"
+0x5A = "Route 43"
+0x5B = "Route 44"
+0x5C = "Route 45"
+0x5D = "Route 46"
+0x5E = "Route 47"
+0x5F = "Route 48"
+0x60 = "Burned Tower"
+0x61 = "Cliff Cave"
+0x62 = "Dark Cave"
+0x63 = "Dragon's Den"
+0x64 = "Embedded Tower"
+0x65 = "Ice Path"
+0x66 = "Ilex Forest"
+0x67 = "Lake Of Rage"
+0x68 = "Mt. Mortar"
+0x69 = "Rocket Hideout"
+0x6A = "Victory Road"
+0x6B = "Mt. Silver"
+0x6D = "Snowswept Cavern"
+0x6E = "Route 49"
+0x6F = "Route 50"
+0x70 = "New Sinjoh"
+0x71 = "Sinjoh Ruins"
+0x72 = "National Park"
+0x73 = "Lighthouse"
+0x74 = "Ruins Of Alph"
+0x75 = "Safari Zone Gate"
+0x76 = "Slowpoke Well"
+0x77 = "Sprout Tower"
+0x78 = "S.S. Aqua"
+0x79 = "Tin Tower"
+0x7A = "Tohjo Falls"
+0x7B = "Union Cave"
+0x7C = "Whirl Islands"
+
+# Its two Ula'ula Cave sections are one Area.
+[area_merges]
+0x12 = 0x11
+
+# Gifts (`callnative ScrCmd_createmon`) and Statics (the 10-argument
+# `setwildbattle`), each instruction found in this ROM. Some are the base
+# game's scripts it may not use.
+[[sources]]
+key = "starter"
+name = "Starter"
+kind = "starter"
+at = [0x082B5224, 0x082B52C9, 0x082B536E]
+
+[[sources]]
+key = "lileep_2cd663"
+name = "Lileep"
+kind = "gift"
+at = [0x082CD663]
+
+[[sources]]
+key = "anorith_2cd70a"
+name = "Anorith"
+kind = "gift"
+at = [0x082CD70A]
+
+[[sources]]
+key = "beldum_2e0b19"
+name = "Beldum"
+kind = "gift"
+at = [0x082E0B19]
+
+[[sources]]
+key = "castform_32f154"
+name = "Castform"
+kind = "gift"
+at = [0x0832F154]
+
+[[sources]]
+key = "treecko_330d16"
+name = "Treecko"
+kind = "gift"
+at = [0x08330D16]
+
+[[sources]]
+key = "torchic_330d2b"
+name = "Torchic"
+kind = "gift"
+at = [0x08330D2B]
+
+[[sources]]
+key = "mudkip_330d40"
+name = "Mudkip"
+kind = "gift"
+at = [0x08330D40]
+
+[[sources]]
+key = "bulbasaur_330e02"
+name = "Bulbasaur"
+kind = "gift"
+at = [0x08330E02]
+
+[[sources]]
+key = "charmander_330e17"
+name = "Charmander"
+kind = "gift"
+at = [0x08330E17]
+
+[[sources]]
+key = "squirtle_330e2c"
+name = "Squirtle"
+kind = "gift"
+at = [0x08330E2C]
+
+[[sources]]
+key = "tentacool_3c16fc"
+name = "Tentacool"
+kind = "gift"
+at = [0x083C16FC]
+
+[[sources]]
+key = "treecko_3d1c00"
+name = "Treecko"
+kind = "gift"
+at = [0x083D1C00]
+
+[[sources]]
+key = "torchic_3d1c2f"
+name = "Torchic"
+kind = "gift"
+at = [0x083D1C2F]
+
+[[sources]]
+key = "mudkip_3d1c5e"
+name = "Mudkip"
+kind = "gift"
+at = [0x083D1C5E]
+
+[[sources]]
+key = "lileep_3dd8a4"
+name = "Lileep"
+kind = "gift"
+at = [0x083DD8A4]
+
+[[sources]]
+key = "anorith_3dd986"
+name = "Anorith"
+kind = "gift"
+at = [0x083DD986]
+
+[[sources]]
+key = "omanyte_3dda2d"
+name = "Omanyte"
+kind = "gift"
+at = [0x083DDA2D]
+
+[[sources]]
+key = "kabuto_3ddb3d"
+name = "Kabuto"
+kind = "gift"
+at = [0x083DDB3D]
+
+[[sources]]
+key = "kabuto_3ddb51"
+name = "Kabuto"
+kind = "gift"
+at = [0x083DDB51]
+
+[[sources]]
+key = "aerodactyl_3ddc18"
+name = "Aerodactyl"
+kind = "gift"
+at = [0x083DDC18]
+
+[[sources]]
+key = "beldum_3dfc15"
+name = "Beldum"
+kind = "gift"
+at = [0x083DFC15]
+
+[[sources]]
+key = "castform_3dfc28"
+name = "Castform"
+kind = "gift"
+at = [0x083DFC28]
+
+[[sources]]
+key = "medicham_3dfc3b"
+name = "Medicham"
+kind = "gift"
+at = [0x083DFC3B]
+
+[[sources]]
+key = "bagon_3dfc4e"
+name = "Bagon"
+kind = "gift"
+at = [0x083DFC4E]
+
+[[sources]]
+key = "meowth_3e2b34"
+name = "Meowth"
+kind = "gift"
+at = [0x083E2B34]
+
+[[sources]]
+key = "zigzagoon_3e2b47"
+name = "Zigzagoon"
+kind = "gift"
+at = [0x083E2B47]
+
+[[sources]]
+key = "ponyta_3e2b5a"
+name = "Ponyta"
+kind = "gift"
+at = [0x083E2B5A]
+
+[[sources]]
+key = "farfetchd_3e2b6d"
+name = "Farfetch'd"
+kind = "gift"
+at = [0x083E2B6D]
+
+[[sources]]
+key = "slowpoke_3e2b80"
+name = "Slowpoke"
+kind = "gift"
+at = [0x083E2B80]
+
+[[sources]]
+key = "tyrogue_3e8db3"
+name = "Tyrogue"
+kind = "gift"
+at = [0x083E8DB3]
+
+[[sources]]
+key = "dratini_3eb54c"
+name = "Dratini"
+kind = "gift"
+at = [0x083EB54C]
+
+[[sources]]
+key = "wooper_p_421152"
+name = "Wooper-p"
+kind = "gift"
+at = [0x08421152]
+
+[[sources]]
+key = "choice_83b556f"
+name = "A Pokémon of your choice"
+kind = "gift"
+at = [0x083B556F, 0x083B5588, 0x083B55A1, 0x083B55BA, 0x083B55D3, 0x083B55EC]
+
+[[sources]]
+key = "gift_83a9f58"
+name = "A gift Pokémon"
+kind = "gift"
+at = [0x083A9F58, 0x083A9F94]
+
+[[sources]]
+key = "kecleon_2afa81"
+name = "Kecleon"
+kind = "static"
+at = [0x082AFA81]
+
+[[sources]]
+key = "sudowoodo_302699"
+name = "Sudowoodo"
+kind = "static"
+at = [0x08302699]
+
+[[sources]]
+key = "kecleon_333b8f"
+name = "Kecleon"
+kind = "static"
+at = [0x08333B8F]
+
+[[sources]]
+key = "sudowoodo_398002"
+name = "Sudowoodo"
+kind = "static"
+at = [0x08398002]
+
+[[sources]]
+key = "snorlax_39faa7"
+name = "Snorlax"
+kind = "static"
+at = [0x0839FAA7]
+
+[[sources]]
+key = "lapras_3e5592"
+name = "Lapras"
+kind = "static"
+at = [0x083E5592]
+
+[[sources]]
+key = "pichu_3edff7"
+name = "Pichu"
+kind = "static"
+at = [0x083EDFF7]
+
+[[sources]]
+key = "electrode_3f04d5"
+name = "Electrode"
+kind = "static"
+at = [0x083F04D5]
+
+[[sources]]
+key = "sudowoodo_3fa86d"
+name = "Sudowoodo"
+kind = "static"
+at = [0x083FA86D]
+
+[[sources]]
+key = "exeggutor_a_425929"
+name = "Exeggutor-a"
+kind = "static"
+at = [0x08425929]
+
+[[sources]]
+key = "raichu_a_42b560"
+name = "Raichu-a"
+kind = "static"
+at = [0x0842B560]
+
+[[sources]]
+key = "sandslash_a_42b6f9"
+name = "Sandslash-a"
+kind = "static"
+at = [0x0842B6F9]
+
+[[sources]]
+key = "ninetales_a_42b747"
+name = "Ninetales-a"
+kind = "static"
+at = [0x0842B747]
+
+[[sources]]
+key = "muk_a_42bd31"
+name = "Muk-a"
+kind = "static"
+at = [0x0842BD31]
+
+[[sources]]
+key = "marowak_a_42bd87"
+name = "Marowak-a"
+kind = "static"
+at = [0x0842BD87]
+
+[[sources]]
+key = "dugtrio_a_42bdd5"
+name = "Dugtrio-a"
+kind = "static"
+at = [0x0842BDD5]

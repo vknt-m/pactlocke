@@ -29,6 +29,11 @@ pub struct LevelCapDef {
     /// Passed once this event flag is set (an Elite Four member's defeat).
     #[serde(default)]
     pub flag: Option<u16>,
+    /// The default cap where the ROM's teams have no fixed levels (R.O.W.E.
+    /// makes them as the Player goes): its trainers' strongest Pokémon, as
+    /// measured in the game.
+    #[serde(default)]
+    pub level: Option<u8>,
 }
 
 impl LevelCapDef {
@@ -50,12 +55,14 @@ impl GameProfile {
             .iter()
             .map(|stage| LevelCap {
                 name: stage.name.clone(),
-                level: stage
-                    .trainers
-                    .iter()
-                    .filter_map(|&trainer| self.strongest_of(rom, trainer))
-                    .max()
-                    .unwrap_or(MAX_LEVEL),
+                level: stage.level.unwrap_or_else(|| {
+                    stage
+                        .trainers
+                        .iter()
+                        .filter_map(|&trainer| self.strongest_of(rom, trainer))
+                        .max()
+                        .unwrap_or(MAX_LEVEL)
+                }),
             })
             .collect()
     }
@@ -74,9 +81,10 @@ impl GameProfile {
         let mon_size = *layout.trainer_mon_sizes.get(usize::from(party_flags & 3))?;
         (0..size)
             .filter_map(|i| {
+                // A byte: the low one of the original games' u16, or the whole
+                // of pokeemerald-expansion's, which the ball follows.
                 let at = (party + i * mon_size + layout.trainer_mon_level).checked_sub(ROM_BASE)? as usize;
-                let level = u16::from_le_bytes(rom.get(at..at + 2)?.try_into().ok()?);
-                u8::try_from(level).ok().filter(|l| (1..=MAX_LEVEL).contains(l))
+                rom.get(at).copied().filter(|l| (1..=MAX_LEVEL).contains(l))
             })
             .max()
     }

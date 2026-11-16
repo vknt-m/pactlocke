@@ -126,6 +126,11 @@ pub struct Ruleset {
     /// Player's app makes every Player's game from their own clean ROM.
     #[serde(default)]
     pub randomizer: Option<RandomizerChoice>,
+    /// Shared Seed through a Romhack's own randomizer (Heart and Soul,
+    /// R.O.W.E.): the seed every Player's game is given. `None` leaves each
+    /// game to seed itself.
+    #[serde(default)]
+    pub romhack_seed: Option<u32>,
 }
 
 /// How a randomized Run's games are made.
@@ -167,6 +172,7 @@ impl Default for Ruleset {
             retries: 0,
             sync_gates: Vec::new(),
             randomizer: None,
+            romhack_seed: None,
         }
     }
 }

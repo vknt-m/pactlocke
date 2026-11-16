@@ -18,9 +18,11 @@ impl RunEngine {
         }
     }
 
-    /// Whether the game does `rule` itself, through its own option.
+    /// Whether the game does `rule` itself, through its own option, in place of Pactlocke.
     pub(super) fn is_native(&self, rule: Rule) -> bool {
-        self.natives.iter().flatten().any(|native| native.rule == rule)
+        self.natives_in_use()
+            .iter()
+            .any(|native| native.rule == rule && !native.pactlocke_too)
     }
 
     /// The native options of the rules this Ruleset has on.
@@ -48,6 +50,7 @@ impl RunEngine {
                                 name: native.name.clone(),
                                 value: native.value.clone(),
                                 again: true,
+                                pactlocke_too: native.pactlocke_too,
                             });
                         }
                     }
@@ -69,6 +72,7 @@ impl RunEngine {
                     name: native.name,
                     value: native.value,
                     again: false,
+                    pactlocke_too: native.pactlocke_too,
                 });
             }
         }
