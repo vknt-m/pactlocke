@@ -1,22 +1,42 @@
 name: Release
 
-# Pushing a version tag (git tag v0.1.0 && git push origin v0.1.0) runs every
-# CI check, builds the app on each platform with its licences, packs the full
-# source with the mGBA submodule, and opens a draft release with all of it.
-# Nothing is public until the draft is published by hand.
+# Pushing a version tag (git tag v0.1.0 && git push origin v0.1.0) builds the
+# app on each platform with its licences, packs the full source with the mGBA
+# submodule, and opens a draft release with all of it. Every CI check runs
+# first, unless CI has already passed on the tagged commit. Nothing is public
+# until the draft is published by hand.
 on:
   push:
     tags: ["v*"]
 
 permissions:
   contents: write
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  ci-passed:
+    name: CI already passed on this commit?
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.look.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: look
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$(git rev-parse HEAD)"
+          runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$sha" --status success --json databaseId --jq length)"
+          echo "Successful CI runs on $sha: $runs"
+          if [ "$runs" -gt 0 ]; then echo passed=true >> "$GITHUB_OUTPUT"; else echo passed=false >> "$GITHUB_OUTPUT"; fi
+
   checks:
     name: CI
+    needs: ci-passed
+    if: needs.ci-passed.outputs.passed != 'true'
     uses: ./.github/workflows/ci.yml
 
   version:
@@ -34,9 +54,11 @@ jobs:
   build:
     name: Package (${{ matrix.name }})
     needs: [checks, version]
+    # Runs when CI passed here or had already passed (checks skipped).
+    if: ${{ !failure() && !cancelled() }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - { name: Windows x86-64, os: windows-latest, platform: windows-x86_64 }
@@ -51,9 +73,16 @@ jobs:
       # The version rust-toolchain.toml pins: keep the two the same.
       - uses: dtolnay/rust-toolchain@1.100.0
 
+      # A ready-made cargo-about where there is one; built from source, with its
+      # command line, where there isn't (Intel Macs).
       - uses: taiki-e/install-action@v2
+        continue-on-error: true
         with:
           tool: cargo-about@0.9.3
+          fallback: none
+      - name: cargo-about
+        shell: bash
+        run: command -v cargo-about || cargo install cargo-about --locked --features cli --version 0.9.3
 
       - name: Linux packages
         if: runner.os == 'Linux'
@@ -77,6 +106,7 @@ jobs:
   source:
     name: Full source with mGBA
     needs: [checks, version]
+    if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,6 +123,7 @@ jobs:
   release:
     name: Draft release
     needs: [build, source]
+    if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

@@ -322,7 +322,7 @@ pactlocke --demo-run rom.gba --open ruleset --shot shot.png
 
 ### Releases
 
-Pushing a version tag that matches `Cargo.toml`'s version (`git tag v0.1.0`, then `git push origin v0.1.0`) runs every CI check, then builds the app for Windows, Linux and both kinds of Mac and opens a **draft** release to review and publish. Each download carries `LICENSE`, `NOTICE.md`, `THIRD-PARTY-LICENSES.html` (every Rust crate's licence, from [cargo-about](https://github.com/EmbarkStudios/cargo-about)), a `licences` folder (mGBA's, inih's, the crates' notice files and the fonts') and `SOURCE.txt`. The release also has the complete source with the mGBA submodule, which GitHub's own source downloads leave out, and `SHA256SUMS.txt`.
+Pushing a version tag that matches `Cargo.toml`'s version (`git tag v0.1.0`, then `git push origin v0.1.0`) runs every CI check (or skips them when CI already passed on that commit), then builds the app for Windows, Linux and both kinds of Mac and opens a **draft** release to review and publish. Each download carries `LICENSE`, `NOTICE.md`, `THIRD-PARTY-LICENSES.html` (every Rust crate's licence, from [cargo-about](https://github.com/EmbarkStudios/cargo-about)), a `licences` folder (mGBA's, inih's, the crates' notice files and the fonts') and `SOURCE.txt`. The release also has the complete source with the mGBA submodule, which GitHub's own source downloads leave out, and `SHA256SUMS.txt`.
 
 To pack one for your own machine (needs `cargo install cargo-about --locked --features cli`):
 
