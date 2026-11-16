@@ -328,7 +328,7 @@ pactlocke --demo-run rom.gba --open ruleset --shot shot.png
 
 ## Licence and credits
 
-Pactlocke is licensed **GPL-3.0-or-later**.
+Pactlocke is licensed **GPL-3.0-or-later**: see [LICENSE](LICENSE), and [NOTICE.md](NOTICE.md) for the copyright notice and the licences of what it builds on.
 
 It builds on [mGBA](https://mgba.io) (emulation), [iroh](https://iroh.computer) (networking), [egui](https://github.com/emilk/egui) (interface) and [Universal Pokémon Randomizer FVX](https://github.com/upr-fvx/universal-pokemon-randomizer-fvx) (randomizing). The Romhacks listed are their authors' work: Radical Red by soupercell, Unbound by Skeli, Gaia by Spherical Ice, Glazed by Gamer2020, Heart and Soul by the Pokémon HnS Development team, R.O.W.E. by Rioluwott.
 
