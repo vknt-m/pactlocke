@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The release workflow runs every check before it builds.
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
@@ -22,6 +24,17 @@ jobs:
           if [ -n "$found" ]; then
             echo "Game files must never be committed:"; echo "$found"; exit 1
           fi
+
+  licences:
+    name: Every crate's licence is accepted
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.3
+      - name: cargo about
+        run: cargo about generate --locked --fail -m crates/pactlocke-app/Cargo.toml about.hbs -o /dev/null
 
   build:
     name: Build and test (${{ matrix.name }})

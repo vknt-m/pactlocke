@@ -36,7 +36,7 @@ Pactlocke is a desktop app with a GBA emulator built in. You bring your own ROM,
 
 ### Download a release
 
-Download the latest version for your system from the [Releases page](https://github.com/vknt-m/pactlocke/releases), unzip it anywhere, and run `pactlocke`. There is nothing to install: the app keeps its data in a `data` folder beside itself.
+Download the latest version for your system from the [Releases page](https://github.com/vknt-m/pactlocke/releases), unzip it anywhere, and run `pactlocke`. There is nothing to install: the app keeps its data in a `data` folder beside itself. Each download includes the licences of everything built into it.
 
 Everyone in a Run with friends needs the same version.
 
@@ -286,12 +286,12 @@ The project's vocabulary is in [`GLOSSARY.md`](GLOSSARY.md).
 | `crates/pactlocke-dev` | Developer-only tools: a ROM scanner that drafts Game Profiles, and an acceptance runner. |
 | `third_party/mgba` | libmgba, as a git submodule. |
 | `docs/` | The test rig guide, and this README's images. |
-| `scripts/` | Checks, the Docker CI job, and the multi-machine test rig. |
+| `scripts/` | Checks, release packaging, the Docker CI job, and the multi-machine test rig. |
 
 ### Checks
 
 ```bash
-bash scripts/check.sh           # what CI runs: formatting, clippy, docs, every test
+bash scripts/check.sh           # what CI runs: formatting, clippy, docs, licences, every test
 bash scripts/check.sh --quick   # formatting and clippy only
 bash scripts/ci-docker.sh       # CI's Linux job, in Docker
 ```
@@ -319,6 +319,19 @@ pactlocke --demo-run rom.gba --open ruleset --shot shot.png
 ```
 
 `--demo-run ROM` starts a solo Run, `--demo-lobby ROM` hosts a Lobby, and `--demo-coop ROM` shows a made-up Run with three Players, with no network behind it. `--open` takes `settings`, `sound`, `party`, `links`, `areas`, `graveyard` or `ruleset`. The image in this README was made this way.
+
+### Releases
+
+Pushing a version tag that matches `Cargo.toml`'s version (`git tag v0.1.0`, then `git push origin v0.1.0`) runs every CI check, then builds the app for Windows, Linux and both kinds of Mac and opens a **draft** release to review and publish. Each download carries `LICENSE`, `NOTICE.md`, `THIRD-PARTY-LICENSES.html` (every Rust crate's licence, from [cargo-about](https://github.com/EmbarkStudios/cargo-about)), a `licences` folder (mGBA's, inih's, the crates' notice files and the fonts') and `SOURCE.txt`. The release also has the complete source with the mGBA submodule, which GitHub's own source downloads leave out, and `SHA256SUMS.txt`.
+
+To pack one for your own machine (needs `cargo install cargo-about --locked --features cli`):
+
+```bash
+bash scripts/package.sh windows-x86_64    # or linux-x86_64, macos-arm64, macos-x86_64
+bash scripts/source-archive.sh
+```
+
+A new dependency whose licence isn't accepted in [`about.toml`](about.toml) fails `scripts/check.sh` and CI.
 
 ### Contributing
 

@@ -22,8 +22,10 @@ none of them is relicensed by Pactlocke's GPL.
 
 - **mGBA** (libmgba, the emulator core). Copyright © 2013–2026 Jeffrey Pfau.
   Mozilla Public License 2.0. Its source, unmodified, is the `third_party/mgba`
-  submodule, from <https://github.com/mgba-emu/mgba>; its own third-party
-  components and their licences are listed in its README.
+  submodule, from <https://github.com/mgba-emu/mgba>. As Pactlocke builds it,
+  mGBA includes two pieces of its own bundled code: **inih**, copyright ©
+  2009–2020 Ben Hoyt, under the BSD 3-Clause licence, and the **LZMA SDK** by
+  Igor Pavlov, in the public domain. Its other bundled libraries are not built.
 - **egui and eframe** (the interface), by Emil Ernerfeldt and contributors.
   MIT or Apache-2.0.
 - **iroh** (networking), by n0 and contributors. MIT or Apache-2.0.
@@ -32,6 +34,13 @@ none of them is relicensed by Pactlocke's GPL.
   compatible with the GPL: mostly MIT and Apache-2.0, and also BSD-2-Clause,
   BSD-3-Clause, ISC, Zlib, Unicode-3.0, BSL-1.0, CDLA-Permissive-2.0 and
   MPL-2.0. Each crate's licence and copyright notice ships with its source.
+
+Every release of the app carries these licences in full: THIRD-PARTY-LICENSES.html
+(made by [cargo-about](https://github.com/EmbarkStudios/cargo-about) from
+[about.toml](about.toml)) holds each crate's licence text, and the `licences`
+folder holds mGBA's and inih's licences, the crates' notice files and the
+fonts' licences. `cargo about` fails the build when a crate's licence isn't one
+of those accepted in about.toml.
 
 ### Fonts
 

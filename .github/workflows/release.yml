@@ -1,0 +1,118 @@
+name: Release
+
+# Pushing a version tag (git tag v0.1.0 && git push origin v0.1.0) runs every
+# CI check, builds the app on each platform with its licences, packs the full
+# source with the mGBA submodule, and opens a draft release with all of it.
+# Nothing is public until the draft is published by hand.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  version:
+    name: Tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match Cargo.toml's version $version"; exit 1
+          fi
+
+  build:
+    name: Package (${{ matrix.name }})
+    needs: [checks, version]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { name: Windows x86-64, os: windows-latest, platform: windows-x86_64 }
+          - { name: Linux x86-64, os: ubuntu-latest, platform: linux-x86_64 }
+          - { name: macOS Apple Silicon, os: macos-latest, platform: macos-arm64 }
+          - { name: macOS Intel, os: macos-15-intel, platform: macos-x86_64 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # The version rust-toolchain.toml pins: keep the two the same.
+      - uses: dtolnay/rust-toolchain@1.100.0
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.3
+
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libx11-dev \
+            libxcursor-dev libxrandr-dev libxi-dev
+
+      - name: Build and pack with licences
+        shell: bash
+        run: bash scripts/package.sh ${{ matrix.platform }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            target/dist/*.zip
+            target/dist/*.tar.gz
+          if-no-files-found: error
+
+  source:
+    name: Full source with mGBA
+    needs: [checks, version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Pack
+        run: bash scripts/source-archive.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source
+          path: target/dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    needs: [build, source]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      # 0.x versions and versions with a suffix (v1.0.0-rc.1) are pre-releases.
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""
+          case "$GITHUB_REF_NAME" in v0.*|*-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Pactlocke $GITHUB_REF_NAME" \
+            --generate-notes \
+            --draft $pre
