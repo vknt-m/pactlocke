@@ -250,7 +250,7 @@ impl<G: PlayedGame> RunningGame<G> {
             self.game.unpatch(*addr, bytes.len());
         }
         let plan = crate::BootPlan::Retry(checkpoint.clone());
-        let booted = match boot_core(self.game.core_mut(), &plan, 0) {
+        let booted = match boot_core(self.game.core_mut(), &plan, self.engine.now_ms()) {
             Ok(booted) => booted,
             Err(e) => {
                 for (addr, bytes) in &patched {
@@ -258,6 +258,11 @@ impl<G: PlayedGame> RunningGame<G> {
                 }
                 return Err(format!("the checkpoint couldn't be restored: {e}"));
             }
+        };
+        let from = crate::BootedFrom {
+            boot: from.0,
+            frame: from.1,
+            clock_ms: booted.clock_ms,
         };
         let mut engine = self.engine.retry(stored, seq, checkpoint);
         engine.booted(booted);
@@ -534,6 +539,10 @@ impl<G: PlayedGame> CoreAdapter for RunningGame<G> {
 
     fn set_clock(&mut self, epoch_ms: i64) {
         self.core().set_clock(epoch_ms);
+    }
+
+    fn clock_ms(&mut self) -> i64 {
+        self.core().clock_ms()
     }
 
     fn frame(&self) -> Frame {

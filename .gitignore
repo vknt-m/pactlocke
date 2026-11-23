@@ -33,5 +33,10 @@ build/
 # Local test data: Run files, logs and install keys from manual tests
 RUNLOGSFROMMANUALTEST/
 
-# Agent workspace: never part of the project
+# Agent workspace and private notes: never part of the project
 .claude/
+CLAUDE.md
+.scratch/
+docs/agents/
+docs/research/
+*Research Report.md

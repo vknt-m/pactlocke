@@ -62,6 +62,9 @@ impl CoreAdapter for FakeCore {
         Ok(())
     }
     fn set_clock(&mut self, _epoch_ms: i64) {}
+    fn clock_ms(&mut self) -> i64 {
+        0
+    }
     fn frame(&self) -> Frame {
         let n = self.frames_run.load(Ordering::SeqCst);
         let mut rgba = vec![0u8; 4 * 2 * 2];

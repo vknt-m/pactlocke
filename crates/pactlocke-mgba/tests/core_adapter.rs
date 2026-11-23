@@ -47,6 +47,39 @@ fn the_game_clock_advances_with_emulated_time_not_the_wall_clock() {
     assert_eq!((now.hour, now.minute, now.second), (0x00, 0x01, 0x00));
 }
 
+/// Runs `frames` frames with no keys held.
+fn run(core: &mut MgbaCore, frames: u32) {
+    for _ in 0..frames {
+        core.run_frame(Keys::NONE);
+    }
+}
+
+#[test]
+fn a_checkpoint_restored_on_a_core_that_ran_on_reads_the_time_it_was_taken() {
+    // A Retry restores a Run Checkpoint on the core that kept playing after it.
+    let mut core = powered_on();
+    core.set_clock(NEW_YEAR_2026_UTC_MS);
+    run(&mut core, 3600);
+    let checkpoint = core.checkpoint();
+    run(&mut core, 3 * 3600);
+
+    core.set_clock(NEW_YEAR_2026_UTC_MS);
+    core.restore(&checkpoint).expect("the checkpoint restores");
+    core.run_frame(Keys::NONE);
+
+    let now = read_rtc(&mut core);
+    assert_eq!((now.hour, now.minute, now.second), (0x00, 0x01, 0x00));
+}
+
+#[test]
+fn the_clock_reads_its_power_on_time_plus_the_time_emulated() {
+    let mut core = powered_on();
+    core.set_clock(NEW_YEAR_2026_UTC_MS);
+    run(&mut core, 3600);
+    // 3,600 frames of 280,896 cycles at 16,777,216 Hz, in whole milliseconds.
+    assert_eq!(core.clock_ms(), NEW_YEAR_2026_UTC_MS + 60_273);
+}
+
 #[test]
 fn a_file_that_is_not_a_gba_rom_is_refused() {
     let mut core = MgbaCore::new();

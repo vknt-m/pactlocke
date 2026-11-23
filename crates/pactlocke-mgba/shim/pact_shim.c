@@ -170,12 +170,21 @@ bool pact_core_load_rom(PactCore* pc, const uint8_t* data, size_t len) {
 }
 
 void pact_core_set_clock(PactCore* pc, int64_t epoch_ms) {
+	/* The fake epoch adds emulated time since power-on to the value. A
+	 * savestate carries that time but not the value, so the clock is set by
+	 * its power-on time, whatever this core has run. */
 	pc->core->rtc.override = RTC_FAKE_EPOCH;
-	/* The fake epoch adds emulated time since power-on to the value, so take
-	 * off what has already run to make the clock read epoch_ms now. */
-	int64_t elapsed_ms = (int64_t) pc->core->frameCounter(pc->core) * pc->core->frameCycles(pc->core) * 1000LL /
-	                     pc->core->frequency(pc->core);
-	pc->core->rtc.value = epoch_ms - elapsed_ms;
+	pc->core->rtc.value = epoch_ms;
+}
+
+/* Emulated time since power-on, as mGBA's fake-epoch clock counts it. */
+static int64_t pact_elapsed_ms(PactCore* pc) {
+	return (int64_t) pc->core->frameCounter(pc->core) * (pc->core->frameCycles(pc->core) * 1000LL) /
+	       pc->core->frequency(pc->core);
+}
+
+int64_t pact_core_clock_ms(PactCore* pc) {
+	return pc->core->rtc.value + pact_elapsed_ms(pc);
 }
 
 void pact_core_run_frame(PactCore* pc, uint32_t keys) {

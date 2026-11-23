@@ -13,6 +13,7 @@ unsafe extern "C" {
 
     pub fn pact_core_load_rom(pc: *mut PactCore, data: *const u8, len: usize) -> bool;
     pub fn pact_core_set_clock(pc: *mut PactCore, epoch_ms: i64);
+    pub fn pact_core_clock_ms(pc: *mut PactCore) -> i64;
 
     pub fn pact_core_run_frame(pc: *mut PactCore, keys: u32);
 

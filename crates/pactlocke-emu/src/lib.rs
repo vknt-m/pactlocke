@@ -177,9 +177,12 @@ pub trait CoreAdapter: Send {
     /// Replace the game's save memory, as if the cartridge held this save.
     /// Done right after `load_rom`, the game boots with it.
     fn load_save_memory(&mut self, save: &[u8]) -> Result<(), CoreError>;
-    /// Start the fake-epoch clock at this Unix time in milliseconds. It then
-    /// advances with emulated time only.
+    /// Set the fake-epoch clock by what it read at power-on, as a Unix time
+    /// in milliseconds. It advances with emulated time only, so a restored
+    /// checkpoint reads the time it was taken at, whatever this core ran since.
     fn set_clock(&mut self, epoch_ms: i64);
+    /// What the clock reads now, in Unix milliseconds.
+    fn clock_ms(&mut self) -> i64;
     /// The current video frame.
     fn frame(&self) -> Frame;
     /// The rate of the samples `drain_audio` returns.

@@ -5,8 +5,9 @@
 
 mod support;
 
-use pactlocke_run::{LogBody, Ruleset, RunCommand, ShadowState};
-use support::streams::{Table, key};
+use pactlocke_emu::CoreAdapter;
+use pactlocke_run::{LogBody, Ruleset, RunClock, RunCommand, ShadowState};
+use support::streams::{Leaving, Table, key};
 use support::{PIDGEY, RATTATA, route_1};
 
 fn with_retries(retries: u8) -> Ruleset {
@@ -162,6 +163,53 @@ fn when_everyone_votes_yes_every_game_goes_back_together_and_the_shadows_follow(
         assert_eq!(shadow.boot(), 2, "following the boot after the Retry");
         assert!(shadow.confirmed() > 400 && shadow.hashes_matched() >= 6);
     }
+}
+
+#[test]
+fn a_retry_an_hour_later_starts_the_game_clock_at_real_time_and_the_shadows_keep_up() {
+    let mut table = Table::start(&["Red", "Blue"], with_retries(1));
+    both_play(&mut table, 300);
+    table.saves(0);
+    both_play(&mut table, 200);
+    let before: Vec<i64> = (0..2)
+        .map(|i| table.apps[i].running.game_mut().core.clock_ms())
+        .collect();
+
+    // An hour of real time passes before everyone votes to go back.
+    table.clock.advance_ms(3_600_000);
+    table.votes(0, 1, true);
+    table.votes(1, 1, true);
+    both_play(&mut table, 20);
+
+    let now = table.clock.now_ms();
+    for (i, before) in before.into_iter().enumerate() {
+        let reads = table.apps[i].running.game_mut().core.clock_ms();
+        assert!(
+            (now - reads).abs() < 2_000,
+            "{i}: the game reads {reads}, real time is {now}"
+        );
+        assert!(reads > before, "{i}: never back in time");
+    }
+
+    // Every Shadow boots the new boot on the same clock, so it still matches.
+    both_play(&mut table, 600);
+    table.waits(1000);
+    for (watcher, watched) in [(0, 1), (1, 0)] {
+        let shadow = table.apps[watcher].shadow_of(key(watched));
+        assert_eq!(shadow.state(), ShadowState::Matched, "{watcher} watching {watched}");
+        assert_eq!(shadow.boot(), 2);
+        assert!(shadow.hashes_matched() >= 6);
+    }
+
+    // Blue leaves and resumes: the Shadow of Red restarts from its checkpoint
+    // on the clock of Red's boot after the Retry, and still matches.
+    table.leaves_and_resumes(1, Leaving::Suspends);
+    both_play(&mut table, 600);
+    table.waits(1000);
+    let shadow = table.apps[1].shadow_of(key(0));
+    assert_eq!(shadow.state(), ShadowState::Matched);
+    assert_eq!(shadow.boot(), 2);
+    assert!(shadow.hashes_matched() >= 2, "compared since the resume");
 }
 
 #[test]

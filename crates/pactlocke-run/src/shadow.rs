@@ -65,6 +65,8 @@ pub struct ShadowGame<G: PlayedGame> {
     game: G,
     /// Which boot of the Player's game it copies.
     boot: u32,
+    /// That boot's clock as at power-on (Unix milliseconds).
+    clock_ms: i64,
     /// Frames run on the Player's real keys.
     confirmed: u64,
     /// Real keys received and not yet run, from frame `confirmed + predicted.len()`
@@ -110,6 +112,7 @@ impl<G: PlayedGame> ShadowGame<G> {
         Self {
             game,
             boot: 1,
+            clock_ms,
             confirmed: 0,
             keys: VecDeque::new(),
             items: VecDeque::new(),
@@ -136,9 +139,10 @@ impl<G: PlayedGame> ShadowGame<G> {
     /// A Shadow restored from its own checkpoint, kept in the Run file when
     /// this app last left the Run: it goes on from there, with what it had
     /// seen of the Player's Pokémon. `game` has the same ROM loaded and has
-    /// run nothing; its clock is set to `clock_ms` as at power-on.
+    /// run nothing; its clock is the checkpoint's, or `clock_ms` as at
+    /// power-on for a checkpoint kept before the clock was.
     pub fn from_checkpoint(game: G, clock_ms: i64, from: &ShadowCheckpoint) -> Result<Self, CoreError> {
-        let mut shadow = Self::power_on(game, clock_ms);
+        let mut shadow = Self::power_on(game, from.clock_ms.unwrap_or(clock_ms));
         shadow.game.core_mut().restore(&from.core)?;
         for (addr, bytes) in &from.patches {
             let mut original = vec![0; bytes.len()];
@@ -181,6 +185,7 @@ impl<G: PlayedGame> ShadowGame<G> {
                 frame: self.confirmed,
             },
             core: self.game.core_mut().checkpoint(),
+            clock_ms: Some(self.clock_ms),
             patches: self.patches.iter().map(|(a, b)| (*a, b.clone())).collect(),
             owned: self.seen.owned.iter().copied().collect(),
             fainted: self.seen.fainted.iter().copied().collect(),
@@ -485,7 +490,11 @@ impl<G: PlayedGame> ShadowGame<G> {
     /// Plays the old boot up to the checkpoint the next boot began from,
     /// then goes back to it and takes in the next boot's chunks.
     fn toward_next_boot(&mut self, max_frames: u64) -> u64 {
-        let (from_boot, from_frame) = self.next_boot.as_ref().expect("a next boot").from;
+        let crate::BootedFrom {
+            boot: from_boot,
+            frame: from_frame,
+            ..
+        } = self.next_boot.as_ref().expect("a next boot").from;
         if !self.guessed.is_empty() {
             self.drop_guesses();
         }
@@ -525,6 +534,9 @@ impl<G: PlayedGame> ShadowGame<G> {
             self.game.core_mut().patch_rom(*addr, bytes);
         }
         let next = self.next_boot.take().expect("a next boot");
+        // The new boot's clock, as the Player's game set it going back.
+        self.game.core_mut().set_clock(next.from.clock_ms);
+        self.clock_ms = next.from.clock_ms;
         self.boot = next.boot;
         self.patches = kept.patches;
         self.confirmed = 0;
@@ -621,6 +633,9 @@ pub struct ShadowCheckpoint {
     pub at: crate::GamePoint,
     /// The core's savestate and save memory.
     pub core: Checkpoint,
+    /// The clock of the boot it follows, as at power-on (Unix
+    /// milliseconds); `None` in a Run file from before it was kept.
+    pub clock_ms: Option<i64>,
     /// Every ROM patch active then, by address.
     pub patches: Vec<(u32, Vec<u8>)>,
     /// The PIDs it had seen in the Player's party or PC.
@@ -641,8 +656,8 @@ struct Kept {
 /// The Player's boot after a Retry, before the Shadow follows it.
 struct NextBoot {
     boot: u32,
-    /// The boot and frame of the Run Checkpoint it began from.
-    from: (u32, u64),
+    /// The Run Checkpoint it began from, and its clock.
+    from: crate::BootedFrom,
     chunks: Vec<InputChunk>,
 }
 

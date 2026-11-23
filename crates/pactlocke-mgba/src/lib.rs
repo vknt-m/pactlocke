@@ -195,6 +195,11 @@ impl CoreAdapter for MgbaCore {
         unsafe { ffi::pact_core_set_clock(self.ptr(), epoch_ms) }
     }
 
+    fn clock_ms(&mut self) -> i64 {
+        // SAFETY: valid core.
+        unsafe { ffi::pact_core_clock_ms(self.ptr()) }
+    }
+
     fn frame(&self) -> Frame {
         let (mut width, mut height) = (0u32, 0u32);
         // SAFETY: the video buffer holds width*height 32-bit pixels for as long

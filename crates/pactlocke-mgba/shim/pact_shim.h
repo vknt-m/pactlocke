@@ -21,8 +21,11 @@ void pact_core_free(PactCore* pc);
 
 /* Copies the ROM into memory and powers on. False if it isn't a GBA ROM. */
 bool pact_core_load_rom(PactCore* pc, const uint8_t* data, size_t len);
-/* Fake-epoch clock: reads epoch_ms now and advances with emulated time. */
+/* Fake-epoch clock: reads epoch_ms at power-on and advances with emulated
+ * time, so a restored savestate reads its own time from it. */
 void pact_core_set_clock(PactCore* pc, int64_t epoch_ms);
+/* What the clock reads now, in Unix milliseconds. */
+int64_t pact_core_clock_ms(PactCore* pc);
 
 void pact_core_run_frame(PactCore* pc, uint32_t keys);
 

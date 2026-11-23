@@ -95,7 +95,11 @@ fn a_game_started_again_with_no_retry_behind_it_is_flagged_as_a_savestate_load()
     let mut table = Table::start(&["Red", "Blue"], with_retries());
     everyone_plays(&mut table, 200);
     let mut restart = other_presses(1, 2, 0, 15);
-    restart.booted_from = Some((1, 60));
+    restart.booted_from = Some(pactlocke_run::BootedFrom {
+        boot: 1,
+        frame: 60,
+        clock_ms: 0,
+    });
     table.forges(1, restart);
     everyone_plays(&mut table, 20);
     assert_eq!(table.apps[1].log.flags(), [], "the log gets a while to show a Retry");

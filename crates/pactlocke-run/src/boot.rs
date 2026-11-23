@@ -58,7 +58,17 @@ pub fn boot_core<C: CoreAdapter>(core: &mut C, plan: &BootPlan, now_ms: i64) -> 
                 patches: BTreeMap::new(),
             })
         }
-        BootPlan::Suspended(from) | BootPlan::Retry(from) => restore(core, from),
+        BootPlan::Suspended(from) => restore(core, from),
+        BootPlan::Retry(from) => {
+            // A new boot: the clock catches up with real time, never back.
+            let mut booted = restore(core, from)?;
+            let reads = core.clock_ms();
+            if now_ms > reads {
+                booted.clock_ms += now_ms - reads;
+                core.set_clock(booted.clock_ms);
+            }
+            Ok(booted)
+        }
         BootPlan::Rebuild { from, keys, stamped } => {
             let mut booted = restore(core, from)?;
             let mut stamped = stamped.iter().peekable();

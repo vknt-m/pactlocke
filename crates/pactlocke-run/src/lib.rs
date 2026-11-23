@@ -58,8 +58,8 @@ pub use shared_log::{
 };
 pub use storage::{InputBatch, MemoryStorage, RunInfo, RunStorage, Stamped, StorageError, StoredCheckpoint, StoredRun};
 pub use stream::{
-    Added, CHUNK_FRAMES, FrameHash, HASH_EVERY, InputChunk, Mark, Outgoing, PlayerKey, Received, Rewrite, StreamHub,
-    StreamMessage, StreamOut, StreamStore, StreamWant,
+    Added, BootedFrom, CHUNK_FRAMES, FrameHash, HASH_EVERY, InputChunk, Mark, Outgoing, PlayerKey, Received, Rewrite,
+    StreamHub, StreamMessage, StreamOut, StreamStore, StreamWant,
 };
 pub use view::{
     Doing, FeedEntry, FeedIcon, FeedKind, GameOverView, Grave, LevelCapView, NativeOptionView, NicknameWanted, RunView,

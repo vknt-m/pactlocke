@@ -308,6 +308,7 @@ fn a_run_with_friends_keeps_its_run_log_in_the_run_file_and_is_listed_so() {
     let shadow = |frame: u64| pactlocke_run::ShadowCheckpoint {
         at: pactlocke_run::GamePoint { boot: 1, frame },
         core: core_checkpoint(0x33),
+        clock_ms: Some(1_767_225_600_000 + frame as i64),
         patches: vec![(0x0800_1000, vec![1, 2, 3])],
         owned: vec![0xB1, 0xB2],
         fainted: vec![0xB2],
@@ -331,6 +332,20 @@ fn a_run_with_friends_keeps_its_run_log_in_the_run_file_and_is_listed_so() {
         "the newest, in place of the one before"
     );
     assert!(library.open_run(&alone.id).unwrap().load().unwrap().log.is_empty());
+
+    // A Run file from before the Shadow Games' clocks were kept still opens:
+    // its Shadow checkpoint has no clock, so the Run's start clock is used.
+    let path = library.dir().join(format!("{}.pactrun", together.id.0));
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("ALTER TABLE shadow_checkpoints DROP COLUMN clock_ms")
+        .unwrap();
+    let stored = library.open_run(&together.id).unwrap().load().unwrap();
+    let older = pactlocke_run::ShadowCheckpoint {
+        clock_ms: None,
+        ..shadow(200)
+    };
+    assert_eq!(stored.shadows, [(blue, older)]);
 }
 
 /// A Run log locked for `ruleset`, with its Host the only Player in it.

@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS shadow_checkpoints (
     frame INTEGER NOT NULL,
     patches BLOB NOT NULL,
     seen TEXT NOT NULL,
-    core BLOB NOT NULL
+    core BLOB NOT NULL,
+    clock_ms INTEGER
 );
 CREATE TABLE IF NOT EXISTS copy_of (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -512,6 +513,15 @@ fn open_database(path: &Path) -> rusqlite::Result<Connection> {
     db.pragma_update(None, "journal_mode", "WAL")?;
     db.pragma_update(None, "synchronous", "NORMAL")?;
     db.execute_batch(SCHEMA)?;
+    // A Run file from before the Shadow Games' clocks were kept.
+    let has_clock: bool = db.query_row(
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('shadow_checkpoints') WHERE name = 'clock_ms'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_clock {
+        db.execute_batch("ALTER TABLE shadow_checkpoints ADD COLUMN clock_ms INTEGER")?;
+    }
     Ok(db)
 }
 
@@ -786,15 +796,16 @@ fn keep_shadow(db: &Connection, player: &PlayerKey, checkpoint: &ShadowCheckpoin
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     let seen = serde_json::to_string(&(&checkpoint.owned, &checkpoint.fainted)).expect("PIDs serialise");
     db.execute(
-        "INSERT OR REPLACE INTO shadow_checkpoints (player, boot, frame, patches, seen, core)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT OR REPLACE INTO shadow_checkpoints (player, boot, frame, patches, seen, core, clock_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             &player[..],
             checkpoint.at.boot,
             checkpoint.at.frame as i64,
             encode_patches(&checkpoint.patches),
             seen,
-            core
+            core,
+            checkpoint.clock_ms
         ],
     )
     .map(drop)
@@ -803,7 +814,7 @@ fn keep_shadow(db: &Connection, player: &PlayerKey, checkpoint: &ShadowCheckpoin
 /// Every Shadow Game's kept checkpoint, by Player.
 fn read_shadows(db: &Connection) -> Result<Vec<(PlayerKey, ShadowCheckpoint)>, StorageError> {
     let rows = db
-        .prepare("SELECT player, boot, frame, patches, seen, core FROM shadow_checkpoints ORDER BY player")
+        .prepare("SELECT player, boot, frame, patches, seen, core, clock_ms FROM shadow_checkpoints ORDER BY player")
         .and_then(|mut query| {
             query
                 .query_map([], |row| {
@@ -814,6 +825,7 @@ fn read_shadows(db: &Connection) -> Result<Vec<(PlayerKey, ShadowCheckpoint)>, S
                         row.get::<_, Vec<u8>>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, Vec<u8>>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
                     ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()
@@ -821,7 +833,7 @@ fn read_shadows(db: &Connection) -> Result<Vec<(PlayerKey, ShadowCheckpoint)>, S
         .map_err(file_error)?;
     let broken = || StorageError::File("a Shadow Game's checkpoint can't be read".into());
     rows.into_iter()
-        .map(|(player, boot, frame, patches, seen, core)| {
+        .map(|(player, boot, frame, patches, seen, core, clock_ms)| {
             let player: PlayerKey = player.try_into().map_err(|_| broken())?;
             let (owned, fainted): (Vec<u32>, Vec<u32>) = serde_json::from_str(&seen).map_err(|_| broken())?;
             let core = zstd::decode_all(&core[..]).map_err(|_| broken())?;
@@ -833,6 +845,7 @@ fn read_shadows(db: &Connection) -> Result<Vec<(PlayerKey, ShadowCheckpoint)>, S
                         frame: frame as u64,
                     },
                     core: decode_core(&core).ok_or_else(broken)?,
+                    clock_ms,
                     patches: decode_patches(&patches).ok_or_else(broken)?,
                     owned,
                     fainted,

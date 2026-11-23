@@ -150,7 +150,10 @@ impl CheatWatch {
             ));
             pace.boot = chunk.boot;
             pace.end = chunk.first_frame;
-            pace.booted_from = chunk.booted_from.map(|(boot, frame)| GamePoint { boot, frame });
+            pace.booted_from = chunk.booted_from.map(|from| GamePoint {
+                boot: from.boot,
+                frame: from.frame,
+            });
         }
         // The allowance refills at 4x up to a burst, plus 4x of any silence.
         let gap = (now_ms - pace.last_ms).max(0) as f64;

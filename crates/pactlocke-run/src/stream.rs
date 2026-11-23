@@ -29,7 +29,7 @@ const MAX_CHANGE_BYTES: usize = 1024;
 const MAX_EARLY_CHUNKS: usize = 256;
 
 const MAGIC: [u8; 2] = *b"IS";
-const VERSION: u8 = 2;
+const VERSION: u8 = 3;
 const CHUNK: u8 = 1;
 const WANT: u8 = 2;
 
@@ -94,9 +94,21 @@ pub struct InputChunk {
     /// Run Checkpoints taken at those boundaries, each placed among the
     /// changes stamped there, so a Shadow takes its own at the same point.
     pub marks: Vec<Mark>,
-    /// For frame 0 of a boot after a Retry: the boot and frame of the
-    /// Player's Run Checkpoint it began from.
-    pub booted_from: Option<(u32, u64)>,
+    /// For frame 0 of a boot after a Retry: where it began, and its clock.
+    pub booted_from: Option<BootedFrom>,
+}
+
+/// Where a boot after a Retry began: the Player's Run Checkpoint, and the
+/// clock the new boot runs on, which a Shadow sets too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BootedFrom {
+    /// The boot of the Run Checkpoint.
+    pub boot: u32,
+    /// The frame boundary of the Run Checkpoint.
+    pub frame: u64,
+    /// The new boot's clock as at power-on (Unix milliseconds): see
+    /// `CoreAdapter::set_clock`.
+    pub clock_ms: i64,
 }
 
 /// A Run Checkpoint in a Player's stream: taken at boundary `frame`, after
@@ -124,7 +136,7 @@ impl InputChunk {
                 .sum::<usize>()
             + 48 * self.hashes.len()
             + 11 * self.marks.len()
-            + 13
+            + 21
     }
 }
 
@@ -188,10 +200,11 @@ impl StreamMessage {
                     out.extend_from_slice(&mark.after.to_le_bytes());
                 }
                 match chunk.booted_from {
-                    Some((boot, frame)) => {
+                    Some(from) => {
                         out.push(1);
-                        out.extend_from_slice(&boot.to_le_bytes());
-                        out.extend_from_slice(&frame.to_le_bytes());
+                        out.extend_from_slice(&from.boot.to_le_bytes());
+                        out.extend_from_slice(&from.frame.to_le_bytes());
+                        out.extend_from_slice(&from.clock_ms.to_le_bytes());
                     }
                     None => out.push(0),
                 }
@@ -275,7 +288,11 @@ impl StreamMessage {
                 }
                 let booted_from = match r.u8()? {
                     0 => None,
-                    1 if first_frame == 0 => Some((r.u32()?, r.u64()?)),
+                    1 if first_frame == 0 => Some(BootedFrom {
+                        boot: r.u32()?,
+                        frame: r.u64()?,
+                        clock_ms: r.u64()? as i64,
+                    }),
                     _ => return None,
                 };
                 StreamMessage::Chunk(InputChunk {
@@ -401,7 +418,7 @@ impl StreamOut {
     }
 
     /// A boot after a Retry, from the Player's Run Checkpoint taken at this boot and frame.
-    pub fn after_retry(player: PlayerKey, boot: u32, from: (u32, u64)) -> Self {
+    pub fn after_retry(player: PlayerKey, boot: u32, from: BootedFrom) -> Self {
         let mut out = Self::new(player, boot);
         out.open.booted_from = Some(from);
         out

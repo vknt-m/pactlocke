@@ -166,7 +166,8 @@ impl CoreAdapter for FakeCore {
         self.overlay = writes.to_vec();
     }
 
-    /// RAM and the clock; like a real savestate, not the ROM patches.
+    /// RAM; like a real savestate, not the ROM patches or the clock (the
+    /// header keeps a slot for the clock, which a restore ignores).
     fn checkpoint(&mut self) -> Checkpoint {
         let mut state = Vec::with_capacity(32 + self.ram.len() * 5);
         state.extend_from_slice(&self.frames.to_le_bytes());
@@ -192,7 +193,6 @@ impl CoreAdapter for FakeCore {
         self.frames = u64_at(0);
         self.state = u64_at(8);
         self.writes = u64_at(16);
-        self.clock_ms = u64_at(24) as i64;
         self.ram = state[32..]
             .as_chunks::<5>()
             .0
@@ -213,8 +213,14 @@ impl CoreAdapter for FakeCore {
         Ok(())
     }
 
+    /// The clock as at power-on: it reads `epoch_ms` plus the time emulated since.
     fn set_clock(&mut self, epoch_ms: i64) {
         self.clock_ms = epoch_ms;
+    }
+
+    /// A GBA frame is 280,896 cycles at 16,777,216 Hz.
+    fn clock_ms(&mut self) -> i64 {
+        self.clock_ms + (self.frames as i64 * 280_896_000) / 16_777_216
     }
 
     /// 2x2 pixels showing the state, so two frames of different states differ.
