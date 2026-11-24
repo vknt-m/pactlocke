@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# What CI's build job runs, in the same order, on this machine: formatting,
+# What CI's build job runs, in the same order, on this machine: nothing
+# private tracked (scripts/check-private.sh), formatting,
 # clippy and the docs with warnings as errors, every crate's licence accepted
 # by about.toml, then every test. Run it before every commit of a change; the
 # git hooks in .githooks run the quick parts of it.
@@ -15,6 +16,8 @@ cd "$(dirname "$0")/.."
 quick=false
 [ "${1:-}" = "--quick" ] && quick=true
 
+echo "=== Nothing private"
+bash scripts/check-private.sh
 echo "=== Formatting"
 cargo fmt --all --check
 echo "=== Clippy"
