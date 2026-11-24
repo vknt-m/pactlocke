@@ -308,7 +308,7 @@ fn everyone_but_the_flagged_player_can_vote_a_flag_away() {
     assert_eq!(table.apps[0].log.flags(), []);
 }
 
-/// Ticket 52: a Player who leaves a Run and resumes it gets the others'
+/// A Player who leaves a Run and resumes it gets the others'
 /// frames from while they were away all at once. That backlog was played at
 /// 4x or slower, so it is no flag; new frames faster than 4x after it are.
 #[test]
