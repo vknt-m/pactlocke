@@ -7,7 +7,8 @@ use std::path::PathBuf;
 
 use pactlocke_emu::{CoreAdapter, Keys};
 use pactlocke_game::{
-    Capability, Game, Method, ProfileGame, ProfileStore, RomIdentity, Rule, ScriptStatus, SourceKind, level_cap_sites,
+    Capability, Change, Game, MapMusicState, Method, ProfileGame, ProfileStore, RomIdentity, Rule, ScriptStatus,
+    SourceKind, level_cap_sites,
 };
 use pactlocke_mgba::MgbaCore;
 
@@ -351,4 +352,64 @@ fn party_icons_read_from_the_real_rom_are_each_species_own_32x32_picture() {
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     encoder.write_header().unwrap().write_image_data(&sheet).unwrap();
+}
+
+#[test]
+fn map_music_left_paused_on_the_overworld_plays_again_once_restarted() {
+    let Some(rom) = rom() else {
+        eprintln!(
+            "skipped: set PACTLOCKE_ROMS to a folder with your own {}, or PACTLOCKE_ROM to it",
+            GAME.file
+        );
+        return;
+    };
+    let store = ProfileStore::from_env().unwrap();
+    let RomIdentity::Profiled { profile, .. } = store.identify(&rom) else {
+        panic!("{} should be profiled", GAME.id);
+    };
+    let bgm_status = profile
+        .symbols
+        .map_music
+        .expect("the profile says where map music is")
+        .bgm_player
+        + 4;
+    let mut core = MgbaCore::new();
+    core.load_rom(&rom).unwrap();
+    core.set_clock(1_767_225_600_000);
+    let mut game = ProfileGame::new(profile, rom, core);
+    let mut frame = 0u32;
+    while !(game.at_safe_overworld_point() && game.script().status == ScriptStatus::Idle) {
+        assert!(frame < 9000, "the overworld was never reached");
+        let keys = if frame % 16 < 3 { Keys::A } else { Keys::NONE };
+        game.memory_mut().run_frame(keys);
+        frame += 1;
+    }
+    play(&mut game, "w 120");
+
+    // The Player's room: Pallet Town's song, playing.
+    let music = game.map_music().expect("read");
+    assert_ne!(music.song, 0);
+    assert_eq!(music.state, MapMusicState::Playing);
+    assert!(!music.paused, "{music:?}");
+
+    // Left paused, as Gaia's evolution scene leaves it: the game itself
+    // never starts it again.
+    let mut status = [0u8; 4];
+    game.memory_mut().read(bgm_status, &mut status);
+    let status = u32::from_le_bytes(status);
+    game.memory_mut().write32(bgm_status, status | 0x8000_0000);
+    play(&mut game, "w 300");
+    assert!(game.map_music().unwrap().paused, "the game leaves it paused");
+
+    for change in game.restart_map_music().unwrap() {
+        let Change::Write { addr, bytes } = change else {
+            panic!("a restart only writes RAM: {change:?}");
+        };
+        game.memory_mut().write(addr, &bytes);
+    }
+    play(&mut game, "w 10");
+    let restarted = game.map_music().unwrap();
+    assert_eq!(restarted.song, music.song, "the same song");
+    assert_eq!(restarted.state, MapMusicState::Playing);
+    assert!(!restarted.paused, "playing again: {restarted:?}");
 }

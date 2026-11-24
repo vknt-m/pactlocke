@@ -20,14 +20,14 @@ pub use caps::{LevelCap, LevelCapDef, MAX_LEVEL, level_cap_sites};
 pub use fake::FakeGame;
 pub use fake_core::{FakeCore, SAVE_KEYS};
 pub use game::{
-    Actions, AvatarRoom, Badges, Battle, BattleKind, Battler, Change, Game, GameError, Memory, OAM, OBJ_PALETTES,
-    OBJ_TILES, PartyStats, Pokemon, ScriptContext, ScriptStatus, Side, SpriteImage, StoredPokemon, Whereabouts,
-    lead_of,
+    Actions, AvatarRoom, Badges, Battle, BattleKind, Battler, Change, Game, GameError, MapMusic, MapMusicState, Memory,
+    OAM, OBJ_PALETTES, OBJ_TILES, PartyStats, Pokemon, ScriptContext, ScriptStatus, Side, SpriteImage, StoredPokemon,
+    Whereabouts, lead_of,
 };
 pub use icons::{ICON_SIZE, party_icon_rgba};
 pub use profile::{
-    Bit, BoxFormat, ExpandedFlags, Family, GameProfile, GateDef, HexBytes, Layout, Method, OptionDef, PatchSite, Place,
-    ROM_BASE, RuleMethods, SCHEMA_VERSION, SupportStatus, Symbols, SyncGates,
+    Bit, BoxFormat, ExpandedFlags, Family, GameProfile, GateDef, HexBytes, Layout, MapMusicSymbols, Method, OptionDef,
+    PatchSite, Place, ROM_BASE, RuleMethods, SCHEMA_VERSION, SupportStatus, Symbols, SyncGates,
 };
 pub use profile_game::ProfileGame;
 pub use source::{Source, SourceDef, SourceKind};

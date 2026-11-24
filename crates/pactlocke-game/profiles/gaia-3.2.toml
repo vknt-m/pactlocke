@@ -40,6 +40,9 @@ type_names = 0x087FFE00                 # gTypeNames
 message_buffer = 0x02021D18             # gStringVar4
 # Gaia keeps the Bag in RAM, outside save block 1 (its SetBagPocketsPointers).
 balls_pocket = 0x0203C8C0
+# FireRed's: sCurrentMapMusic, sMapMusicState, gMPlayInfo_BGM (checked in a
+# replay, where the evolution scene left the grove's song paused).
+map_music = { song = 0x03000FC0, state = 0x03000FC4, bgm_player = 0x03007300 }
 
 [layout]
 # How a Pokémon is stored (pret's struct Pokemon / BoxPokemon).

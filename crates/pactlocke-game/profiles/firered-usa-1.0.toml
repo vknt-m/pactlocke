@@ -35,6 +35,8 @@ items = 0x083DB028
 trainers = 0x0823EAC8                   # gTrainers
 type_names = 0x0824F1A0                 # gTypeNames
 message_buffer = 0x02021D18             # gStringVar4
+# pret sound.c and m4a: sCurrentMapMusic, sMapMusicState, gMPlayInfo_BGM.
+map_music = { song = 0x03000FC0, state = 0x03000FC4, bgm_player = 0x03007300 }
 
 [layout]
 # How a Pokémon is stored (pret's struct Pokemon / BoxPokemon).

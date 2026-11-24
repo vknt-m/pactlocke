@@ -477,6 +477,14 @@ pub enum RunEvent {
     },
     /// Shared Seed: the game's own randomizer has the Run's seed. Said once per Run.
     SeedShared,
+    /// The game left its map music paused on the overworld, so Pactlocke
+    /// started it again: a warp to a map with other music would have waited
+    /// for it forever. `stuck_warp` when a warp was already waiting, and the
+    /// music was unpaused so the warp went on.
+    MapMusicRestarted {
+        /// Whether a warp was already stuck on it.
+        stuck_warp: bool,
+    },
     /// The Run's seed couldn't be given to the game. Said once per Run.
     SeedShareFailed {
         /// Why the seed couldn't be given.

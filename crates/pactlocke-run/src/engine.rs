@@ -3,6 +3,7 @@ mod game_over;
 mod gates;
 mod gifts;
 mod links_party;
+mod map_music;
 mod native_options;
 mod nicknames_and_types;
 mod no_items_and_set_mode;
@@ -82,6 +83,10 @@ pub struct RunEngine {
     natives: Option<Vec<pactlocke_game::NativeOption>>,
     /// Whether the native options were set since the game was booted.
     natives_set_this_boot: bool,
+    /// Frames the map music has been left paused on the quiet overworld.
+    music_paused_for: u32,
+    /// Frames a warp has waited on paused music.
+    warp_stuck_for: u32,
     /// Pokémon caught or given whose nickname hasn't been looked at yet.
     names_to_check: BTreeSet<u32>,
     /// Names the Player gave in the side panel, written at the next quiet moment.
@@ -606,6 +611,8 @@ impl RunEngine {
             items_patched: false,
             natives: None,
             natives_set_this_boot: false,
+            music_paused_for: 0,
+            warp_stuck_for: 0,
             names_to_check: BTreeSet::new(),
             names_given: Vec::new(),
             party_before: None,
@@ -720,6 +727,7 @@ impl RunEngine {
             self.keep_shared_seed(game);
         }
         self.pin_the_rng(game);
+        self.keep_map_music_going(game);
 
         if game.at_safe_overworld_point() {
             self.watch_for_a_reset(game);

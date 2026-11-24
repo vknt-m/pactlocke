@@ -7,8 +7,8 @@ use std::sync::Arc;
 use crate::caps::MAX_LEVEL;
 use crate::compressed;
 use crate::game::{
-    Actions, Badges, Battle, BattleKind, Battler, Change, Game, GameError, Memory, PartyStats, Pokemon, ScriptContext,
-    ScriptStatus, Side, StoredPokemon,
+    Actions, Badges, Battle, BattleKind, Battler, Change, Game, GameError, MapMusic, MapMusicState, Memory, PartyStats,
+    Pokemon, ScriptContext, ScriptStatus, Side, StoredPokemon,
 };
 use crate::profile::HOLD_SCRIPT_LEN;
 use crate::profile::{BoxFormat, GameProfile, Method, PatchSite, Place, ROM_BASE, RngPin, SeedVar};
@@ -26,6 +26,11 @@ const PARTY_SIZE: u8 = 6;
 
 /// How much of the message buffer is searched for a question's words.
 const MESSAGE_LENGTH: usize = 0x200;
+/// The status word in an m4a music player, and its pause bit.
+const BGM_STATUS: u32 = 4;
+const BGM_PAUSED: u32 = 0x8000_0000;
+/// `PlayNewMapMusic`'s map-music state: play `sCurrentMapMusic` on the next tick.
+const MAP_MUSIC_START: u8 = 1;
 
 /// A game read and steered through its Game Profile.
 pub struct ProfileGame<M> {
@@ -868,6 +873,33 @@ impl<M: Memory> Game for ProfileGame<M> {
 
     fn native_options(&mut self) -> Vec<crate::NativeOption> {
         self.profile.native_options()
+    }
+
+    fn map_music(&mut self) -> Option<MapMusic> {
+        let at = self.profile.symbols.map_music?;
+        Some(MapMusic {
+            song: self.u16(at.song),
+            state: MapMusicState::from_byte(self.u8(at.state)),
+            paused: self.u32(at.bgm_player + BGM_STATUS) & BGM_PAUSED != 0,
+        })
+    }
+
+    fn restart_map_music(&mut self) -> Actions {
+        let at = self.profile.symbols.map_music.ok_or(GameError::NoMethod("map music"))?;
+        // `PlayNewMapMusic`'s state: `MapMusicMain` plays the song on its next tick.
+        Ok(vec![Change::Write {
+            addr: at.state,
+            bytes: vec![MAP_MUSIC_START],
+        }])
+    }
+
+    fn unpause_map_music(&mut self) -> Actions {
+        let at = self.profile.symbols.map_music.ok_or(GameError::NoMethod("map music"))?;
+        let status = self.u32(at.bgm_player + BGM_STATUS);
+        Ok(vec![Change::Write {
+            addr: at.bgm_player + BGM_STATUS,
+            bytes: (status & !BGM_PAUSED).to_le_bytes().to_vec(),
+        }])
     }
 
     fn whereabouts(&mut self) -> Option<Whereabouts> {

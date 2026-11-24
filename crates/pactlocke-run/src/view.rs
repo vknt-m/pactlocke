@@ -667,6 +667,15 @@ impl FeedEntry {
                 FeedKind::Run,
                 format!("{rule}: the game's {name} was changed, so it is set back to {value}"),
             ),
+            RunEvent::MapMusicRestarted { stuck_warp: false } => (
+                FeedKind::Run,
+                "The game left its music paused, so it was started again (the next exit would have stayed black)"
+                    .to_owned(),
+            ),
+            RunEvent::MapMusicRestarted { stuck_warp: true } => (
+                FeedKind::Run,
+                "An exit was stuck on a black screen waiting for paused music, so the music was unpaused".to_owned(),
+            ),
             RunEvent::SeedShared => (
                 FeedKind::Run,
                 "Shared Seed: the game's own randomizer has the Run's seed".to_owned(),

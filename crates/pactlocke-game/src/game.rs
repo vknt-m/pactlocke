@@ -199,6 +199,41 @@ pub struct ScriptContext {
     pub position: Option<u32>,
 }
 
+/// The map's music: the song the game has as playing, what its map-music
+/// state machine is doing, and whether the music player is paused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MapMusic {
+    /// The song the game has as the map's music (`sCurrentMapMusic`); 0 for none.
+    pub song: u16,
+    /// What the map-music state machine is doing (`sMapMusicState`).
+    pub state: MapMusicState,
+    /// Whether the music player for map music (`gMPlayInfo_BGM`) is paused.
+    pub paused: bool,
+}
+
+/// What the map-music state machine is doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MapMusicState {
+    /// The song is playing, and nothing is changing it (state 2).
+    Playing,
+    /// Waiting for the old song to stop before a warp goes on (state 5,
+    /// `FadeOutMapMusic`).
+    WaitingToStop,
+    /// Starting a song, or fading between songs.
+    Other(u8),
+}
+
+impl MapMusicState {
+    /// The state machine's byte as the game keeps it.
+    pub fn from_byte(byte: u8) -> Self {
+        match byte {
+            2 => Self::Playing,
+            5 => Self::WaitingToStop,
+            other => Self::Other(other),
+        }
+    }
+}
+
 /// The badges a Player holds, one bit per badge in game order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Badges(pub u8);
@@ -352,6 +387,16 @@ pub trait Game {
     fn set_option(&mut self, name: &str, value: &str) -> Actions;
     /// The rules this game does through its own options.
     fn native_options(&mut self) -> Vec<crate::NativeOption>;
+
+    // Map music.
+
+    /// The map's music, on a game whose Game Profile says where it is kept.
+    fn map_music(&mut self) -> Option<MapMusic>;
+    /// Starts the map's song again, as `PlayNewMapMusic` does: the game
+    /// plays it afresh, unpaused, on its next sound tick.
+    fn restart_map_music(&mut self) -> Actions;
+    /// Unpauses the music player for map music, so a fade-out set on it runs.
+    fn unpause_map_music(&mut self) -> Actions;
 
     // Partner Avatars.
 

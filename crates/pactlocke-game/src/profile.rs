@@ -342,6 +342,23 @@ pub struct Symbols {
     /// Event flags the game keeps outside save block 1 (CFRU's expanded flags in Unbound).
     #[serde(default)]
     pub expanded_flags: Option<ExpandedFlags>,
+    /// Where the game keeps its map music, so music left paused can be
+    /// restarted; none leaves the music alone.
+    #[serde(default)]
+    pub map_music: Option<MapMusicSymbols>,
+}
+
+/// Where the game keeps its map music (pret's `sound.c` and `m4a`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapMusicSymbols {
+    /// The song the game has as the map's music (`sCurrentMapMusic`, a halfword).
+    pub song: u32,
+    /// The map-music state machine (`sMapMusicState`, a byte).
+    pub state: u32,
+    /// The music player for map music (`gMPlayInfo_BGM`); its status word,
+    /// whose top bit is the pause, is 4 bytes in.
+    pub bgm_player: u32,
 }
 
 /// Flags from `first` on, kept a bit per flag from `at` rather than after the

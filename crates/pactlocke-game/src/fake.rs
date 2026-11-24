@@ -30,6 +30,8 @@ const CLOSE_GATE: u32 = 14;
 const OPEN_GATE: u32 = 15;
 const SHARE_SEED: u32 = 16;
 const PIN_RNG: u32 = 17;
+const RESTART_MUSIC: u32 = 18;
+const UNPAUSE_MUSIC: u32 = 19;
 
 const PC_BOXES: u8 = 14;
 const PC_BOX_SLOTS: u8 = 30;
@@ -127,6 +129,10 @@ pub struct FakeGame {
     pub trainer_battle_coming: bool,
     /// The RNG states Pactlocke pinned, one a frame.
     pub rng_pins: Vec<u32>,
+    /// The map's music; none, as on a game whose profile doesn't say where it is.
+    pub map_music: Option<crate::MapMusic>,
+    /// Times the map's song was started again.
+    pub map_music_restarts: u32,
 
     /// The emulator under the fake: driven by keys and changed by every
     /// change applied, so a copy fed the same input stream matches it.
@@ -182,6 +188,8 @@ impl Default for FakeGame {
             shared_seed: None,
             trainer_battle_coming: false,
             rng_pins: Vec::new(),
+            map_music: None,
+            map_music_restarts: 0,
             core: FakeCore::default(),
         }
     }
@@ -219,6 +227,19 @@ impl FakeGame {
                 FAINT_ACTIVE => self.perishing.push(bytes[0]),
                 SHARE_SEED => self.shared_seed = Some(u32::from_le_bytes(bytes[..4].try_into().unwrap())),
                 PIN_RNG => self.rng_pins.push(u32::from_le_bytes(bytes[..4].try_into().unwrap())),
+                RESTART_MUSIC => {
+                    self.map_music_restarts += 1;
+                    if let Some(music) = &mut self.map_music {
+                        // The game plays the song afresh on its next tick.
+                        music.state = crate::MapMusicState::Playing;
+                        music.paused = false;
+                    }
+                }
+                UNPAUSE_MUSIC => {
+                    if let Some(music) = &mut self.map_music {
+                        music.paused = false;
+                    }
+                }
                 CLOSE_GATE => {
                     self.gates_closed.insert(String::from_utf8_lossy(bytes).into_owned());
                 }
@@ -498,6 +519,20 @@ impl Game for FakeGame {
 
     fn native_options(&mut self) -> Vec<crate::NativeOption> {
         self.native_options.clone()
+    }
+
+    fn map_music(&mut self) -> Option<crate::MapMusic> {
+        self.map_music
+    }
+
+    fn restart_map_music(&mut self) -> Actions {
+        self.map_music.ok_or(GameError::NoMethod("map music"))?;
+        Ok(vec![fake_write(RESTART_MUSIC, vec![1])])
+    }
+
+    fn unpause_map_music(&mut self) -> Actions {
+        self.map_music.ok_or(GameError::NoMethod("map music"))?;
+        Ok(vec![fake_write(UNPAUSE_MUSIC, vec![1])])
     }
 
     fn whereabouts(&mut self) -> Option<crate::Whereabouts> {
