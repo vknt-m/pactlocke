@@ -15,7 +15,7 @@ const GAME: romhack::Hack = romhack::Hack {
     single_trainer: 0x264,
     test_scripts: 0x09F0_1000,
     sprites: romhack::EMERALD_SPRITES,
-    variable_gate: None,
+    variable_gates: &[],
     scripts: romhack::Scripts::Expansion { createmon: 0x0A20_B30D },
     poke_ball: 1,
     // Its challenge menu opens before the intro: R through its eight pages,

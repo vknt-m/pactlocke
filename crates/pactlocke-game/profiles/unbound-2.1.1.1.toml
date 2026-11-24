@@ -264,11 +264,17 @@ icon_palette_table = 0x083D4038
 # `setvar 0x8000, <gym or member>`, a CFRU routine that picks the
 # difficulty's trainer into 0x800D (0x09ECA98D for the gyms, 0x09ECE37D for
 # the League), then `trainerbattle 3, 0x800D`; each is followed by its badge
-# or defeat flag. A gate holds that instruction. Mirskle, Véga, Alice,
-# Galavan and Big Mo also have a plain `trainerbattle` with their id, held
-# too. Mirskle's plain one (0x0874148F, the scan's second match;
-# the first, at 0x087413D5, is a type-8 variant that never starts a battle)
-# is the one the acceptance test runs; the rest are checked in this ROM's bytes.
+# or defeat flag. A gate holds that instruction. Mirskle's gym also has a
+# second branch with the same setup that starts the battle with
+# `trainerbattle 15, 0x800D` (one of CFRU's own types) at 0x09E726F2: a
+# scan for types 0 to 9 missed it, and a Player there fought Mirskle
+# unheld. Every gym and League setup was scanned again for any type; no
+# other gate has one. Mirskle, Véga, Alice, Galavan and Big Mo also have a
+# plain `trainerbattle` with their id, held too. Mirskle's plain one
+# (0x0874148F) is the one the acceptance test runs; the one at 0x087413D5
+# is a type-8 battle in a scene that sets flag 0x09A6, not the gym's, and
+# isn't held. The acceptance test also holds Mel's and Mirskle's type-15
+# branch; the rest are checked in this ROM's bytes.
 [sync_gates]
 hold = 0x09FF0000
 
@@ -277,6 +283,7 @@ name = "Mirskle"
 sites = [
     { at = 0x0874148F, expect = "5C 01 06 00 00" },
     { at = 0x09E726D9, expect = "5C 03 0D 80 00" },
+    { at = 0x09E726F2, expect = "5C 0F 0D 80 00" },
 ]
 
 [[sync_gates.gates]]

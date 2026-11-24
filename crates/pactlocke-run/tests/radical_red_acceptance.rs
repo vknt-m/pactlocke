@@ -20,5 +20,5 @@ const GAME: romhack::Hack = romhack::Hack {
     poke_ball: 4,
     intro: "",
     own_randomizer: None,
-    variable_gate: None,
+    variable_gates: &[],
 };

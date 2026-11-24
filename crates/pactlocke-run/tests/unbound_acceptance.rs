@@ -22,10 +22,20 @@ const GAME: romhack::Hack = romhack::Hack {
     poke_ball: 4,
     intro: "",
     own_randomizer: None,
-    variable_gate: Some(romhack::VariableGate {
-        gate: "Mel",
-        script: 0x09E7_309C,
-        opponent: 0x0203_86AE,
-        trainers: &[416, 78, 79, 728, 729, 730],
-    }),
+    variable_gates: &[
+        romhack::VariableGate {
+            gate: "Mel",
+            script: 0x09E7_309C,
+            opponent: 0x0203_86AE,
+            trainers: &[416, 78, 79, 728, 729, 730],
+        },
+        // Mirskle's other branch: the same setup, then `trainerbattle 15,
+        // 0x800D` (one of CFRU's own battle types) at 0x09E726F2.
+        romhack::VariableGate {
+            gate: "Mirskle",
+            script: 0x09E7_26E8,
+            opponent: 0x0203_86AE,
+            trainers: &[6, 72, 73, 719, 720, 721],
+        },
+    ],
 };

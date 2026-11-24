@@ -15,7 +15,7 @@ const GAME: romhack::Hack = romhack::Hack {
     single_trainer: 615,
     test_scripts: 0x09D0_1000,
     sprites: romhack::EMERALD_SPRITES,
-    variable_gate: None,
+    variable_gates: &[],
     scripts: romhack::Scripts::Rowe,
     poke_ball: 4,
     // Its new-game questions (Hard mode and its other modes: No to each),

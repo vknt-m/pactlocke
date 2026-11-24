@@ -46,7 +46,7 @@ pub struct Hack {
     pub sprites: Sprites,
     /// A gate whose battle takes its trainer from a script variable, run from
     /// the start of its own script; `None` where every gate names its trainer.
-    pub variable_gate: Option<VariableGate>,
+    pub variable_gates: &'static [VariableGate],
     /// The forms its script commands take.
     pub scripts: Scripts,
     /// The Poké Ball's item number.
@@ -907,11 +907,18 @@ fn a_held_sync_gate_at_the_hacks_first_leader_lets_the_real_battle_run_once_open
 
 #[test]
 fn a_held_gate_that_picks_its_trainer_at_run_time_lets_that_trainers_battle_run_once_open() {
-    let Some(gate) = GAME.variable_gate.as_ref() else {
+    if GAME.variable_gates.is_empty() {
         eprintln!("skipped: every gate in this hack names its trainer");
         return;
-    };
+    }
     let rom = rom_or_skip!();
+    for gate in GAME.variable_gates {
+        variable_gate_held_then_run(rom.clone(), gate);
+    }
+}
+
+/// One gate whose trainer is picked at run time: held, then its battle once open.
+fn variable_gate_held_then_run(rom: Vec<u8>, gate: &VariableGate) {
     let profile = profiled(&rom);
     let gates = &profile.sync_gates.as_ref().expect("gates").gates;
     let mut d = run_with(
