@@ -389,3 +389,91 @@ fn at_a_full_party_the_newest_pokemon_waiting_on_its_link_goes_to_the_pc_until_i
         "Route 14's PIDGEY still waits, and the party is full again: {party:x?}"
     );
 }
+
+/// A script gives Player `i` this Pokémon at `position`, called from `calls`
+/// (innermost first), then ends.
+fn given(table: &mut Table, i: usize, species: u16, pid: u32, position: u32, calls: &[u32]) {
+    use pactlocke_game::{ScriptContext, ScriptStatus};
+    table.happens(i, |g| {
+        g.script = ScriptContext {
+            status: ScriptStatus::Running,
+            position: Some(position),
+        };
+        g.script_calls = calls.to_vec();
+        g.party.push(support::party_pokemon(species, pid, ""));
+    });
+    both_play(table, 20);
+    table.happens(i, |g| {
+        g.script = ScriptContext {
+            status: ScriptStatus::Idle,
+            position: None,
+        };
+        g.script_calls.clear();
+    });
+    both_play(table, 20);
+}
+
+fn gift_links(table: &Table, i: usize) -> Vec<pactlocke_run::Link> {
+    table.apps[i].links().into_iter().filter(|l| l.gift).collect()
+}
+
+#[test]
+fn the_first_pokemon_each_player_gets_is_their_starter_and_the_starters_are_linked() {
+    let mut table = Table::start(&["Red", "Blue"], soul_link());
+    both_play(&mut table, 100);
+    // No profile source at either place, and each picked a different one of three.
+    given(&mut table, 0, 1, 0xA0, 0x0817_0000, &[]);
+    given(&mut table, 1, CHARMANDER, 0xB0, 0x0817_0010, &[]);
+    both_play(&mut table, 120);
+
+    for (i, app) in table.apps.iter().enumerate() {
+        let starter = app
+            .links()
+            .into_iter()
+            .find(|l| l.source.key == "starter")
+            .expect("the starters' Link");
+        assert!(!starter.pending() && starter.broken.is_none(), "{i}: {starter:?}");
+        assert!(matches!(
+            starter.member(&key(0)),
+            Some(Member::Caught { pid: 0xA0, .. })
+        ));
+        assert!(matches!(
+            starter.member(&key(1)),
+            Some(Member::Caught { pid: 0xB0, .. })
+        ));
+    }
+}
+
+#[test]
+fn a_gift_the_profile_doesnt_list_is_linked_by_the_script_that_gave_it() {
+    let mut table = Table::start(&["Red", "Blue"], soul_link());
+    route_1_linked(&mut table);
+    // The same Gift's script, seen at different instructions of the shared
+    // "received a Pokémon" script it called.
+    given(&mut table, 0, 133, 0xA2, 0x081A_5000, &[0x081A_5010, 0x0816_0040]);
+    given(&mut table, 1, 133, 0xB2, 0x081A_5008, &[0x081A_5010, 0x0816_0040]);
+    both_play(&mut table, 120);
+
+    for i in 0..2 {
+        let gifts = gift_links(&table, i);
+        assert_eq!(gifts.len(), 1, "{i}: {gifts:?}");
+        let gift = &gifts[0];
+        assert!(!gift.pending() && gift.broken.is_none(), "{i}: {gift:?}");
+        assert!(matches!(gift.member(&key(0)), Some(Member::Caught { pid: 0xA2, .. })));
+        assert!(matches!(gift.member(&key(1)), Some(Member::Caught { pid: 0xB2, .. })));
+        assert_eq!(gift.source.name, "unknown Gift in Route 1");
+    }
+}
+
+#[test]
+fn unlisted_gifts_from_different_scripts_are_not_linked() {
+    let mut table = Table::start(&["Red", "Blue"], soul_link());
+    route_1_linked(&mut table);
+    given(&mut table, 0, 133, 0xA2, 0x081A_5000, &[0x081A_5010, 0x0816_0040]);
+    given(&mut table, 1, 147, 0xB2, 0x081A_5000, &[0x081A_5010, 0x0816_0080]);
+    both_play(&mut table, 120);
+
+    let gifts = gift_links(&table, 0);
+    assert_eq!(gifts.len(), 2, "{gifts:?}");
+    assert!(gifts.iter().all(pactlocke_run::Link::pending), "{gifts:?}");
+}

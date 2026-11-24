@@ -519,7 +519,14 @@ impl FeedEntry {
                 at(
                     area.as_ref(),
                     match (source, starter) {
+                        // Before the script key, an unlisted Gift had no source.
                         (None, _) if *egg => "received an Egg from the Day Care".to_owned(),
+                        (Some(source), false) if source.unlisted_gift() && *egg => {
+                            "received an Egg the Game Profile doesn't list (a Gift, or the Day Care's)".to_owned()
+                        }
+                        (Some(source), false) if source.unlisted_gift() => {
+                            format!("received {species_name}, an unknown Gift (the Game Profile doesn't list it)")
+                        }
                         (Some(source), true) => format!("received {species_name}, the {}", source.name),
                         (Some(source), false) => format!("received {species_name} from the {}", source.name),
                         (None, _) => {

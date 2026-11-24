@@ -345,3 +345,15 @@ fn a_battle_nobody_can_catch_in_is_no_ones_encounter() {
     assert!(player.feed(FeedKind::Encounter).is_empty());
     assert!(player.engine.view().closed_areas().is_empty(), "Route 1 is still open");
 }
+
+#[test]
+fn the_first_pokemon_is_the_starter_even_where_the_profile_doesnt_list_its_script() {
+    let mut player = player(rules(false, false));
+    player.receives_gift(party_pokemon(BULBASAUR, STARTER, "BULBASAUR"), 0x0817_0000);
+
+    assert_eq!(
+        player.feed(FeedKind::Gift),
+        ["Pallet Town: received BULBASAUR, the Starter"]
+    );
+    assert_eq!(player.party_pids(), [STARTER], "kept: the starter is always allowed");
+}

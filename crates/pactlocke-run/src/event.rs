@@ -251,7 +251,9 @@ pub enum RunEvent {
         reason: String,
     },
     /// A script gave the Player a Pokémon. `source` is the catalogued Gift it
-    /// matched, or `None` for an unknown Gift the Game Profile doesn't list.
+    /// matched, the starter, or for a Gift the Game Profile doesn't list, one
+    /// keyed by its script ([`SourceRef::unlisted_gift`]). `None` in logs from
+    /// before unlisted Gifts had a source.
     Gift {
         /// The Pokémon's personality value.
         pid: u32,
@@ -666,6 +668,14 @@ pub struct SourceRef {
 }
 
 impl SourceRef {
+    /// The start of the key of a Gift the Game Profile doesn't list.
+    pub const UNLISTED_GIFT: &str = "unknown_gift_";
+
+    /// Whether this is a Gift the Game Profile doesn't list, keyed by its script.
+    pub fn unlisted_gift(&self) -> bool {
+        self.key.starts_with(Self::UNLISTED_GIFT)
+    }
+
     /// An Area's own Encounter, as a Link source.
     pub fn area(area: &AreaRef) -> Self {
         Self {

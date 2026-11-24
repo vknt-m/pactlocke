@@ -262,9 +262,11 @@ fn a_gift_received_again_after_a_reload_is_kept_when_the_first_is_gone() {
 fn without_a_reload_a_used_gift_is_still_declined() {
     let mut player = Player::starts_a_run(Ruleset::default());
     player.game.sources = vec![starter_source()];
+    // Not the Player's first Pokémon, which is their starter.
+    player.game.party.push(party_pokemon(PIDGEY, 0x0001, "PIDGEY"));
     player.plays(5);
     player.receives_gift(party_pokemon(133, 0x0EE1, "EEVEE"), 0x0816_9C8B);
-    player.game.party.clear(); // released
+    player.game.party.retain(|p| p.pid != 0x0EE1); // released
     player.plays(5);
     player.receives_gift(party_pokemon(133, 0x0EE2, "EEVEE"), 0x0816_9C8B);
     player.plays(5);
@@ -302,7 +304,7 @@ fn a_pokemon_back_from_the_day_care_after_a_reboot_is_no_gift() {
 }
 
 #[test]
-fn an_egg_no_catalogue_lists_is_from_the_day_care_and_always_kept() {
+fn an_egg_no_catalogue_lists_is_always_kept() {
     let mut player = Player::starts_a_run(Ruleset {
         gifts: false,
         ..Ruleset::default()
@@ -316,7 +318,7 @@ fn an_egg_no_catalogue_lists_is_from_the_day_care_and_always_kept() {
     assert_eq!(player.party_pids(), [0x0E66], "kept with Gifts off");
     assert_eq!(
         player.feed(FeedKind::Gift)[0],
-        "Pallet Town: received an Egg from the Day Care"
+        "Pallet Town: received an Egg the Game Profile doesn't list (a Gift, or the Day Care's)"
     );
 }
 

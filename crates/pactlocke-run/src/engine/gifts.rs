@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use pactlocke_game::{Pokemon, ScriptStatus};
+use pactlocke_game::{Pokemon, ScriptStatus, Source, SourceKind};
 
 use super::{RunEngine, display_name};
 use crate::event::{AreaRef, SourceRef};
@@ -76,6 +76,9 @@ impl RunEngine {
             .map(|(old, p)| (old.and_then(|old| known.names.get(old).cloned()), p.clone()))
             .collect();
 
+        // Starter by rule: the first Pokémon a Player ever gets is their
+        // starter, wherever the script that gave it is.
+        let mut starter_due = known.pids.is_empty();
         let area = game.area().as_ref().map(AreaRef::from);
         for (gave, pokemon) in new {
             let species_name = game.species_name(pokemon.species);
@@ -92,19 +95,25 @@ impl RunEngine {
                     },
                 ),
                 None => {
-                    let source = source_of(game, script.position);
-                    let origin = match &source {
-                        Some(source) => GiftOrigin::Listed(source.clone()),
-                        None => GiftOrigin::Unknown,
+                    let listed = source_of(game, script.position);
+                    let listed = if starter_due && !pokemon.is_egg {
+                        Some(listed.filter(|s| s.kind == SourceKind::Starter).unwrap_or_else(starter))
+                    } else {
+                        listed
+                    };
+                    starter_due = false;
+                    let (origin, source) = match listed {
+                        Some(listed) => (GiftOrigin::Listed(listed.clone()), SourceRef::from(listed)),
+                        None => (GiftOrigin::Unknown, unlisted_gift(game, script.position, area.as_ref())),
                     };
                     let event = RunEvent::Gift {
                         pid: pokemon.pid,
                         species: pokemon.species,
                         species_name: species_name.clone(),
                         area: area.clone(),
-                        starter: matches!(source, Some(ref s) if s.kind == pactlocke_game::SourceKind::Starter),
+                        starter: matches!(&origin, GiftOrigin::Listed(s) if s.kind == SourceKind::Starter),
                         egg: pokemon.is_egg,
-                        source: source.map(SourceRef::from),
+                        source: Some(source),
                         at_ms: self.clock.now_ms(),
                     };
                     (origin, event)
@@ -187,6 +196,28 @@ impl RunEngine {
 pub(super) fn source_of(game: &mut impl LiveGame, position: Option<u32>) -> Option<pactlocke_game::Source> {
     let calls = game.script_calls();
     position.into_iter().chain(calls).find_map(|at| game.source_before(at))
+}
+
+/// The starter's source, for a starter the Game Profile doesn't place: the
+/// key every profile gives its starter, so it Links with the others'.
+fn starter() -> Source {
+    Source {
+        key: "starter".to_owned(),
+        name: "Starter".to_owned(),
+        kind: SourceKind::Starter,
+    }
+}
+
+/// A Gift the Game Profile doesn't list, keyed by the script that gave it:
+/// the outermost place the running script was called from, or where it is
+/// if it called none. Every Player given the same scripted Gift runs the
+/// same script, so the key is the same in every game.
+fn unlisted_gift(game: &mut impl LiveGame, position: Option<u32>, area: Option<&AreaRef>) -> SourceRef {
+    let script = game.script_calls().last().copied().or(position).unwrap_or(0);
+    SourceRef {
+        key: format!("{}{script:08x}", SourceRef::UNLISTED_GIFT),
+        name: area.map_or_else(|| "unknown Gift".to_owned(), |a| format!("unknown Gift in {}", a.name)),
+    }
 }
 
 fn party_and_pc(game: &mut impl LiveGame) -> (Vec<Pokemon>, Vec<Pokemon>) {
