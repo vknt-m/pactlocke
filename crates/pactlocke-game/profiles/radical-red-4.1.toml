@@ -51,6 +51,10 @@ pc_box_starts = [
   0x0202F240, 0x0202F90C, 0x0202FFD8, 0x020306A4, 0x02030D70, 0x0203CB44, 0x0203D210,
   0x0203D8DC, 0x02027434, 0x02027B00, 0x02024638,
 ]
+# FireRed's sCurrentMapMusic, sMapMusicState and gMPlayInfo_BGM: found in
+# this ROM's RAM at its first free moment (song 0x12C, from FireRed's
+# gSongTable) and checked by radical_red_acceptance.
+map_music = { song = 0x03000FC0, state = 0x03000FC4, bgm_player = 0x03007300 }
 
 [layout]
 party_slot_size = 100

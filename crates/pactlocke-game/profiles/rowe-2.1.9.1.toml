@@ -47,6 +47,10 @@ items = 0x08F76D78
 trainers = 0x08407220                   # gTrainers
 type_names = 0x08422A7C
 message_buffer = 0x02021ECC             # gStringVar4
+# sCurrentMapMusic, sMapMusicState and gMPlayInfo_BGM, found from RAM at
+# the first free moment (song 0x178, from its song table at 0x09157A10;
+# the only match in RAM) and checked by rowe_acceptance.
+map_music = { song = 0x03000ECC, state = 0x03000ED0, bgm_player = 0x03006240 }
 
 [layout]
 party_slot_size = 0x4C

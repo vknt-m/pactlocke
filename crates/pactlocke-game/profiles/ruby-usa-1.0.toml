@@ -37,6 +37,10 @@ items = 0x083C5564
 trainers = 0x081F04FC                   # gTrainers
 type_names = 0x081F9870                 # gTypeNames
 message_buffer = 0x020234CC             # gStringVar4
+# Found from RAM and checked (ruby_acceptance, sapphire_acceptance): out of
+# the truck, Littleroot's song (0x195) is at 0x030006D4, its state 4 bytes
+# on, and the 10-track player playing it is gMPlayInfo_BGM. Sapphire's too.
+map_music = { song = 0x030006D4, state = 0x030006D8, bgm_player = 0x03007380 }
 
 [layout]
 # How a Pokémon is stored (pret's struct Pokemon / BoxPokemon), as in FireRed.

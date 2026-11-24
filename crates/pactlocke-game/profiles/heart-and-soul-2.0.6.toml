@@ -53,6 +53,10 @@ evolution_table = 0x087E6544            # unused: each species points at its own
 items = 0x0878EFC0
 trainers = 0x084C9C8C                   # gTrainers
 message_buffer = 0x0203B8D4             # gStringVar4
+# sCurrentMapMusic, sMapMusicState and gMPlayInfo_BGM, found from RAM at
+# the first free moment (song 0x239, from its song table at 0x09356068;
+# the only match in RAM) and checked by heart_and_soul_acceptance.
+map_music = { song = 0x0300213E, state = 0x03002142, bgm_player = 0x03004620 }
 
 [layout]
 party_slot_size = 100

@@ -7,8 +7,8 @@ use std::path::PathBuf;
 
 use pactlocke_emu::{CoreAdapter, Keys};
 use pactlocke_game::{
-    Capability, Game, GameProfile, Method, ProfileGame, ProfileStore, RomIdentity, Rule, ScriptStatus, SourceKind,
-    level_cap_sites,
+    Capability, Change, Game, GameProfile, MapMusicState, Method, ProfileGame, ProfileStore, RomIdentity, Rule,
+    ScriptStatus, SourceKind, level_cap_sites,
 };
 use pactlocke_mgba::MgbaCore;
 
@@ -327,4 +327,88 @@ fn party_icons_read_from_the_real_rom_are_each_species_own_32x32_picture() {
         assert!((100..900).contains(&opaque), "{species}: {opaque} pixels drawn");
     }
     assert_ne!(icons[0], icons[1], "each species its own");
+}
+
+#[test]
+fn map_music_left_paused_on_the_overworld_plays_again_once_restarted() {
+    let rom = rom_or_skip!();
+    pactlocke_mgba::force_utc_time_zone();
+    let profile = profiled(&rom);
+    let bgm_status = profile
+        .symbols
+        .map_music
+        .expect("the profile says where map music is")
+        .bgm_player
+        + 4;
+    let mut core = MgbaCore::new();
+    core.load_rom(&rom).unwrap();
+    core.set_clock(1_767_225_600_000);
+    let mut game = ProfileGame::new(profile, rom, core);
+    let free =
+        |game: &mut ProfileGame<MgbaCore>| game.at_safe_overworld_point() && game.script().status == ScriptStatus::Idle;
+
+    // Through the intro to the truck, which has no song of its own.
+    let mut frame = 0u32;
+    while !free(&mut game) {
+        assert!(frame < 30_000, "the overworld was never reached");
+        let keys = match frame % 64 {
+            0..3 => Keys::A,
+            32..35 if frame > 6000 => Keys::START,
+            _ => Keys::NONE,
+        };
+        game.memory_mut().run_frame(keys);
+        frame += 1;
+    }
+    // Once the truck stops, out of its open back into Littleroot, and A
+    // through Mom's welcome until the Player is left alone a while.
+    let truck = game.area();
+    for frame in 0..3000u32 {
+        if game.area() != truck {
+            break;
+        }
+        game.memory_mut().run_frame(Keys::RIGHT);
+        assert!(frame < 2999, "the truck was never left");
+    }
+    let mut alone = 0;
+    for frame in 0..20_000u32 {
+        if alone == 300 {
+            break;
+        }
+        alone = if free(&mut game) { alone + 1 } else { 0 };
+        let keys = if alone == 0 && frame % 16 < 3 {
+            Keys::A
+        } else {
+            Keys::NONE
+        };
+        game.memory_mut().run_frame(keys);
+    }
+    assert_eq!(alone, 300, "the Player was never left alone in Littleroot");
+    assert_eq!(game.area().map(|a| a.name), Some("Littleroot Town".into()));
+
+    // Littleroot's song, playing.
+    let music = game.map_music().expect("read");
+    assert_ne!(music.song, 0);
+    assert_eq!(music.state, MapMusicState::Playing);
+    assert!(!music.paused, "{music:?}");
+
+    // Left paused, as Gaia's evolution scene leaves it: the game itself
+    // never starts it again.
+    let mut status = [0u8; 4];
+    game.memory_mut().read(bgm_status, &mut status);
+    let status = u32::from_le_bytes(status);
+    game.memory_mut().write32(bgm_status, status | 0x8000_0000);
+    (0..300).for_each(|_| game.memory_mut().run_frame(Keys::NONE));
+    assert!(game.map_music().unwrap().paused, "the game leaves it paused");
+
+    for change in game.restart_map_music().unwrap() {
+        let Change::Write { addr, bytes } = change else {
+            panic!("a restart only writes RAM: {change:?}");
+        };
+        game.memory_mut().write(addr, &bytes);
+    }
+    (0..10).for_each(|_| game.memory_mut().run_frame(Keys::NONE));
+    let restarted = game.map_music().unwrap();
+    assert_eq!(restarted.song, music.song, "the same song");
+    assert_eq!(restarted.state, MapMusicState::Playing);
+    assert!(!restarted.paused, "playing again: {restarted:?}");
 }

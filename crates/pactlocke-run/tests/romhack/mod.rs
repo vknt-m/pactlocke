@@ -15,7 +15,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use pactlocke_emu::{CoreAdapter, Keys};
-use pactlocke_game::{Change, Game, GameProfile, LevelCap, Method, Place, ProfileGame, ProfileStore, RomIdentity};
+use pactlocke_game::{
+    Change, Game, GameProfile, LevelCap, MapMusicState, Method, Place, ProfileGame, ProfileStore, RomIdentity,
+};
 use pactlocke_mgba::MgbaCore;
 use pactlocke_run::{
     FeedKind, InputChunk, MemoryStorage, NewRun, Ruleset, RunCommand, RunEngine, RunningGame, ShadowGame, ShadowState,
@@ -176,6 +178,8 @@ const SETWILDBATTLE: u8 = 0xB6;
 const DOWILDBATTLE: u8 = 0xB7;
 const RELEASEALL: u8 = 0x6B;
 const END: u8 = 0x02;
+const WARP: u8 = 0x39;
+const WAITSTATE: u8 = 0x27;
 const GOTO: u8 = 0x05;
 const TRAINERBATTLE: u8 = 0x5C;
 const CALLNATIVE: u8 = 0x23;
@@ -1182,4 +1186,62 @@ fn a_partner_avatar_is_drawn_from_their_shadow_game_and_nothing_else_changes() {
     });
     dump_screen(&a.game, "partner-avatar");
     assert!(differs, "B is on A's screen");
+}
+
+#[test]
+fn map_music_left_paused_on_the_overworld_is_started_again_by_the_run() {
+    let rom = rom_or_skip!();
+    let mut d = run_with(rom, Ruleset::default());
+    let bgm_status = d
+        .profile
+        .symbols
+        .map_music
+        .expect("the Game Profile says where map music is")
+        .bgm_player
+        + 4;
+    to_the_overworld(&mut d);
+    if d.game.game_mut().map_music().expect("read").song == 0 {
+        // Glazed's intro leaves its first map's song stopped. A warp back
+        // onto the same spot has the game play the map's song itself.
+        let block = match d.profile.symbols.save_block_1 {
+            Place::Pointer(pointer) => d.u32(pointer),
+            Place::At(addr) => addr,
+        };
+        // Save block 1 starts with the Player's x and y, then the map's group and number.
+        let at = d.read(block, 6);
+        let mut script = vec![WARP, at[4], at[5], 0xFF];
+        script.extend(&at[..4]);
+        script.extend([WAITSTATE, RELEASEALL, END]);
+        d.run_script(&script);
+        d.until_idle(Keys::NONE, 3000);
+    }
+
+    // The first free moment: the map's song, playing.
+    let music = d.game.game_mut().map_music().expect("read");
+    assert_ne!(music.song, 0);
+    assert_eq!(music.state, MapMusicState::Playing);
+    assert!(!music.paused, "{music:?}");
+
+    // Left paused, as Gaia's evolution scene leaves it (test setup, stamped
+    // so the Shadow Game sees it too). The game itself never starts it again,
+    // and the Run waits out the time a jingle could take.
+    let status = d.u32(bgm_status);
+    d.write(bgm_status, &(status | 0x8000_0000).to_le_bytes());
+    d.play("w 120");
+    assert!(
+        d.game.game_mut().map_music().unwrap().paused,
+        "the game leaves it paused"
+    );
+
+    // Then the Run starts the same song again.
+    d.play("w 180");
+    let restarted = d.game.game_mut().map_music().unwrap();
+    assert_eq!(restarted.song, music.song, "the same song");
+    assert_eq!(restarted.state, MapMusicState::Playing);
+    assert!(!restarted.paused, "playing again: {restarted:?}");
+    assert!(
+        d.feed(FeedKind::Run).iter().any(|text| text.contains("music paused")),
+        "the feed says so"
+    );
+    d.assert_shadow_matched(5);
 }

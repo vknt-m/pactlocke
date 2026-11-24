@@ -37,6 +37,9 @@ items = 0x085839A0
 trainers = 0x08310030                   # gTrainers
 type_names = 0x0831AE38                 # gTypeNames
 message_buffer = 0x02021FC4             # gStringVar4
+# Emerald's sCurrentMapMusic, sMapMusicState and gMPlayInfo_BGM, checked on
+# this ROM by glazed_acceptance.
+map_music = { song = 0x03000F48, state = 0x03000F4C, bgm_player = 0x03007420 }
 
 [layout]
 # How a Pokémon is stored (pret's struct Pokemon / BoxPokemon), as in FireRed.
