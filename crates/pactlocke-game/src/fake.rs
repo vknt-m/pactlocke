@@ -111,6 +111,8 @@ pub struct FakeGame {
     pub sync_gates: Vec<String>,
     /// The gates held now.
     pub gates_closed: std::collections::BTreeSet<String>,
+    /// The gates whose battle the Player is past.
+    pub gates_passed: std::collections::BTreeSet<String>,
     /// The gate whose hold script is running, as the test sets it.
     pub at_gate: Option<String>,
     /// Partner Avatars: where the Player stands, their sprite, and room to
@@ -180,6 +182,7 @@ impl Default for FakeGame {
             perishing: Vec::new(),
             sync_gates: Vec::new(),
             gates_closed: std::collections::BTreeSet::new(),
+            gates_passed: std::collections::BTreeSet::new(),
             at_gate: None,
             whereabouts: None,
             player_sprite: None,
@@ -579,6 +582,10 @@ impl Game for FakeGame {
 
     fn at_gate(&mut self) -> Option<String> {
         self.at_gate.clone()
+    }
+
+    fn gate_passed(&mut self, gate: &str) -> bool {
+        self.gates_passed.contains(gate)
     }
 
     fn has_own_randomizer(&mut self) -> bool {

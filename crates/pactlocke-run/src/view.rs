@@ -315,7 +315,10 @@ impl FeedIcon {
             }
             | RunEvent::SourceClosed { .. }
             | RunEvent::Skipped { .. } => FeedIcon::Link,
-            RunEvent::GateReady { .. } | RunEvent::GateOpened { .. } | RunEvent::GateRefused { .. } => FeedIcon::Gate,
+            RunEvent::GateReady { .. }
+            | RunEvent::GatePassed { .. }
+            | RunEvent::GateOpened { .. }
+            | RunEvent::GateRefused { .. } => FeedIcon::Gate,
             RunEvent::Retried { .. } | RunEvent::RetryFailed { .. } => FeedIcon::Retry,
             RunEvent::SpeedChanged { .. } | RunEvent::OthersSpeed { .. } => FeedIcon::Speed,
             RunEvent::CheatFlag { .. } | RunEvent::Flagged { .. } | RunEvent::FlagCleared { .. } => FeedIcon::Cheat,
@@ -411,6 +414,7 @@ impl FeedEntry {
             RunEvent::CatchesBlocked { .. } => return None,
             RunEvent::Checkpoint { .. }
             | RunEvent::Closed
+            | RunEvent::GateVote { .. }
             | RunEvent::RetryVote { .. }
             | RunEvent::DropoutVote { .. }
             | RunEvent::FlagVote { .. } => return None,
@@ -431,7 +435,18 @@ impl FeedEntry {
                 format!("Ready at {gate}: waiting for your partners to be ready"),
             ),
             RunEvent::GateRefused { gate, reason } => (FeedKind::Block, format!("Can't ready up at {gate}: {reason}")),
-            RunEvent::GateOpened { gate } => (FeedKind::Run, format!("Everyone is Ready at {gate}: the battle is on")),
+            RunEvent::GateOpened { gate, by_vote: false } => {
+                (FeedKind::Run, format!("Everyone is Ready at {gate}: the battle is on"))
+            }
+            RunEvent::GateOpened { gate, by_vote: true } => (
+                FeedKind::Run,
+                format!("Everyone said Yes: {gate}'s Sync Gate is let go"),
+            ),
+            // Not a red flag: said plainly, to every Player.
+            RunEvent::GatePassed { gate } => (
+                FeedKind::Run,
+                format!("Went past {gate}'s Sync Gate alone, so it counts as Ready there"),
+            ),
             RunEvent::GateFailed { gate, reason } => (
                 FeedKind::Problem,
                 format!("The Sync Gate at {gate} doesn't work in this game: {reason}"),

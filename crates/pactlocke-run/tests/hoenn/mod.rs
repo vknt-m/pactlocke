@@ -1441,6 +1441,7 @@ fn a_held_sync_gate_readies_the_player_up_and_once_everyone_is_ready_the_real_ba
         .send(RunCommand::OpenGate {
             gate: first.clone(),
             checkpoint: true,
+            by_vote: false,
         })
         .unwrap();
     d.play("w 30");

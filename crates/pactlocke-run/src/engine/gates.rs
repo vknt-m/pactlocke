@@ -48,10 +48,23 @@ impl RunEngine {
         }
     }
 
-    /// Every Player is Ready at this gate: its battle runs here now. With
-    /// `checkpoint`, this Player's Ready completed it, so the Run
-    /// Checkpoint every Sync Gate takes is called from this game.
-    pub fn open_gate(&mut self, gate: &str, checkpoint: bool, game: &mut impl LiveGame) {
+    /// A chosen gate not let go that the Player's game is past (its
+    /// badge or defeat flag, though the gate held): it counts as Ready
+    /// there, said once.
+    pub(super) fn pass_gates(&mut self, game: &mut impl LiveGame) {
+        let gates = self.info.ruleset.sync_gates.clone();
+        for gate in gates {
+            if !self.rules.gate_open(&gate) && !self.rules.ready_at(&gate) && game.gate_passed(&gate) {
+                self.record(RunEvent::GatePassed { gate });
+            }
+        }
+    }
+
+    /// Every Player is Ready at this gate, or everyone voted to let it go
+    /// (`by_vote`): its battle runs here now. With `checkpoint`, this
+    /// Player's Ready completed it, so the Run Checkpoint every Sync Gate
+    /// takes is called from this game.
+    pub fn open_gate(&mut self, gate: &str, checkpoint: bool, by_vote: bool, game: &mut impl LiveGame) {
         if self.rules.gate_open(gate) {
             return;
         }
@@ -65,7 +78,10 @@ impl RunEngine {
                 return;
             }
         }
-        self.record(RunEvent::GateOpened { gate: gate.to_owned() });
+        self.record(RunEvent::GateOpened {
+            gate: gate.to_owned(),
+            by_vote,
+        });
         if checkpoint {
             self.want_checkpoint_for(crate::CheckpointReason::SyncGate);
         }

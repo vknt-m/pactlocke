@@ -53,8 +53,8 @@ pub use shadow::{
 };
 pub use shadow_runner::{ShadowRunner, ShadowStatus};
 pub use shared_log::{
-    Call, DROPOUT_MIN_PLAYERS, FlagVote, GamePoint, LogBody, LogEntry, LogError, LogFollower, Part, ReadyCheck, RunLog,
-    Signer, Submission, Tallies, Vote, Wiped,
+    Call, DROPOUT_MIN_PLAYERS, FlagVote, GamePoint, GateVote, LogBody, LogEntry, LogError, LogFollower, Part,
+    ReadyCheck, RunLog, Signer, Submission, Tallies, Vote, Wiped,
 };
 pub use storage::{InputBatch, MemoryStorage, RunInfo, RunStorage, Stamped, StorageError, StoredCheckpoint, StoredRun};
 pub use stream::{

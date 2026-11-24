@@ -882,6 +882,7 @@ fn a_held_sync_gate_at_the_hacks_first_leader_lets_the_real_battle_run_once_open
         .send(RunCommand::OpenGate {
             gate: first.clone(),
             checkpoint: true,
+            by_vote: false,
         })
         .unwrap();
     d.play("w 30");
@@ -946,6 +947,7 @@ fn variable_gate_held_then_run(rom: Vec<u8>, gate: &VariableGate) {
         .send(RunCommand::OpenGate {
             gate: gate.gate.into(),
             checkpoint: true,
+            by_vote: false,
         })
         .unwrap();
     d.play("w 30");

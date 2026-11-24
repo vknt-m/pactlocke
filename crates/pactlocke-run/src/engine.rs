@@ -790,6 +790,11 @@ impl RunEngine {
             self.look_at_the_party(game);
             self.look_at_the_player(game, battle.is_some());
             self.look_at_the_native_options(game);
+            // Badges and defeat flags are set on the overworld; before a
+            // game is loaded they read as garbage.
+            if battle.is_none() && game.at_safe_overworld_point() {
+                self.pass_gates(game);
+            }
         }
 
         if battle.is_none() && self.quiet(game) {

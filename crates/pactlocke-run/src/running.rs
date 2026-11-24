@@ -75,14 +75,16 @@ pub enum RunCommand {
         /// The Gift to skip.
         source: crate::SourceRef,
     },
-    /// Every Player is Ready at this Sync Gate: let it go. With
-    /// `checkpoint`, this Player's Ready completed it, so this game calls
-    /// the gate's Run Checkpoint.
+    /// Every Player is Ready at this Sync Gate, or everyone voted to let it
+    /// go: let it go. With `checkpoint`, this Player's Ready completed it,
+    /// so this game calls the gate's Run Checkpoint.
     OpenGate {
         /// The Sync Gate's name.
         gate: String,
         /// Whether this game calls the gate's Run Checkpoint.
         checkpoint: bool,
+        /// Let go by everyone's vote.
+        by_vote: bool,
     },
     /// The Player plays at this speed now (1 to 4).
     Speed(u8),
@@ -294,7 +296,11 @@ impl<G: PlayedGame> RunningGame<G> {
                 RunCommand::GameOver { how, longest } => self.engine.game_over(how, longest),
                 RunCommand::CloseSource { source, why } => self.engine.close_source(source, why),
                 RunCommand::Skip { source } => self.engine.skip(source),
-                RunCommand::OpenGate { gate, checkpoint } => self.engine.open_gate(&gate, checkpoint, &mut self.game),
+                RunCommand::OpenGate {
+                    gate,
+                    checkpoint,
+                    by_vote,
+                } => self.engine.open_gate(&gate, checkpoint, by_vote, &mut self.game),
                 RunCommand::Speed(speed) => self.engine.speed(speed),
                 RunCommand::OthersSpeed { player, speed } => self.engine.others_speed(player, speed),
                 RunCommand::DroppedOut => self.engine.dropped_out(),

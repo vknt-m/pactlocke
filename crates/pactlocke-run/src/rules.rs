@@ -400,10 +400,10 @@ impl Rules {
                 self.closed.insert(area.id);
             }
             RunEvent::PokeBallsObtained => self.had_poke_balls = true,
-            RunEvent::GateReady { gate } => {
+            RunEvent::GateReady { gate } | RunEvent::GatePassed { gate } => {
                 self.ready_gates.insert(gate.clone());
             }
-            RunEvent::GateOpened { gate } => {
+            RunEvent::GateOpened { gate, .. } => {
                 self.open_gates.insert(gate.clone());
             }
             RunEvent::SourceClosed { source, .. } | RunEvent::Skipped { source } => match source.area_id() {

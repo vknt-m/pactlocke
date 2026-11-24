@@ -93,10 +93,29 @@ pub enum RunEvent {
         /// Why the Player can't ready up.
         reason: String,
     },
-    /// Every Player is Ready at this Sync Gate: its battle runs here now.
+    /// The Player's game is past this Sync Gate's battle though the gate
+    /// held: it counts as Ready there, so the gate lets the others go.
+    GatePassed {
+        /// The Sync Gate's name.
+        gate: String,
+    },
+    /// A Player's vote on letting this Sync Gate go without everyone Ready:
+    /// the first Yes starts the vote, everyone must say Yes, and the first
+    /// No ends it.
+    GateVote {
+        /// The Sync Gate's name.
+        gate: String,
+        /// Whether this Player says Yes.
+        yes: bool,
+    },
+    /// Every Player is Ready at this Sync Gate, or everyone voted to let it
+    /// go: its battle runs here now.
     GateOpened {
         /// The Sync Gate's name.
         gate: String,
+        /// Let go by everyone's vote, not by everyone being Ready.
+        #[serde(default)]
+        by_vote: bool,
     },
     /// A Sync Gate couldn't be held or let go in this game.
     GateFailed {
@@ -629,10 +648,21 @@ impl RunEvent {
                 | RunEvent::EncounterOver { .. }
                 | RunEvent::Skipped { .. }
                 | RunEvent::GateReady { .. }
+                | RunEvent::GatePassed { .. }
+                | RunEvent::GateVote { .. }
                 | RunEvent::SpeedChanged { .. }
                 | RunEvent::CheatFlag { .. }
         ) || self.is_run_checkpoint()
             || self.is_violation()
+    }
+
+    /// The Sync Gate this makes its Player Ready at: a Ready, or a gate
+    /// their game went past.
+    pub fn readies(&self) -> Option<&str> {
+        match self {
+            RunEvent::GateReady { gate } | RunEvent::GatePassed { gate } => Some(gate),
+            _ => None,
+        }
     }
 
     /// A Run Checkpoint: one a Retry can go back to (not a boot checkpoint).

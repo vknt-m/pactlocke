@@ -455,6 +455,18 @@ impl Table {
         self.tick();
     }
 
+    /// Player `i` votes on letting this Sync Gate go.
+    pub fn votes_on_gate(&mut self, i: usize, gate: &str, yes: bool) {
+        self.submit(
+            i,
+            &LogBody::Event(RunEvent::GateVote {
+                gate: gate.to_owned(),
+                yes,
+            }),
+        );
+        self.tick();
+    }
+
     /// Player `i` votes on clearing this cheat flag.
     pub fn votes_on_flag(&mut self, i: usize, flag: &pactlocke_run::Flag, yes: bool) {
         self.submit(

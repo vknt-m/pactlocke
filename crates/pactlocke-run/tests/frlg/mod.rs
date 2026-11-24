@@ -1752,6 +1752,7 @@ fn a_sync_gate_everyone_is_ready_at_lets_the_real_battle_run() {
         .send(RunCommand::OpenGate {
             gate: "Rival".into(),
             checkpoint: true,
+            by_vote: false,
         })
         .unwrap();
     d.play("w 30");

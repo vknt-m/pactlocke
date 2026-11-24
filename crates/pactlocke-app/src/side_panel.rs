@@ -112,6 +112,7 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
                 "You're offline: your game goes on and your Run is kept, and Sync Gate battles and votes wait until you're back.",
             );
         }
+        let mut let_go = None;
         if let Some(check) = log.ready_check() {
             egui::Frame::new()
                 .fill(ui.visuals().faint_bg_color)
@@ -135,14 +136,28 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
                             }
                         }
                     });
+                    // For a gate the app can't see someone is past.
+                    let start = ui
+                        .add_enabled(
+                            lobbies.online() && log.gate_vote().is_none(),
+                            egui::Button::new("Vote to let it go").small(),
+                        )
+                        .on_hover_text(
+                            "If a Player is past this gate's battle and the app can't tell, let the gate go: everyone must say Yes, and the first No ends the vote",
+                        );
+                    if start.clicked() {
+                        let_go = Some(RunEvent::GateVote {
+                            gate: check.gate.clone(),
+                            yes: true,
+                        });
+                    }
                 });
         }
-        asks.vote = crate::spectate::votes(ui, log, spectate.me(), lobbies.online()).or(crate::spectate::flag_votes(
-            ui,
-            log,
-            spectate.me(),
-            lobbies.online(),
-        ));
+        let online = lobbies.online();
+        asks.vote = let_go
+            .or(crate::spectate::gate_vote(ui, log, spectate.me(), online))
+            .or(crate::spectate::votes(ui, log, spectate.me(), online))
+            .or(crate::spectate::flag_votes(ui, log, spectate.me(), online));
         asks.dropout = crate::spectate::dropouts(ui, log, spectate, lobbies.online());
     }
     if let Some(wanted) = run.view.nickname_wanted.first() {

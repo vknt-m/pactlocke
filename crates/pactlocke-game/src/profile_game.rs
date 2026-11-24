@@ -1049,6 +1049,14 @@ impl<M: Memory> Game for ProfileGame<M> {
             .collect())
     }
 
+    fn gate_passed(&mut self, gate: &str) -> bool {
+        let Some(stage) = self.profile.level_caps.iter().find(|s| s.name == gate).cloned() else {
+            return false;
+        };
+        let badges = self.badges();
+        stage.passed(badges, |flag| self.flag(flag))
+    }
+
     fn at_gate(&mut self) -> Option<String> {
         let first = self.profile.sync_gates.as_ref()?.hold_script(0);
         let context = self.script();

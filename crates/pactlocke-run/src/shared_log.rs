@@ -942,25 +942,26 @@ impl RunLog {
             .unwrap_or(1)
     }
 
-    /// Who is Ready at this Sync Gate, in log order.
+    /// Who is Ready at this Sync Gate, in log order: a Ready, or a game past it.
     pub fn ready_at(&self, gate: &str) -> Vec<PlayerKey> {
         let mut ready = Vec::new();
         for (author, event) in self.standing_events() {
-            if matches!(&event, RunEvent::GateReady { gate: g } if g == gate) && !ready.contains(&author) {
+            if event.readies() == Some(gate) && !ready.contains(&author) {
                 ready.push(author);
             }
         }
         ready
     }
 
-    /// The Player whose Ready made every Player Ready at this Sync Gate,
-    /// once it is let go (counting only entries that stand).
+    /// The Player whose Ready (or game past the gate) made every Player
+    /// Ready at this Sync Gate, once it is let go (counting only entries
+    /// that stand).
     pub fn gate_opened_by(&self, gate: &str) -> Option<PlayerKey> {
         self.roster.as_ref()?;
         let roster = self.active();
         let mut ready: Vec<PlayerKey> = Vec::new();
         for (author, event) in self.standing_events() {
-            if matches!(&event, RunEvent::GateReady { gate: g } if g == gate) && !ready.contains(&author) {
+            if event.readies() == Some(gate) && !ready.contains(&author) {
                 ready.push(author);
                 if roster.iter().all(|p| ready.contains(p)) {
                     return Some(author);
@@ -978,10 +979,64 @@ impl RunLog {
             .find(|g| !self.gate_open(g) && self.ready_at(g).contains(player))
     }
 
-    /// Whether every Player in the roster is Ready at this Sync Gate.
+    /// Whether this Sync Gate is let go: every Player in the roster is
+    /// Ready there, or everyone voted to let it go.
     pub fn gate_open(&self, gate: &str) -> bool {
         let ready = self.ready_at(gate);
-        self.roster.is_some() && self.active().iter().all(|p| ready.contains(p))
+        let all_ready = self.roster.is_some() && self.active().iter().all(|p| ready.contains(p));
+        all_ready || self.gate_votes().let_go.contains_key(gate)
+    }
+
+    /// The vote under way on letting a Sync Gate go, if any: which gate,
+    /// and who said Yes.
+    pub fn gate_vote(&self) -> Option<GateVote> {
+        self.gate_votes().under_way
+    }
+
+    /// Every vote on letting a gate go, from the log in order. Any Player in
+    /// the roster may vote; a vote starts at a Yes with none under way and
+    /// ends at the first No. Once every Player still in the Run has said
+    /// Yes, at their vote or at a Dropout that leaves only those who did,
+    /// the gate is let go, by the Player whose Yes or Dropout finished it.
+    /// A gate once let go by vote stays so, a Retry or not.
+    fn gate_votes(&self) -> GateVotes {
+        let roster = self.roster.clone().unwrap_or_default();
+        let mut gone: BTreeSet<PlayerKey> = BTreeSet::new();
+        let mut votes = GateVotes::default();
+        for (author, body) in self.bodies() {
+            match body {
+                LogBody::Event(RunEvent::GateVote { gate, yes })
+                    if roster.contains(&author) && !votes.let_go.contains_key(&gate) =>
+                {
+                    match &mut votes.under_way {
+                        None if yes => {
+                            votes.under_way = Some(GateVote {
+                                gate,
+                                yes: BTreeSet::from([author]),
+                            });
+                        }
+                        Some(vote) if vote.gate == gate && yes => {
+                            vote.yes.insert(author);
+                        }
+                        Some(vote) if vote.gate == gate => votes.under_way = None,
+                        _ => {}
+                    }
+                }
+                LogBody::Dropout { player } => {
+                    gone.insert(player);
+                }
+                _ => continue,
+            }
+            let finished = votes
+                .under_way
+                .as_ref()
+                .is_some_and(|v| roster.iter().filter(|p| !gone.contains(*p)).all(|p| v.yes.contains(p)));
+            if finished {
+                let vote = votes.under_way.take().expect("checked above");
+                votes.let_go.insert(vote.gate, author);
+            }
+        }
+        votes
     }
 
     /// The ready check: the first chosen Sync Gate someone is Ready at and
@@ -1112,6 +1167,26 @@ pub struct Vote {
     pub call: u64,
     /// Who said Yes so far.
     pub yes: BTreeSet<PlayerKey>,
+}
+
+/// A vote under way on letting a Sync Gate go without everyone Ready.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateVote {
+    /// The Sync Gate.
+    pub gate: String,
+    /// Who said Yes so far.
+    pub yes: BTreeSet<PlayerKey>,
+}
+
+/// The votes on letting gates go, as the log has them.
+#[derive(Default)]
+struct GateVotes {
+    /// The vote under way, if any.
+    under_way: Option<GateVote>,
+    /// The gates everyone voted to let go, each with the Player whose Yes
+    /// (or Dropout) finished the vote: their game calls the gate's Run
+    /// Checkpoint.
+    let_go: BTreeMap<String, PlayerKey>,
 }
 
 /// The `n`th Run Checkpoint (from 1), if there is one.
@@ -1298,11 +1373,13 @@ impl LogFollower {
                 // The Ready that makes everyone Ready lets the gate go; that
                 // Player's game calls its Run Checkpoint. The Run engine lets a
                 // gate go once, however often this says so.
-                LogBody::Event(RunEvent::GateReady { gate }) => {
+                LogBody::Event(event @ (RunEvent::GateReady { .. } | RunEvent::GatePassed { .. })) => {
+                    let gate = event.readies().expect("a Ready").to_owned();
                     if let Some(by) = log.gate_opened_by(&gate) {
                         commands.push(crate::RunCommand::OpenGate {
                             checkpoint: by == self.me,
                             gate,
+                            by_vote: false,
                         });
                     }
                 }
@@ -1318,6 +1395,18 @@ impl LogFollower {
             }
         }
         self.seen = log.entries().len();
+        // A gate everyone voted to let go: by a Yes, or by a Dropout that left
+        // only those who said it. The Run engine lets a gate go once, however
+        // often this says so.
+        for (gate, by) in log.gate_votes().let_go {
+            if log.gate_opened_by(&gate).is_none() {
+                commands.push(crate::RunCommand::OpenGate {
+                    checkpoint: by == self.me,
+                    gate,
+                    by_vote: true,
+                });
+            }
+        }
         // The Run engine ends the Run once, however often this says so.
         if let Some((how, longest)) = log.ending(&self.me) {
             commands.push(crate::RunCommand::GameOver { how, longest });

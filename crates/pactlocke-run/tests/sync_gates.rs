@@ -166,3 +166,101 @@ fn the_ready_check_shows_the_gate_someone_is_waiting_at() {
     let check = table.apps[0].log.ready_check().unwrap();
     assert_eq!((check.gate.as_str(), check.ready()), ("Misty", 1));
 }
+
+#[test]
+fn a_player_past_a_gate_alone_counts_as_ready_there_and_the_others_battle_runs() {
+    let mut table = Table::start(&["Red", "Blue"], gated(&["Brock", "Misty"]));
+    both_play(&mut table, 100);
+    assert!(!table.talks_to(1, "Brock"), "Blue is held at Brock");
+    // Red's game got past Brock without the gate (the badge is theirs).
+    table.happens(0, |g| {
+        g.gates_passed.insert("Brock".to_owned());
+    });
+    both_play(&mut table, 200);
+
+    assert!(!table.game(1).gates_closed.contains("Brock"), "let go for Blue");
+    assert!(table.game(1).gates_closed.contains("Misty"), "Misty still holds");
+    assert!(table.talks_to(1, "Brock"), "Blue's battle runs");
+    let passed = "Went past Brock's Sync Gate alone, so it counts as Ready there".to_owned();
+    let own = feed(&table, 0);
+    assert_eq!(own.iter().filter(|e| **e == passed).count(), 1, "once: {own:?}");
+    // Blue's side panel shows Red's line from the Run log, by Red's name.
+    let theirs: Vec<String> = table.apps[1]
+        .log
+        .standing_events()
+        .into_iter()
+        .filter(|(author, _)| *author == key(0))
+        .filter_map(|(_, event)| pactlocke_run::FeedEntry::of_others(&event, 0))
+        .map(|line| line.text)
+        .collect();
+    assert_eq!(theirs.iter().filter(|e| **e == passed).count(), 1, "{theirs:?}");
+    assert!(
+        feed(&table, 1)
+            .iter()
+            .any(|e| e == "Everyone is Ready at Brock: the battle is on")
+    );
+}
+
+#[test]
+fn every_player_saying_yes_lets_a_gate_go() {
+    let mut table = Table::start(&["Red", "Blue"], gated(&["Brock"]));
+    both_play(&mut table, 100);
+    assert!(!table.talks_to(0, "Brock"), "Red is held at Brock");
+    table.votes_on_gate(1, "Brock", true);
+    let vote = table.apps[0].log.gate_vote().expect("a vote under way");
+    assert_eq!((vote.gate.as_str(), vote.yes.len()), ("Brock", 1));
+    assert!(
+        table.game(0).gates_closed.contains("Brock"),
+        "not yet: Red hasn't said Yes"
+    );
+
+    table.votes_on_gate(0, "Brock", true);
+    both_play(&mut table, 40);
+    for i in 0..2 {
+        assert!(!table.game(i).gates_closed.contains("Brock"), "{i}: let go");
+        assert!(
+            feed(&table, i)
+                .iter()
+                .any(|e| e == "Everyone said Yes: Brock's Sync Gate is let go"),
+            "{i}: {:?}",
+            feed(&table, i)
+        );
+    }
+    assert_eq!(table.apps[0].log.gate_vote(), None);
+    assert!(table.talks_to(0, "Brock"), "Red's battle runs");
+}
+
+#[test]
+fn a_no_ends_a_vote_to_let_a_gate_go() {
+    let mut table = Table::start(&["Red", "Blue"], gated(&["Brock"]));
+    both_play(&mut table, 100);
+    table.votes_on_gate(0, "Brock", true);
+    table.votes_on_gate(1, "Brock", false);
+    assert_eq!(table.apps[0].log.gate_vote(), None, "the No ended it");
+    table.votes_on_gate(0, "Brock", true);
+    both_play(&mut table, 40);
+    assert!(table.game(0).gates_closed.contains("Brock"), "one Yes isn't everyone");
+}
+
+#[test]
+fn a_gate_vote_the_others_finished_lets_the_gate_go_when_the_last_player_is_dropped() {
+    let mut table = Table::start(&["Red", "Blue", "Green"], gated(&["Brock"]));
+    for _ in 0..10 {
+        for i in 0..3 {
+            table.plays(i, 10);
+        }
+    }
+    table.votes_on_gate(0, "Brock", true);
+    table.votes_on_gate(2, "Brock", true);
+    assert!(table.game(0).gates_closed.contains("Brock"), "Blue hasn't said");
+    // Blue is dropped from the Run: everyone left has said Yes.
+    table.votes_to_drop(0, 1, true);
+    table.votes_to_drop(2, 1, true);
+    for _ in 0..4 {
+        table.plays(0, 10);
+        table.plays(2, 10);
+    }
+    for i in [0, 2] {
+        assert!(!table.game(i).gates_closed.contains("Brock"), "{i}: let go");
+    }
+}

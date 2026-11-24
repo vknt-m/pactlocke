@@ -424,6 +424,10 @@ pub trait Game {
     /// The gate whose hold script is running, if one is: the Player has
     /// come to it while it is closed.
     fn at_gate(&mut self) -> Option<String>;
+    /// Whether the Player is past this gate's battle: the Game Profile's
+    /// level cap stage of the same name is passed (its badge, or its defeat
+    /// flag). `false` where the profile has no such stage.
+    fn gate_passed(&mut self, gate: &str) -> bool;
 
     // Shared Seed on a Romhack's own randomizer.
 

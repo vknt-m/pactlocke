@@ -370,6 +370,34 @@ fn vote_banner(ui: &mut eframe::egui::Ui, contents: impl FnOnce(&mut eframe::egu
         });
 }
 
+/// A vote under way on letting a Sync Gate go without everyone Ready, as a
+/// banner with Yes and No for a Player who hasn't said. Returns their vote.
+pub fn gate_vote(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey, online: bool) -> Option<RunEvent> {
+    let vote = log.gate_vote()?;
+    let players = log.active().len();
+    let mut cast = None;
+    vote_banner(ui, |ui| {
+        ui.strong(format!(
+            "Vote: let {}'s Sync Gate go without everyone Ready · {} of {players} said Yes",
+            vote.gate,
+            vote.yes.len()
+        ));
+        if !vote.yes.contains(&me) && online {
+            ui.horizontal(|ui| {
+                for (label, yes) in [("Yes", true), ("No", false)] {
+                    if ui.button(label).clicked() {
+                        cast = Some(RunEvent::GateVote {
+                            gate: vote.gate.clone(),
+                            yes,
+                        });
+                    }
+                }
+            });
+        }
+    });
+    cast
+}
+
 /// Retries in a Run with other Players: what is left of the pool, and the
 /// vote. Returns this Player's vote when they cast one.
 pub fn votes(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey, online: bool) -> Option<RunEvent> {
