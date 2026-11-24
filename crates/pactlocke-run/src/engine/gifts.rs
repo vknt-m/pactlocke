@@ -73,6 +73,8 @@ impl RunEngine {
             .filter(|(old, p)| old.is_none() || p.ot_id != own_id)
             .chain(pc.iter().map(|p| (None, p)))
             .filter(|(_, p)| !known.pids.contains(&p.pid))
+            // An empty slot, read while a script fills it, isn't a Pokémon.
+            .filter(|(_, p)| p.species != 0)
             .map(|(old, p)| (old.and_then(|old| known.names.get(old).cloned()), p.clone()))
             .collect();
 
@@ -104,7 +106,7 @@ impl RunEngine {
                     starter_due = false;
                     let (origin, source) = match listed {
                         Some(listed) => (GiftOrigin::Listed(listed.clone()), SourceRef::from(listed)),
-                        None => (GiftOrigin::Unknown, unlisted_gift(game, script.position, area.as_ref())),
+                        None => (GiftOrigin::Unknown, unlisted_gift(pokemon.species, area.as_ref())),
                     };
                     let event = RunEvent::Gift {
                         pid: pokemon.pid,
@@ -208,14 +210,14 @@ fn starter() -> Source {
     }
 }
 
-/// A Gift the Game Profile doesn't list, keyed by the script that gave it:
-/// the outermost place the running script was called from, or where it is
-/// if it called none. Every Player given the same scripted Gift runs the
-/// same script, so the key is the same in every game.
-fn unlisted_gift(game: &mut impl LiveGame, position: Option<u32>, area: Option<&AreaRef>) -> SourceRef {
-    let script = game.script_calls().last().copied().or(position).unwrap_or(0);
+/// A Gift the Game Profile doesn't list, keyed by its Area and species:
+/// every Player given the same scripted Gift gets the same species in the
+/// same Area. Where its script was when the Gift was seen is no key: that
+/// depends on the frame each game noticed the new Pokémon.
+fn unlisted_gift(species: u16, area: Option<&AreaRef>) -> SourceRef {
+    let place = area.map_or(0xFFFF, |a| a.id);
     SourceRef {
-        key: format!("{}{script:08x}", SourceRef::UNLISTED_GIFT),
+        key: format!("{}{place:04x}_{species}", SourceRef::UNLISTED_GIFT),
         name: area.map_or_else(|| "unknown Gift".to_owned(), |a| format!("unknown Gift in {}", a.name)),
     }
 }

@@ -153,6 +153,16 @@ fn a_pokemon_given_by_an_unlisted_script_is_an_unknown_gift_and_kept() {
 }
 
 #[test]
+fn an_empty_slot_read_during_a_script_is_no_gift() {
+    let mut player = with_starter(rules(true, false));
+    let before = player.feed(FeedKind::Gift);
+    // An empty party slot reads as species 0 with no PID.
+    player.receives_gift(party_pokemon(0, 0, ""), 0x081A_6A26);
+
+    assert_eq!(player.feed(FeedKind::Gift), before, "only the starter's line");
+}
+
+#[test]
 fn an_in_game_trade_is_a_gift() {
     let mut player = with_starter(rules(true, false));
     player.receives_gift(party_pokemon(ABRA, 0xAB, "KADABRA?"), PRIZE_AT + 0x20);

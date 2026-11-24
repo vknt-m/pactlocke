@@ -445,28 +445,38 @@ fn the_first_pokemon_each_player_gets_is_their_starter_and_the_starters_are_link
 }
 
 #[test]
-fn a_gift_the_profile_doesnt_list_is_linked_by_the_script_that_gave_it() {
-    let mut table = Table::start(&["Red", "Blue"], soul_link());
-    route_1_linked(&mut table);
-    // The same Gift's script, seen at different instructions of the shared
-    // "received a Pokémon" script it called.
-    given(&mut table, 0, 133, 0xA2, 0x081A_5000, &[0x081A_5010, 0x0816_0040]);
-    given(&mut table, 1, 133, 0xB2, 0x081A_5008, &[0x081A_5010, 0x0816_0040]);
-    both_play(&mut table, 120);
+fn a_gift_the_profile_doesnt_list_is_linked_by_its_area_and_species() {
+    for (case, red, blue) in [
+        // Seen inside the shared "received a Pokémon" script it called.
+        (
+            "called",
+            (0x081A_5000, &[0x081A_5010, 0x0816_0040][..]),
+            (0x081A_5008, &[0x081A_5010, 0x0816_0040][..]),
+        ),
+        // As on Unbound's Route 2: no calls, seen right after the routine
+        // that gave it in one game and a message later in the other.
+        ("no calls", (0x09E8_7067, &[][..]), (0x09E8_7081, &[][..])),
+    ] {
+        let mut table = Table::start(&["Red", "Blue"], soul_link());
+        route_1_linked(&mut table);
+        given(&mut table, 0, 133, 0xA2, red.0, red.1);
+        given(&mut table, 1, 133, 0xB2, blue.0, blue.1);
+        both_play(&mut table, 120);
 
-    for i in 0..2 {
-        let gifts = gift_links(&table, i);
-        assert_eq!(gifts.len(), 1, "{i}: {gifts:?}");
-        let gift = &gifts[0];
-        assert!(!gift.pending() && gift.broken.is_none(), "{i}: {gift:?}");
-        assert!(matches!(gift.member(&key(0)), Some(Member::Caught { pid: 0xA2, .. })));
-        assert!(matches!(gift.member(&key(1)), Some(Member::Caught { pid: 0xB2, .. })));
-        assert_eq!(gift.source.name, "unknown Gift in Route 1");
+        for i in 0..2 {
+            let gifts = gift_links(&table, i);
+            assert_eq!(gifts.len(), 1, "{case}, {i}: {gifts:?}");
+            let gift = &gifts[0];
+            assert!(!gift.pending() && gift.broken.is_none(), "{case}, {i}: {gift:?}");
+            assert!(matches!(gift.member(&key(0)), Some(Member::Caught { pid: 0xA2, .. })));
+            assert!(matches!(gift.member(&key(1)), Some(Member::Caught { pid: 0xB2, .. })));
+            assert_eq!(gift.source.name, "unknown Gift in Route 1");
+        }
     }
 }
 
 #[test]
-fn unlisted_gifts_from_different_scripts_are_not_linked() {
+fn unlisted_gifts_of_different_species_are_not_linked() {
     let mut table = Table::start(&["Red", "Blue"], soul_link());
     route_1_linked(&mut table);
     given(&mut table, 0, 133, 0xA2, 0x081A_5000, &[0x081A_5010, 0x0816_0040]);
