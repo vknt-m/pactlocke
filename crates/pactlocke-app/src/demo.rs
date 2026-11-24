@@ -6,9 +6,9 @@
 
 use pactlocke_game::LevelCap;
 use pactlocke_run::{
-    AreaEncounter, AreaRef, CheckpointReason, DeathCause, Doing, FeedEntry, Grave, LevelCapView, Locked, LogBody,
-    PlayerKey, Recorded, RosterEntry, Ruleset, RunEvent, RunLog, RunView, Seen, SeenPokemon, ShadowState, ShadowStatus,
-    Signer, SourceRef,
+    AreaBattle, AreaEncounter, AreaRef, AreaState, AreaStatus, CheckpointReason, DeathCause, Doing, FeedEntry, Grave,
+    LevelCapView, Locked, LogBody, Met, PlayerKey, Recorded, RosterEntry, Ruleset, RunEvent, RunLog, RunView, Seen,
+    SeenPokemon, ShadowState, ShadowStatus, Signer, SourceRef,
 };
 
 use crate::player_strip::Reach;
@@ -277,6 +277,22 @@ pub fn coop(
         view.graveyard.extend(Grave::of(&recorded));
     }
     view.feed.reverse();
+    // Route 104's Encounter is used, with wild battles since.
+    let battles = [POOCHYENA, WURMPLE, POOCHYENA, ZIGZAGOON, LOTAD, POOCHYENA, WINGULL];
+    view.area_status = Some(AreaStatus {
+        area: r104.name.clone(),
+        state: AreaState::EncounterDone,
+        encounter: view.encounters.iter().rev().find(|e| e.area == r104.name).cloned(),
+        battles: battles
+            .iter()
+            .map(|mon| AreaBattle {
+                species: mon.1,
+                species_name: mon.2.to_owned(),
+                met: Met::AfterEncounter,
+            })
+            .collect(),
+        met: battles.len() + 1,
+    });
 
     // What the others' Shadow Games would have shown: every Pokémon they
     // caught, the ones that fainted, and their parties now.

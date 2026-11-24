@@ -30,7 +30,7 @@ mod storage;
 mod stream;
 mod view;
 
-pub use areas::{AreaEncounter, area_encounters};
+pub use areas::{AreaBattle, AreaEncounter, AreaState, AreaStatus, Met, RECENT_BATTLES, area_encounters};
 pub use avatars::{Painter, PartnerAvatar};
 pub use boot::{BootPlan, Booted, boot_core};
 pub use cheats::{Cheat, CheatWatch, FAST_BURST_FRAMES, Flag, RETRY_WAIT_MS};

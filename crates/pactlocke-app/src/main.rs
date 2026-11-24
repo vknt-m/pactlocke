@@ -14,6 +14,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod area_status;
 mod areas_panel;
 mod audio;
 mod coop;
@@ -235,6 +236,8 @@ struct Playing {
     ruleset: Ruleset,
     /// Whether the game is paused now, for whatever reason.
     paused: bool,
+    /// When the Area status overlay last popped up on the game screen.
+    area_overlay: area_status::Overlay,
 }
 
 /// The folder of a developer's local Game Profiles, if the developer setting names one.
@@ -1960,13 +1963,14 @@ impl PactlockeApp {
 
         // Faint = Dead: a game over replaces the game; a wiped party waits
         // on a Retry over the stopped game.
-        if let Some(view) = playing.view() {
+        let view_now = playing.view();
+        if let Some(view) = &view_now {
             let me = self.lobbies.public_key();
             if let Some(over) = &view.game_over {
-                game_over::screen(ui, over, &view, self.lobbies.log(), me);
+                game_over::screen(ui, over, view, self.lobbies.log(), me);
                 return;
             }
-            if let Some(wipe) = game_over::wipe_of(&view, self.lobbies.log(), me) {
+            if let Some(wipe) = game_over::wipe_of(view, self.lobbies.log(), me) {
                 let online = self.lobbies.online();
                 match game_over::wipe_bar(ui, &wipe, self.lobbies.log(), me, online) {
                     Some(game_over::WipeAnswer::Command(command)) => {
@@ -2078,8 +2082,25 @@ impl PactlockeApp {
             } else {
                 fit.max(0.1)
             };
+            // This Player's own Area status; while watching another Player, none is drawn.
+            let own_view = self.demo_view.as_ref().or(view_now.as_ref());
+            let own_status = own_view.and_then(|view| view.area_status.as_ref());
             ui.centered_and_justified(|ui| {
                 let image = ui.add(egui::Image::new(texture).fit_to_exact_size(size * scale));
+                // The widget fills the centred area; the picture is its middle.
+                let picture = egui::Rect::from_center_size(image.rect.center(), size * scale);
+                if watched.is_none()
+                    && area_status::on_game_screen(
+                        ui.ctx(),
+                        picture,
+                        own_status,
+                        &mut playing.area_overlay,
+                        self.settings.area_status_style,
+                        self.settings.catch_overlay,
+                    )
+                {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+                }
                 if self.paused && watched.is_none() {
                     ui.painter().text(
                         image.rect.center(),
@@ -2254,6 +2275,7 @@ impl Playing {
             icons: None,
             ruleset: Ruleset::default(),
             paused: false,
+            area_overlay: area_status::Overlay::default(),
         }
     }
 
@@ -2283,6 +2305,7 @@ fn panel_contents(
     tab: &mut side_panel::Tab,
     speed: u8,
     demo_view: Option<&RunView>,
+    area_status_style: settings::AreaStatusStyle,
 ) -> side_panel::Asks {
     let Some(playing) = playing else {
         side_panel::lobby_only(ui, lobbies);
@@ -2306,6 +2329,7 @@ fn panel_contents(
         ruleset: &ruleset,
         spectate: playing.spectate.as_ref(),
         speed,
+        area_status_style,
     };
     side_panel::show(ui, run, icons, lobbies, tab)
 }
@@ -2373,6 +2397,7 @@ impl eframe::App for PactlockeApp {
         let in_lobby_only = self.playing.is_none() && self.lobbies.in_lobby();
         let show_panel = (self.playing.is_some() && self.panel_shown) || in_lobby_only;
         let speed = self.effective_speed().multiplier() as u8;
+        let style = self.settings.area_status_style;
         let mut asks = side_panel::Asks::default();
         if show_panel && self.panel_popped && self.playing.is_some() {
             let mut closed = false;
@@ -2386,7 +2411,7 @@ impl eframe::App for PactlockeApp {
                     .with_inner_size([400.0, 760.0]),
                 |ui, _class| {
                     egui::CentralPanel::default_margins().show(ui, |ui| {
-                        asks = panel_contents(ui, playing.as_deref_mut(), lobbies, tab, speed, demo_view);
+                        asks = panel_contents(ui, playing.as_deref_mut(), lobbies, tab, speed, demo_view, style);
                     });
                     closed = ui.ctx().input(|i| i.viewport().close_requested());
                 },
@@ -2402,7 +2427,7 @@ impl eframe::App for PactlockeApp {
                 .default_size(self.settings.panel_width)
                 .size_range(settings::PANEL_WIDTHS.0..=settings::PANEL_WIDTHS.1)
                 .show(ui, |ui| {
-                    asks = panel_contents(ui, playing, lobbies, tab, speed, demo_view)
+                    asks = panel_contents(ui, playing, lobbies, tab, speed, demo_view, style)
                 });
             let width = shown.response.rect.width();
             if (width - self.settings.panel_width).abs() > 1.0 && !ctx.input(|i| i.pointer.any_down()) {

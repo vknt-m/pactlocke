@@ -38,9 +38,9 @@ fn a_second_wild_battle_in_a_closed_area_blocks_catches_for_that_battle_only() {
 
     player.meets_wild(RATTATA);
     assert!(player.game.catches_blocked, "the ball is refused in this battle");
-    assert_eq!(
-        player.feed(FeedKind::Block),
-        ["Route 1: Encounter already used, so no catching this RATTATA (running is fine)"]
+    assert!(
+        player.feed(FeedKind::Block).is_empty(),
+        "the Area status says the Encounter is done, not the feed"
     );
 
     player.leaves_battle();

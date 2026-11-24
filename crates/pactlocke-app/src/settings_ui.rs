@@ -4,7 +4,7 @@
 
 use eframe::egui;
 
-use crate::settings::{BUTTONS, RelayChoice, Settings};
+use crate::settings::{AreaStatusStyle, BUTTONS, RelayChoice, Settings};
 
 /// A Settings category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,6 +199,23 @@ impl SettingsDialog {
                             "At 100% you see the app as you would on a {}p screen.",
                             crate::ui_scale::REFERENCE_HEIGHT
                         ));
+                        ui.end_row();
+                        ui.label("Area status");
+                        ui.horizontal(|ui| {
+                            for style in AreaStatusStyle::ALL {
+                                ui.radio_value(&mut s.area_status_style, style, style.name());
+                            }
+                        });
+                        ui.end_row();
+                        ui.label("");
+                        // With Overlay picked, the overlay shows already.
+                        ui.add_enabled(
+                            s.area_status_style != AreaStatusStyle::Overlay,
+                            egui::Checkbox::new(
+                                &mut s.catch_overlay,
+                                "Also pop up an overlay on the game screen when a catch is allowed",
+                            ),
+                        );
                         ui.end_row();
                     });
             }

@@ -15,6 +15,7 @@ use pactlocke_run::{
 };
 
 use crate::lobby_ui::Lobbies;
+use crate::settings::AreaStatusStyle;
 use crate::spectate::{DropoutAsk, Spectate};
 use crate::theme::{self, Icons};
 use crate::{player_strip, rules_text, run_panel};
@@ -57,6 +58,8 @@ pub struct RunPanel<'a> {
     /// With other Players: their Shadow Games.
     pub spectate: Option<&'a Spectate>,
     pub speed: u8,
+    /// How the Area status shows: the Area card and the Strip are in this panel.
+    pub area_status_style: crate::settings::AreaStatusStyle,
 }
 
 /// The panel during a Run. `tab` is the open tab, changed here.
@@ -145,6 +148,11 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
     if let Some(wanted) = run.view.nickname_wanted.first() {
         asks.command = run_panel::nickname_prompt(ui, wanted);
     }
+    if run.area_status_style == AreaStatusStyle::Strip
+        && let Some(status) = &run.view.area_status
+    {
+        crate::area_status::strip(ui, status);
+    }
     ui.separator();
 
     // The tab bar at the bottom, the open tab above it.
@@ -167,6 +175,12 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
                 .auto_shrink(false)
                 .show(ui, |ui| match tab {
                     Tab::Feed => {
+                        if run.area_status_style == AreaStatusStyle::Card
+                            && let Some(status) = &run.view.area_status
+                        {
+                            crate::area_status::card(ui, status, icons);
+                            ui.add_space(6.0);
+                        }
                         sprite_bar(ui, &run, &players, &links, icons);
                         ui.add_space(6.0);
                         feed(ui, &run, &players, now);

@@ -28,6 +28,9 @@ _Avoid_: Generation (one generation can contain several Game Families)
 A place in the game that counts as one encounter location for the Run's first-encounter rule, such as a route, cave or town. It is the game's own region-map section, the place name the game records as a Pokémon's met location, so every floor of a cave and every zone of the Safari Zone is one Area. Grass, surfing, fishing and rock smash in an Area all share its one Encounter.
 _Avoid_: Route (too narrow), map (one Area can span many maps), location
 
+**Area status**:
+What the app shows of the Area the Player is in: catch allowed, Encounter done, dupe not counted, or not counted yet (no Poké Balls). Settings picks its style: an Area card at the top of the Feed, a Strip above the side panel's tabs, or an Overlay on the game screen.
+
 **Encounter**:
 A Player's one chance at a Pokémon from a given source, whether or not it is caught. There are three kinds of source: an Area (the first wild Pokémon the Player battles there, not merely entering it), a Gift, or a Static. Wild battles before the Player first has Poké Balls don't count.
 _Avoid_: Catch (a catch is only one possible outcome of an Encounter)

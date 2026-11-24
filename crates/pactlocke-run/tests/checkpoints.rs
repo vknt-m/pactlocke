@@ -45,6 +45,10 @@ fn a_boot_takes_a_checkpoint_and_so_does_each_in_game_save() {
     assert!(player.engine.checkpoint_wanted(), "at power-on");
     checkpoint_if_wanted(&mut player);
     assert!(!player.engine.checkpoint_wanted());
+    assert!(
+        player.feed(FeedKind::Run).iter().all(|l| !l.starts_with("Saved")),
+        "a boot is silent"
+    );
 
     player.engine.save_memory_seen(&[0xFF; 3]);
     assert!(
@@ -59,6 +63,7 @@ fn a_boot_takes_a_checkpoint_and_so_does_each_in_game_save() {
     player.engine.save_memory_seen(&[1, 2, 3]);
     assert!(player.engine.checkpoint_wanted(), "the game was saved");
     checkpoint_if_wanted(&mut player);
+    assert_eq!(player.feed(FeedKind::Run)[0], "Saved in-game: a Run Checkpoint is kept");
 
     let stored = player.storage.load_run();
     let checkpoint = stored.latest_checkpoint.expect("stored with its event");

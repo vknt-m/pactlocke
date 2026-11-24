@@ -1,6 +1,6 @@
 //! What the side panel shows of a Run. The UI only displays it.
 
-use crate::event::{AreaRef, DeathCause, DeclineReason, Recorded, ResumedFrom, RunEvent};
+use crate::event::{AreaRef, CheckpointReason, DeathCause, DeclineReason, Recorded, ResumedFrom, RunEvent};
 
 /// Everything the side panel shows of a Run.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -31,6 +31,9 @@ pub struct RunView {
     pub area: Option<String>,
     /// What the Player is doing, for the Player strip.
     pub doing: Doing,
+    /// The Area status of the listed Area the Player is in, in a Run with
+    /// the first-Encounter rule.
+    pub area_status: Option<crate::AreaStatus>,
     /// Faint = Dead: this Player's party is wiped, and the game has stopped.
     pub wipe: Option<WipeView>,
     /// The Run is lost.
@@ -291,6 +294,8 @@ pub enum FeedIcon {
     Cheat,
     /// A Gift or trade.
     Gift,
+    /// An in-game save.
+    Save,
     /// Something the rules refused, or a problem putting a rule in place.
     Block,
     /// Anything else: the Run itself.
@@ -314,6 +319,7 @@ impl FeedIcon {
             RunEvent::Retried { .. } | RunEvent::RetryFailed { .. } => FeedIcon::Retry,
             RunEvent::SpeedChanged { .. } | RunEvent::OthersSpeed { .. } => FeedIcon::Speed,
             RunEvent::CheatFlag { .. } | RunEvent::Flagged { .. } | RunEvent::FlagCleared { .. } => FeedIcon::Cheat,
+            RunEvent::Checkpoint { .. } => FeedIcon::Save,
             _ => match kind {
                 FeedKind::Death => FeedIcon::Death,
                 FeedKind::Violation => FeedIcon::Violation,
@@ -397,6 +403,12 @@ impl FeedEntry {
                     ),
                 },
             ),
+            RunEvent::Checkpoint {
+                reason: CheckpointReason::InGameSave,
+                ..
+            } => (FeedKind::Run, "Saved in-game: a Run Checkpoint is kept".to_owned()),
+            // The Area status says so instead, once, not at every battle.
+            RunEvent::CatchesBlocked { .. } => return None,
             RunEvent::Checkpoint { .. }
             | RunEvent::Closed
             | RunEvent::RetryVote { .. }
@@ -493,13 +505,6 @@ impl FeedEntry {
                 FeedKind::Encounter,
                 format!(
                     "{}: a wild {species_name}, not counted: a dupe of your {dupe_of}, so no catching it (running is fine)",
-                    area.name
-                ),
-            ),
-            RunEvent::CatchesBlocked { area, species_name, .. } => (
-                FeedKind::Block,
-                format!(
-                    "{}: Encounter already used, so no catching this {species_name} (running is fine)",
                     area.name
                 ),
             ),

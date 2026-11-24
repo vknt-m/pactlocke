@@ -270,6 +270,11 @@ impl Rules {
             .find(|&species| families.of(species) == family)
     }
 
+    /// Whether this Area's Encounter is used or closed.
+    pub fn area_closed(&self, area: u16) -> bool {
+        self.closed.contains(&area)
+    }
+
     /// Whether the game should be watched for the Player's first Poké Balls.
     pub fn waiting_for_poke_balls(&self) -> bool {
         self.ruleset.first_encounter && !self.had_poke_balls

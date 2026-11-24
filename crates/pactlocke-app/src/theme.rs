@@ -160,6 +160,16 @@ pub fn feed_icon(ui: &mut egui::Ui, icon: FeedIcon, colour: Color32) {
             );
             p.circle_stroke(at(7.0, 6.0), 2.8, s);
         }
+        FeedIcon::Save => {
+            // A cartridge's save: a box with a label strip.
+            p.rect_stroke(
+                Rect::from_min_size(at(2.5, 2.5), Vec2::new(9.0, 9.0)),
+                1.5,
+                s,
+                egui::StrokeKind::Middle,
+            );
+            p.line_segment([at(4.5, 5.5), at(9.5, 5.5)], s);
+        }
         FeedIcon::Run => {
             p.circle_filled(c, 2.0, colour);
         }

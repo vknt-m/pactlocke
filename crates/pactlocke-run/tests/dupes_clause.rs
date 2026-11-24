@@ -219,7 +219,8 @@ fn a_closed_area_stays_closed_to_a_dupe() {
     player.leaves_battle();
     player.meets_wild(PIDGEOTTO);
     assert!(player.game.catches_blocked);
-    assert!(player.feed(FeedKind::Block)[0].starts_with("Route 1: Encounter already used"));
+    assert!(player.feed(FeedKind::Encounter)[0].starts_with("Route 1: a wild RATTATA"));
+    assert!(player.feed(FeedKind::Block).is_empty());
 }
 
 /// Every species evolves into some other one, as a randomizer's "random every level" makes it.

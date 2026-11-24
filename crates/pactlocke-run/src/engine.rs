@@ -65,6 +65,10 @@ pub struct RunEngine {
     save_settling: bool,
     view: RunView,
     view_version: u64,
+    /// This Player's wild battles in each Area, for the Area status.
+    area_battles: crate::areas::AreaBattles,
+    /// The Area the Player is in, as last looked at.
+    area_here: Option<Area>,
     /// Whether the feed has said the Run file can't be written.
     write_failure_shown: bool,
     /// Dead PIDs that couldn't be moved to the Dead box since the game was booted;
@@ -603,6 +607,8 @@ impl RunEngine {
             save_settling: false,
             view,
             view_version: 0,
+            area_battles: crate::areas::AreaBattles::default(),
+            area_here: None,
             write_failure_shown: false,
             dead_box_failed: BTreeSet::new(),
             known: None,
@@ -736,6 +742,7 @@ impl RunEngine {
         let battle = game.battle();
         match (self.battle.is_some(), battle.clone()) {
             (false, Some(battle)) => {
+                self.area_here = game.area();
                 let script = game.script();
                 // A battle under way in a game resumed from a checkpoint was
                 // decided before the checkpoint; any block on it comes off as usual.
@@ -804,11 +811,31 @@ impl RunEngine {
         if !in_battle && !game.at_safe_overworld_point() && self.at_gate.is_none() {
             return;
         }
-        let area = game.area().map(|a| a.name);
+        let here = game.area();
+        let area = here.as_ref().map(|a| a.name.clone());
         let doing = crate::Doing::from(in_battle, self.at_gate.clone());
         if (area.as_ref(), &doing) != (self.view.area.as_ref(), &self.view.doing) {
             self.view.area = area;
             self.view.doing = doing;
+            self.view_version += 1;
+        }
+        self.area_here = here;
+        self.show_area_status();
+    }
+
+    /// Brings the Area status up to date with where the Player is and what the rules say of it.
+    fn show_area_status(&mut self) {
+        let status = match &self.area_here {
+            Some(area) if self.info.ruleset.first_encounter => Some(self.area_battles.status(
+                &area.name,
+                self.rules.area_closed(area.id),
+                !self.rules.waiting_for_poke_balls(),
+                &self.view.encounters,
+            )),
+            _ => None,
+        };
+        if status != self.view.area_status {
+            self.view.area_status = status;
             self.view_version += 1;
         }
     }
@@ -1316,6 +1343,7 @@ impl RunEngine {
         }
         self.take_in_ending(recorded);
         crate::AreaEncounter::take(&mut self.view.encounters, &recorded.event);
+        self.area_battles.take(&recorded.event);
         if recorded.event.is_run_checkpoint()
             && let RunEvent::Checkpoint { hash, .. } = &recorded.event
         {
@@ -1360,6 +1388,7 @@ impl RunEngine {
         if let Some(entry) = FeedEntry::of(recorded) {
             self.view.feed.insert(0, entry);
         }
+        self.show_area_status();
         self.view_version += 1;
     }
 }

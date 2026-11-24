@@ -42,6 +42,33 @@ pub enum RelayChoice {
     Off,
 }
 
+/// How the Area status shows, as Settings lists the styles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AreaStatusStyle {
+    /// On the game screen, fading after a few seconds.
+    Overlay,
+    /// Above the side panel's tabs.
+    Strip,
+    /// At the top of the Feed tab.
+    #[default]
+    Card,
+}
+
+impl AreaStatusStyle {
+    /// Every style, in the order Settings lists them.
+    pub const ALL: [AreaStatusStyle; 3] = [AreaStatusStyle::Overlay, AreaStatusStyle::Strip, AreaStatusStyle::Card];
+
+    /// The style's name in Settings.
+    pub fn name(self) -> &'static str {
+        match self {
+            AreaStatusStyle::Overlay => "Overlay",
+            AreaStatusStyle::Strip => "Strip",
+            AreaStatusStyle::Card => "Area card",
+        }
+    }
+}
+
 /// Everything Settings holds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -80,6 +107,11 @@ pub struct Settings {
     pub ui_scale: u16,
     /// The text's size in percent, on top of the UI scale.
     pub text_size: u16,
+    /// How the Area status shows.
+    pub area_status_style: AreaStatusStyle,
+    /// With the Area card or Strip: also pop up the overlay on the game
+    /// screen when a catch is allowed.
+    pub catch_overlay: bool,
     pub relays: RelayChoice,
     /// One relay URL per line, for [`RelayChoice::Own`].
     pub own_relays: String,
@@ -115,6 +147,8 @@ impl Default for Settings {
             colour_correction: false,
             ui_scale: 100,
             text_size: 100,
+            area_status_style: AreaStatusStyle::Card,
+            catch_overlay: false,
             relays: RelayChoice::Public,
             own_relays: String::new(),
             verbose_log: false,
@@ -245,5 +279,10 @@ mod tests {
         assert_eq!(partial.key_of("Start"), Some(egui::Key::Enter));
         assert_eq!(settings.key_of("A"), Some(egui::Key::K));
         assert_eq!((partial.ui_scale, partial.text_size), (100, 100));
+        assert_eq!(
+            (partial.area_status_style, partial.catch_overlay),
+            (AreaStatusStyle::Card, false),
+            "the Area card, with no extra overlay"
+        );
     }
 }
