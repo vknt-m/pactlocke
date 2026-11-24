@@ -134,7 +134,7 @@ fn encounter(ui: &mut egui::Ui, column: &Column<'_>, area: &str, icons: &mut Ico
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "open",
-                egui::FontId::proportional(10.0),
+                egui::FontId::proportional(crate::ui_scale::text_points(ui.style(), 10.0)),
                 ui.visuals().weak_text_color(),
             );
             response.on_hover_text(format!("{who}: this Area's Encounter is still open"));

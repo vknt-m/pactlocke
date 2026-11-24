@@ -37,6 +37,7 @@ mod settings_ui;
 mod side_panel;
 mod spectate;
 mod theme;
+mod ui_scale;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -371,6 +372,8 @@ struct PactlockeApp {
     panel_shown: bool,
     panel_tab: side_panel::Tab,
     settings: Settings,
+    /// Keeps the app's size on the UI scale, the Text size and the screen.
+    ui_scale: ui_scale::UiScale,
     settings_dialog: Option<SettingsDialog>,
     /// The first-launch prompt's name, as typed.
     name_draft: String,
@@ -410,6 +413,7 @@ impl PactlockeApp {
         let library = RunLibrary::open(dir).map_err(|e| format!("Runs can't be kept: {e}"));
         let runs = library.as_ref().map(RunLibrary::list).unwrap_or_default();
         let settings = Settings::load();
+        let ui_scale = ui_scale::UiScale::new(&ctx);
         let mut app = Self {
             ctx,
             playing: None,
@@ -444,6 +448,7 @@ impl PactlockeApp {
             shot: None,
             demo_view: None,
             shot_saved: Arc::default(),
+            ui_scale,
             settings,
         };
         app.apply_settings();
@@ -1553,7 +1558,9 @@ impl PactlockeApp {
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 let action = |ui: &mut egui::Ui, title: &str, line: &str| {
-                    let text = egui::RichText::new(format!("{title}\n")).strong().size(15.0);
+                    let text = egui::RichText::new(format!("{title}\n"))
+                        .strong()
+                        .size(ui_scale::text_points(ui.style(), 15.0));
                     let mut job = egui::text::LayoutJob::default();
                     text.append_to(&mut job, ui.style(), egui::FontSelection::Default, egui::Align::LEFT);
                     egui::RichText::new(line).weak().append_to(
@@ -2064,8 +2071,10 @@ impl PactlockeApp {
             let available = ui.available_size();
             let size = texture.size_vec2();
             let fit = (available.x / size.x).min(available.y / size.y);
-            let scale = if self.settings.integer_scale && fit >= 1.0 {
-                fit.floor()
+            // Whole numbers of screen pixels, not of points: the UI scale makes points fractional.
+            let ppp = ui.ctx().pixels_per_point();
+            let scale = if self.settings.integer_scale && fit * ppp >= 1.0 {
+                (fit * ppp).floor() / ppp
             } else {
                 fit.max(0.1)
             };
@@ -2076,7 +2085,7 @@ impl PactlockeApp {
                         image.rect.center(),
                         egui::Align2::CENTER_CENTER,
                         "Paused",
-                        egui::FontId::proportional(28.0),
+                        egui::FontId::proportional(ui_scale::text_points(ui.style(), 28.0)),
                         egui::Color32::WHITE,
                     );
                 }
@@ -2310,6 +2319,8 @@ impl eframe::App for PactlockeApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.ui_scale
+            .apply(&ctx, self.settings.ui_scale, self.settings.text_size);
         self.shortcuts(&ctx);
         egui::Panel::top("menu bar").show(ui, |ui| self.menu_bar(ui));
         if let Some(error) = &self.error {

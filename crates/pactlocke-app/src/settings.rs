@@ -75,6 +75,11 @@ pub struct Settings {
     pub smooth: bool,
     /// Correct the colours for a modern screen, as a GBA's screen looked.
     pub colour_correction: bool,
+    /// Everything's size in percent; 100 looks as on a screen
+    /// [`REFERENCE_HEIGHT`](crate::ui_scale::REFERENCE_HEIGHT) pixels tall.
+    pub ui_scale: u16,
+    /// The text's size in percent, on top of the UI scale.
+    pub text_size: u16,
     pub relays: RelayChoice,
     /// One relay URL per line, for [`RelayChoice::Own`].
     pub own_relays: String,
@@ -108,6 +113,8 @@ impl Default for Settings {
             integer_scale: true,
             smooth: false,
             colour_correction: false,
+            ui_scale: 100,
+            text_size: 100,
             relays: RelayChoice::Public,
             own_relays: String::new(),
             verbose_log: false,
@@ -161,6 +168,8 @@ impl Settings {
         settings.default_speed = settings.default_speed.clamp(1, 4);
         settings.volume = settings.volume.clamp(0.0, 1.0);
         settings.panel_width = settings.panel_width.clamp(PANEL_WIDTHS.0, PANEL_WIDTHS.1);
+        settings.ui_scale = crate::ui_scale::snap_percent(settings.ui_scale);
+        settings.text_size = crate::ui_scale::snap_percent(settings.text_size);
         settings
     }
 
@@ -235,5 +244,6 @@ mod tests {
         assert_eq!(partial.name.as_deref(), Some("Blue"));
         assert_eq!(partial.key_of("Start"), Some(egui::Key::Enter));
         assert_eq!(settings.key_of("A"), Some(egui::Key::K));
+        assert_eq!((partial.ui_scale, partial.text_size), (100, 100));
     }
 }

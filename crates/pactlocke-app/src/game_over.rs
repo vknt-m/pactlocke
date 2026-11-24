@@ -108,7 +108,10 @@ pub fn screen(ui: &mut egui::Ui, over: &GameOverView, view: &RunView, log: Optio
         egui::Frame::new().inner_margin(egui::Margin::same(24)).show(ui, |ui| {
             ui.heading("Game over");
             ui.add_space(6.0);
-            ui.add(egui::Label::new(egui::RichText::new(&over.how).size(16.0)).wrap());
+            ui.add(
+                egui::Label::new(egui::RichText::new(&over.how).size(crate::ui_scale::text_points(ui.style(), 16.0)))
+                    .wrap(),
+            );
             ui.add_space(12.0);
             survivors(ui, &over.longest);
             ui.add_space(12.0);

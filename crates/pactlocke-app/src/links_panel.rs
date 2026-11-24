@@ -178,7 +178,7 @@ fn marked_tile(ui: &mut egui::Ui, mark: &str) -> egui::Response {
         rect.center(),
         egui::Align2::CENTER_CENTER,
         mark,
-        egui::FontId::proportional(12.0),
+        egui::FontId::proportional(crate::ui_scale::text_points(ui.style(), 12.0)),
         ui.visuals().weak_text_color(),
     );
     response

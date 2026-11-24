@@ -184,6 +184,22 @@ impl SettingsDialog {
                         ui.label("");
                         ui.weak("Solo only: in a Run with friends nothing pauses for the others.");
                         ui.end_row();
+                        let (low, high, step) = crate::ui_scale::PERCENTS;
+                        for (label, value) in [("UI scale", &mut s.ui_scale), ("Text size", &mut s.text_size)] {
+                            ui.label(label);
+                            ui.add(
+                                egui::Slider::new(value, low..=high)
+                                    .step_by(f64::from(step))
+                                    .suffix("%"),
+                            );
+                            ui.end_row();
+                        }
+                        ui.label("");
+                        ui.weak(format!(
+                            "At 100% you see the app as you would on a {}p screen.",
+                            crate::ui_scale::REFERENCE_HEIGHT
+                        ));
+                        ui.end_row();
                     });
             }
             Category::Controls => {
