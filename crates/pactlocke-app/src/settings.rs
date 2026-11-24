@@ -69,6 +69,33 @@ impl AreaStatusStyle {
     }
 }
 
+/// The home screen's accent, a metal: on its main buttons (New Run, Resume, Add a folder), the
+/// open tab, and the row or game tile under the pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Accent {
+    #[default]
+    Silver,
+    Cobalt,
+    Emerald,
+    Gold,
+}
+
+impl Accent {
+    /// Every accent, in the order Settings lists them.
+    pub const ALL: [Accent; 4] = [Accent::Silver, Accent::Cobalt, Accent::Emerald, Accent::Gold];
+
+    /// The accent's name in Settings.
+    pub fn name(self) -> &'static str {
+        match self {
+            Accent::Silver => "Silver",
+            Accent::Cobalt => "Cobalt",
+            Accent::Emerald => "Emerald",
+            Accent::Gold => "Gold",
+        }
+    }
+}
+
 /// Everything Settings holds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -112,6 +139,10 @@ pub struct Settings {
     /// With the Area card or Strip: also pop up the overlay on the game
     /// screen when a catch is allowed.
     pub catch_overlay: bool,
+    /// The home screen's accent.
+    pub accent: Accent,
+    /// Folders the Games tab looks through for ROMs, and again at each launch.
+    pub game_folders: Vec<PathBuf>,
     pub relays: RelayChoice,
     /// One relay URL per line, for [`RelayChoice::Own`].
     pub own_relays: String,
@@ -149,6 +180,8 @@ impl Default for Settings {
             text_size: 100,
             area_status_style: AreaStatusStyle::Card,
             catch_overlay: false,
+            accent: Accent::Silver,
+            game_folders: Vec::new(),
             relays: RelayChoice::Public,
             own_relays: String::new(),
             verbose_log: false,
@@ -283,6 +316,11 @@ mod tests {
             (partial.area_status_style, partial.catch_overlay),
             (AreaStatusStyle::Card, false),
             "the Area card, with no extra overlay"
+        );
+        assert_eq!(
+            (partial.accent, partial.game_folders.len()),
+            (Accent::Silver, 0),
+            "Silver, and no game folders yet"
         );
     }
 }

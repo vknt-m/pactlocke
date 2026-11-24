@@ -281,10 +281,16 @@ fn a_run_with_friends_keeps_its_run_log_in_the_run_file_and_is_listed_so() {
         game_name: "Pokémon FireRed (USA) 1.0".into(),
         game_sha1: "41cb23d8dccc8ebd7c649cd8fbb58eeace6e2fdc".into(),
         ruleset: first_encounter(),
-        roster: vec![pactlocke_run::RosterEntry {
-            key: host.public(),
-            name: "Red".into(),
-        }],
+        roster: vec![
+            pactlocke_run::RosterEntry {
+                key: host.public(),
+                name: "Red".into(),
+            },
+            pactlocke_run::RosterEntry {
+                key: [2; 32],
+                name: "Blue".into(),
+            },
+        ],
         start_ms: START_MS,
     });
     let submission = log.sign(&host, 2, &locked);
@@ -323,6 +329,8 @@ fn a_run_with_friends_keeps_its_run_log_in_the_run_file_and_is_listed_so() {
     let alone = runs.iter().find(|r| r.name == "Alone").unwrap();
     assert!(together.with_friends);
     assert!(!alone.with_friends);
+    assert_eq!(together.players, ["Red", "Blue"], "in join order, the Host first");
+    assert!(alone.players.is_empty());
     let stored = library.open_run(&together.id).unwrap().load().unwrap();
     assert_eq!(stored.log, other.entries());
     assert_eq!(stored.waiting, [waiting]);

@@ -22,10 +22,13 @@ mod data_dir;
 mod demo;
 mod game_over;
 mod gamepad;
+mod games;
 mod headless;
+mod home;
 mod links_panel;
 mod lobby_ui;
 mod logger;
+mod metal;
 mod player_strip;
 mod randomized;
 mod resume;
@@ -162,6 +165,7 @@ fn windowed() -> eframe::Result {
                 Some("areas") => app.panel_tab = side_panel::Tab::Areas,
                 Some("graveyard") => app.panel_tab = side_panel::Tab::Graveyard,
                 Some("ruleset") => app.panel_tab = side_panel::Tab::Ruleset,
+                Some("games") => app.home_tab = home::Tab::Games,
                 _ => {}
             }
             app.shot = shot.map(|path| (path, SHOT_FRAMES));
@@ -360,6 +364,12 @@ struct PactlockeApp {
     roms: std::rc::Rc<std::cell::RefCell<RomLibrary>>,
     /// New Run's game chooser is open.
     choosing_game: bool,
+    /// The Games tab's background work: game folders and title screens.
+    games: games::Games,
+    /// The title screens shown, as textures.
+    title_art: home::TitleArt,
+    /// The home screen's open tab.
+    home_tab: home::Tab,
     /// The Runs are in the user data folder because the app's folder isn't writable.
     library_fallback: bool,
     runs: Vec<RunSummary>,
@@ -417,13 +427,22 @@ impl PactlockeApp {
         let runs = library.as_ref().map(RunLibrary::list).unwrap_or_default();
         let settings = Settings::load();
         let ui_scale = ui_scale::UiScale::new(&ctx);
+        let profiles = load_profiles(settings.dev_profiles.as_deref());
         let mut app = Self {
-            ctx,
             playing: None,
-            profiles: load_profiles(settings.dev_profiles.as_deref()),
             library,
             roms: std::rc::Rc::new(std::cell::RefCell::new(RomLibrary::open(rom_library::path()))),
             choosing_game: false,
+            games: {
+                let wake = ctx.clone();
+                games::Games::start(
+                    profiles.as_ref().ok().cloned(),
+                    games::TitleScreens::beside_settings(),
+                    move || wake.request_repaint(),
+                )
+            },
+            title_art: home::TitleArt::default(),
+            home_tab: home::Tab::Runs,
             library_fallback,
             runs,
             new_run: None,
@@ -452,11 +471,14 @@ impl PactlockeApp {
             demo_view: None,
             shot_saved: Arc::default(),
             ui_scale,
+            profiles,
+            ctx,
             settings,
         };
         app.apply_settings();
         app.lobbies.roms = Some(app.roms.clone());
         app.adopt_recent_roms();
+        app.scan_game_folders(app.settings.game_folders.clone());
         app
     }
 
@@ -1553,156 +1575,78 @@ impl PactlockeApp {
         }
     }
 
-    /// The start page: the three actions, then the Runs.
+    /// The home screen (see [`home`]): what the Player asks for there is done here.
     fn home_screen(&mut self, ui: &mut egui::Ui) {
-        let mut resume = None;
-        egui::Frame::new().inner_margin(egui::Margin::same(24)).show(ui, |ui| {
-            ui.heading("Pactlocke");
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                let action = |ui: &mut egui::Ui, title: &str, line: &str| {
-                    let text = egui::RichText::new(format!("{title}\n"))
-                        .strong()
-                        .size(ui_scale::text_points(ui.style(), 15.0));
-                    let mut job = egui::text::LayoutJob::default();
-                    text.append_to(&mut job, ui.style(), egui::FontSelection::Default, egui::Align::LEFT);
-                    egui::RichText::new(line).weak().append_to(
-                        &mut job,
-                        ui.style(),
-                        egui::FontSelection::Default,
-                        egui::Align::LEFT,
-                    );
-                    ui.add_sized([200.0, 56.0], egui::Button::new(job)).clicked()
-                };
-                if action(ui, "New Run", "A solo Run, or invite up to two friends") {
-                    self.begin_new_run();
-                }
-                if action(ui, "Join a Run", "Paste a friend's invite link") {
-                    self.lobbies.open_join_prompt();
-                }
-                if action(ui, "Open a ROM", "Just play, no Run") {
-                    self.pick_rom();
-                }
-            });
-            ui.add_space(20.0);
-            if let Err(e) = &self.library {
-                ui.colored_label(ui.visuals().error_fg_color, e);
-            } else if self.runs.is_empty() {
-                ui.weak("No Runs yet. Start one with New Run, or open a ROM to just play.");
-            }
-            if self.library_fallback {
-                ui.weak("The app's folder can't be written to, so Runs are kept in your user data folder.");
-            }
-            if let Some(dir) = self.dev_profiles() {
-                ui.weak(format!(
-                    "Developer setting: local Game Profiles from {}, for solo Runs only.",
-                    dir.display()
-                ));
-            }
-            let now = SystemRunClock.now_ms();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                egui::Grid::new("runs")
-                    .num_columns(6)
-                    .striped(true)
-                    .spacing([18.0, 8.0])
-                    .show(ui, |ui| {
-                        if !self.runs.is_empty() {
-                            for heading in ["Run", "Game", "Preset", "Deaths", "Last played", ""] {
-                                ui.weak(heading);
-                            }
-                            ui.end_row();
-                        }
-                        for summary in &self.runs {
-                            ui.vertical(|ui| {
-                                ui.strong(&summary.name);
-                                if let Some(from) = &summary.copied_from {
-                                    ui.weak(format!("Copied from {} on {}", from.name, logger::date(from.at_ms)));
-                                }
-                            });
-                            ui.label(&summary.game_name);
-                            ui.label(preset_name(&summary.ruleset));
-                            ui.label(summary.deaths.to_string());
-                            ui.label(run_panel::ago(now - summary.last_played_ms));
-                            ui.horizontal(|ui| {
-                                if let Some(over) = &summary.game_over {
-                                    ui.colored_label(
-                                        ui.visuals().error_fg_color,
-                                        format!("Game over · {}", logger::date(over.at_ms)),
-                                    );
-                                    if ui.button("Summary").clicked() {
-                                        self.lost = Some(summary.clone());
-                                    }
-                                } else if ui.button("Resume").clicked() {
-                                    resume = Some(summary.clone());
-                                }
-                                if summary.with_friends
-                                    && summary.game_over.is_none()
-                                    && ui
-                                        .button("Continue as solo…")
-                                        .on_hover_text("A new solo Run from where you left this one")
-                                        .clicked()
-                                {
-                                    self.copying = Some(summary.clone());
-                                }
-                                if ui.button("Delete…").clicked() {
-                                    self.deleting = Some(summary.clone());
-                                }
-                            });
-                            ui.end_row();
-                        }
-                    });
-                ui.add_space(16.0);
-                self.known_games(ui);
-            });
+        // ROMs found in the game folders join the library, kept once per batch.
+        let roms = self.roms.clone();
+        let mut added = false;
+        self.title_art.take_done(&self.games, |found| {
+            roms.borrow_mut().add_found(found);
+            added = true;
         });
-        if let Some(summary) = resume {
-            self.resume_run(&summary);
+        if added {
+            self.roms.borrow().keep();
+        }
+        let mut notes = Vec::new();
+        if let Err(e) = &self.library {
+            notes.push(home::Note::Error(e.clone()));
+        }
+        if self.library_fallback {
+            notes.push(home::Note::Info(
+                "The app's folder can't be written to, so Runs are kept in your user data folder.".to_owned(),
+            ));
+        }
+        if let Some(dir) = self.dev_profiles() {
+            notes.push(home::Note::Info(format!(
+                "Developer setting: local Game Profiles from {}, for solo Runs only.",
+                dir.display()
+            )));
+        }
+        let library = self.roms.borrow();
+        let view = home::Home {
+            runs: &self.runs,
+            roms: library.roms(),
+            folders: &self.settings.game_folders,
+            profiles: self.profiles.as_ref().ok(),
+            accent: self.settings.accent,
+            notes,
+        };
+        let ask = home::show(ui, &view, &mut self.home_tab, &mut self.title_art, &self.games);
+        drop(library);
+        match ask {
+            None => {}
+            Some(home::Ask::NewRun) => self.begin_new_run(),
+            Some(home::Ask::JoinRun) => self.lobbies.open_join_prompt(),
+            Some(home::Ask::OpenRom) => self.pick_rom(),
+            Some(home::Ask::Resume(run)) => self.resume_run(&run),
+            Some(home::Ask::Summary(run)) => self.lost = Some(*run),
+            Some(home::Ask::ContinueSolo(run)) => self.copying = Some(*run),
+            Some(home::Ask::Delete(run)) => self.deleting = Some(*run),
+            Some(home::Ask::NewRunOn(path)) => self.new_run_on(&path),
+            Some(home::Ask::Play(path)) => self.open_rom(&path),
+            Some(home::Ask::AddFolder) => self.add_game_folder(),
         }
     }
 
-    /// The home screen's lists of the Player's games (from the ROM library)
-    /// and of the Romhacks Pactlocke is tested on.
-    fn known_games(&mut self, ui: &mut egui::Ui) {
-        let mut open = None;
-        egui::CollapsingHeader::new("Your games")
-            .default_open(true)
-            .show(ui, |ui| {
-                let roms = self.roms.borrow();
-                if roms.roms().is_empty() {
-                    ui.weak("None yet: every ROM you open is remembered here (where it is, never a copy).");
-                }
-                for rom in roms.roms() {
-                    ui.horizontal(|ui| {
-                        if ui.button("Play").on_hover_text("Just play, no Run").clicked() {
-                            open = Some(rom.path.clone());
-                        }
-                        ui.label(&rom.game);
-                        ui.weak(rom.path.display().to_string());
-                    });
-                }
-            });
-        if let Some(path) = open {
-            self.open_rom(&path);
+    /// Settings remembers a folder of games, and the Games tab looks through it now.
+    fn add_game_folder(&mut self) {
+        let Some(folder) = rfd::FileDialog::new()
+            .set_title("Choose the folder your ROMs are in")
+            .pick_folder()
+        else {
+            return;
+        };
+        if !self.settings.game_folders.contains(&folder) {
+            self.settings.game_folders.push(folder.clone());
+            self.settings.save();
         }
-        if let Ok(store) = &self.profiles {
-            egui::CollapsingHeader::new("Tested Romhacks").show(ui, |ui| {
-                ui.weak(
-                    "Bring the patched ROM of one of these: Pactlocke hosts and links to nothing, and \
-                     checks the ROM by SHA-1.",
-                );
-                for hack in store.tested_romhacks() {
-                    let base = store.by_id(&hack.base).map_or(hack.base.as_str(), |p| p.name.as_str());
-                    let playable = store.find(&hack.sha1).is_some();
-                    ui.horizontal(|ui| {
-                        ui.strong(format!("{} {}", hack.name, hack.version));
-                        ui.label(format!("by {}, on {base}", hack.author));
-                        if !playable {
-                            ui.weak("(Game Profile coming)");
-                        }
-                    });
-                }
-            });
-        }
+        self.scan_game_folders(vec![folder]);
+    }
+
+    /// Looks through these game folders for ROMs the library doesn't know.
+    fn scan_game_folders(&self, folders: Vec<PathBuf>) {
+        let known = self.roms.borrow().roms().iter().map(|rom| rom.path.clone()).collect();
+        self.games.scan(folders, known);
     }
 
     /// New Run's game chooser: the Player's games, newest first, or another ROM.

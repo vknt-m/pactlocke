@@ -8,8 +8,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// How many ROMs the library remembers.
-const KEPT: usize = 64;
+/// How many ROMs the library remembers: room for a folder of games.
+const KEPT: usize = 512;
+/// The file endings of the GBA ROMs a folder is looked through for.
+const ROM_ENDINGS: [&str; 2] = ["gba", "agb"];
 
 /// One ROM the Player has opened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +73,26 @@ impl RomLibrary {
         self.save();
     }
 
+    /// Whether the library knows a ROM at this path.
+    pub fn knows(&self, path: &Path) -> bool {
+        self.roms.iter().any(|rom| rom.path == path)
+    }
+
+    /// A ROM found in one of the Player's game folders: it joins the end,
+    /// and a path the library knows already stays as it is. It is kept on
+    /// the next [`RomLibrary::keep`], so a folder of ROMs is written once.
+    pub fn add_found(&mut self, rom: KnownRom) {
+        if self.knows(&rom.path) || self.roms.len() >= KEPT {
+            return;
+        }
+        self.roms.push(rom);
+    }
+
+    /// Keeps the library as it is now.
+    pub fn keep(&self) {
+        self.save();
+    }
+
     /// The ROM with this SHA-1 where the library last saw it: each place it
     /// was, newest first, read by `read` and checked again by SHA-1. A place
     /// whose file is gone or changed is forgotten.
@@ -110,6 +132,34 @@ impl RomLibrary {
             log::warn!("The ROM library couldn't be saved to {}: {e}", file.display());
         }
     }
+}
+
+/// Every GBA ROM in `folder` and its subfolders, by path, in name order;
+/// nothing for a folder that can't be read.
+pub fn roms_in(folder: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut folders = vec![folder.to_path_buf()];
+    while let Some(dir) = folders.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => folders.push(path),
+                Ok(kind) if kind.is_file() && is_rom(&path) => found.push(path),
+                _ => {}
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+fn is_rom(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| ROM_ENDINGS.iter().any(|ending| e.eq_ignore_ascii_case(ending)))
 }
 
 /// Where the ROM library is kept.
@@ -171,6 +221,64 @@ mod tests {
         );
         let paths: Vec<&Path> = library.roms().iter().map(|r| r.path.as_path()).collect();
         assert_eq!(paths, [Path::new("old/fr.gba")]);
+    }
+
+    #[test]
+    fn a_folder_gives_every_gba_rom_in_it_and_its_subfolders() {
+        let dir = std::env::temp_dir().join(format!("pactlocke-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("hacks/old")).unwrap();
+        for file in [
+            "FireRed.GBA",
+            "notes.txt",
+            "hacks/gaia.gba",
+            "hacks/old/glazed.agb",
+            "hacks/old/save.sav",
+        ] {
+            std::fs::write(dir.join(file), b"x").unwrap();
+        }
+        let found: Vec<PathBuf> = roms_in(&dir)
+            .into_iter()
+            .map(|p| p.strip_prefix(&dir).unwrap().to_path_buf())
+            .collect();
+        assert_eq!(
+            found,
+            [
+                PathBuf::from("FireRed.GBA"),
+                Path::new("hacks").join("gaia.gba"),
+                Path::new("hacks").join("old").join("glazed.agb"),
+            ]
+        );
+        assert!(
+            roms_in(&dir.join("missing")).is_empty(),
+            "a folder that's gone gives nothing"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rom_found_in_a_folder_joins_the_end_and_a_known_one_stays_put() {
+        let mut library = RomLibrary::default();
+        library.remember(Path::new("fr.gba"), &sha1(FIRERED), "FireRed", true);
+        let found = |path: &str, rom: &[u8], game: &str, runs: bool| KnownRom {
+            path: PathBuf::from(path),
+            sha1: sha1(rom),
+            game: game.to_owned(),
+            runs,
+        };
+        library.add_found(found("games/em.gba", EMERALD, "Emerald", true));
+        library.add_found(found("fr.gba", FIRERED, "FireRed again", false));
+        let roms: Vec<(&Path, &str)> = library
+            .roms()
+            .iter()
+            .map(|r| (r.path.as_path(), r.game.as_str()))
+            .collect();
+        assert_eq!(
+            roms,
+            [(Path::new("fr.gba"), "FireRed"), (Path::new("games/em.gba"), "Emerald")]
+        );
+        assert!(library.knows(Path::new("games/em.gba")));
+        assert!(!library.knows(Path::new("games/gaia.gba")));
     }
 
     #[test]

@@ -133,6 +133,9 @@ pub struct RunSummary {
     pub deaths: u32,
     /// Whether it is a Run with friends: its file keeps a Run log.
     pub with_friends: bool,
+    /// In a Run with friends, every Player's name in join order (the Host
+    /// first), as its Run log's lock has them; empty alone.
+    pub players: Vec<String>,
     /// For a solo copy, the Run with friends it was copied from, and when.
     pub copied_from: Option<CopiedFrom>,
     /// How it ended, if it is lost: it can't be resumed.
@@ -286,6 +289,24 @@ impl RunLibrary {
     }
 }
 
+/// The Players' names in the kept Run log's lock, in join order; empty
+/// before the Run was locked.
+fn roster_names(db: &Connection) -> Vec<String> {
+    let Ok(mut query) = db.prepare("SELECT entry FROM run_log ORDER BY seq") else {
+        return Vec::new();
+    };
+    let Ok(rows) = query.query_map([], |row| row.get::<_, Vec<u8>>(0)) else {
+        return Vec::new();
+    };
+    rows.flatten()
+        .filter_map(|bytes| LogEntry::from_bytes(&bytes))
+        .find_map(|entry| match serde_json::from_slice(&entry.submission.body).ok()? {
+            crate::LogBody::Locked(locked) => Some(locked.roster.into_iter().map(|r| r.name).collect()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
 fn summary(path: &Path) -> Option<RunSummary> {
     let id = RunId(path.file_stem()?.to_string_lossy().into_owned());
     let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
@@ -304,6 +325,7 @@ fn summary(path: &Path) -> Option<RunSummary> {
     let with_friends = db
         .query_row("SELECT EXISTS (SELECT 1 FROM run_log)", [], |row| row.get(0))
         .unwrap_or(false);
+    let players = if with_friends { roster_names(&db) } else { Vec::new() };
     let copied_from = db
         .query_row("SELECT name, at_ms FROM copy_of WHERE id = 1", [], |row| {
             Ok(CopiedFrom {
@@ -333,6 +355,7 @@ fn summary(path: &Path) -> Option<RunSummary> {
         deaths,
         game_over,
         with_friends,
+        players,
         copied_from,
         last_played_ms: last_event.unwrap_or(info.created_ms),
         name: info.name,

@@ -4,7 +4,7 @@
 
 use eframe::egui;
 
-use crate::settings::{AreaStatusStyle, BUTTONS, RelayChoice, Settings};
+use crate::settings::{Accent, AreaStatusStyle, BUTTONS, RelayChoice, Settings};
 
 /// A Settings category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,6 +216,16 @@ impl SettingsDialog {
                                 "Also pop up an overlay on the game screen when a catch is allowed",
                             ),
                         );
+                        ui.end_row();
+                        ui.label("Accent colour");
+                        ui.horizontal(|ui| {
+                            for accent in Accent::ALL {
+                                ui.radio_value(&mut s.accent, accent, accent.name());
+                            }
+                        });
+                        ui.end_row();
+                        ui.label("");
+                        ui.weak("On the home screen: its main buttons, the open tab and what the pointer is over.");
                         ui.end_row();
                     });
             }
