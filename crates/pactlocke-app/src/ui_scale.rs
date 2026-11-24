@@ -49,6 +49,8 @@ pub struct UiScale {
     base: BTreeMap<TextStyle, FontId>,
     /// The Text size last put to work.
     text_size: Option<u16>,
+    /// The zoom in place last frame: the one the screen's size is given at.
+    zoom_before: Option<f32>,
 }
 
 impl UiScale {
@@ -59,14 +61,44 @@ impl UiScale {
         Self {
             base: ctx.global_style().text_styles.clone(),
             text_size: None,
+            zoom_before: None,
         }
+    }
+
+    /// Sizes for a test, with egui's default text sizes.
+    #[cfg(test)]
+    fn without_context() -> Self {
+        Self {
+            base: egui::Style::default().text_styles,
+            text_size: None,
+            zoom_before: None,
+        }
+    }
+
+    /// The zoom wanted this frame, from the screen's height in points as egui
+    /// gives it, the OS scale (`native`) and the zoom in place now.
+    ///
+    /// eframe gives the screen's size in points at the zoom in place *before*
+    /// the frame, and a zoom set last frame only takes effect after that: so
+    /// the points are turned back into pixels with last frame's zoom. Using
+    /// this frame's would read the screen as bigger or smaller after every
+    /// change of zoom, and the zoom would never settle.
+    fn zoom(&mut self, monitor_points: Option<f32>, native: f32, zoom_now: f32, ui_scale: u16) -> f32 {
+        let given_at = self.zoom_before.replace(zoom_now).unwrap_or(zoom_now);
+        let height = monitor_points.map(|points| points * given_at * native);
+        screen_zoom(height) * f32::from(ui_scale) / 100.0
     }
 
     /// Run every frame: a window moved to another screen, or a setting changed, shows at once.
     pub fn apply(&mut self, ctx: &egui::Context, ui_scale: u16, text_size: u16) {
-        // egui gives the screen's size in points at this frame's pixels per point.
-        let height = ctx.input(|i| i.viewport().monitor_size.map(|size| size.y * i.pixels_per_point));
-        let zoom = screen_zoom(height) * f32::from(ui_scale) / 100.0;
+        let (monitor_points, native) = ctx.input(|i| {
+            let viewport = i.viewport();
+            (
+                viewport.monitor_size.map(|size| size.y),
+                viewport.native_pixels_per_point.unwrap_or(1.0),
+            )
+        });
+        let zoom = self.zoom(monitor_points, native, ctx.zoom_factor(), ui_scale);
         if (ctx.zoom_factor() - zoom).abs() > 1e-3 {
             ctx.set_zoom_factor(zoom);
         }
@@ -99,6 +131,43 @@ mod tests {
         assert!((screen_zoom(Some(1440.0)) - 4.0 / 3.0).abs() < 1e-6);
         assert_eq!(screen_zoom(None), 1.0);
         assert_eq!(screen_zoom(Some(0.0)), 1.0);
+    }
+
+    /// eframe's order each frame: the screen's size is given in points at the
+    /// zoom in place before the frame, then a zoom set last frame takes
+    /// effect, then the app runs. Returns each frame's zoom.
+    fn frames(screen_height: f32, native: f32, ui_scale: u16, count: usize) -> Vec<f32> {
+        let mut scale = UiScale::without_context();
+        let (mut zoom, mut pending) = (1.0_f32, None::<f32>);
+        let mut zooms = Vec::new();
+        for _ in 0..count {
+            let monitor_points = screen_height / (zoom * native);
+            if let Some(new) = pending.take() {
+                zoom = new;
+            }
+            let wanted = scale.zoom(Some(monitor_points), native, zoom, ui_scale);
+            if (zoom - wanted).abs() > 1e-3 {
+                pending = Some(wanted);
+            }
+            zooms.push(zoom);
+        }
+        zooms
+    }
+
+    #[test]
+    fn the_zoom_settles_on_any_screen_and_scale_and_stays() {
+        for (height, native, ui_scale, settled) in [
+            (1440.0, 1.0, 100, 4.0 / 3.0), // An ultrawide 3440x1440.
+            (2160.0, 1.5, 100, 2.0),       // 4K at the OS's 150%.
+            (1080.0, 1.0, 150, 1.5),       // 1080p at a UI scale of 150%.
+            (1080.0, 1.0, 100, 1.0),
+        ] {
+            let zooms = frames(height, native, ui_scale, 12);
+            assert!(
+                zooms[2..].iter().all(|z| (z - settled).abs() < 1e-3),
+                "{height}p at native {native}, UI scale {ui_scale}%: {zooms:?}"
+            );
+        }
     }
 
     #[test]
