@@ -100,6 +100,7 @@ impl Spectate {
         let host = locked.roster.first().map_or(me, |p| p.key);
         let mut hub = StreamHub::new(me, host);
         let mut shadows = Vec::new();
+        let mut watch = CheatWatch::new(locked.start_ms);
         let diverged: Arc<Mutex<Vec<(PlayerKey, u64)>>> = Arc::default();
         for player in locked.roster.iter().filter(|p| p.key != me) {
             let mut core = MgbaCore::new();
@@ -109,6 +110,10 @@ impl Spectate {
             let shadow = match kept.iter().find(|(p, _)| *p == player.key) {
                 Some((_, checkpoint)) => {
                     hub.starts_at(player.key, checkpoint.at);
+                    // Their stream goes on from there, in a boot that began
+                    // as its clock says: what arrives at once is their play
+                    // while this app was away.
+                    watch.resumed(player.key, checkpoint.at, checkpoint.clock_ms, SystemRunClock.now_ms());
                     ShadowGame::from_checkpoint(game, locked.start_ms, checkpoint)
                         .map_err(|e| format!("The Shadow Game of {} couldn't be restored: {e}", player.name))?
                 }
@@ -146,7 +151,7 @@ impl Spectate {
             avatars: None,
             presence: pactlocke_run::Presence::new(SystemRunClock.now_ms()),
             keep_waiting: Vec::new(),
-            watch: CheatWatch::new(locked.start_ms),
+            watch,
             others_feed: Vec::new(),
             fed: 0,
             diverged,

@@ -27,6 +27,10 @@ const MAX_FRAMES_PER_MS: f64 = 4.0 * 59.7275 / 1000.0;
 /// a stream that bunches up on a slow connection. Time a Player is silent
 /// adds its 4x worth on top, so their frames from then can all come at once.
 pub const FAST_BURST_FRAMES: u64 = 2390;
+/// Frames arriving within this long of the end of a silence at least this
+/// long are its catch-up: they may spend what the silence earned. Later
+/// frames get the burst alone, so a pause is no credit for playing fast.
+pub const CATCH_UP_MS: i64 = 2000;
 /// A new boot with no Retry in the log here is flagged only if none arrives
 /// in this long: the log and the stream travel apart.
 pub const RETRY_WAIT_MS: i64 = 10_000;
@@ -108,12 +112,44 @@ struct Pace {
     last_ms: i64,
     /// Frames they may still send over the 4x pace.
     credit: f64,
+    /// Until when frames are the catch-up after a silence (Unix milliseconds).
+    catch_up_until: i64,
     /// The Retries their boots so far went back by, by call.
     retries: BTreeSet<u64>,
     /// A boot with no Retry in the log yet: where it began, and when it arrived.
     unexplained: Option<(GamePoint, i64)>,
     /// The Run Checkpoint that boot says it began from.
     booted_from: Option<GamePoint>,
+}
+
+impl Pace {
+    /// A stream from `at`, with `credit` to spend over 4x from `last_ms`.
+    fn from(at: GamePoint, last_ms: i64, credit: f64) -> Self {
+        Self {
+            boot: at.boot,
+            end: at.frame,
+            last_ms,
+            credit,
+            catch_up_until: last_ms,
+            retries: BTreeSet::new(),
+            unexplained: None,
+            booted_from: None,
+        }
+    }
+
+    /// The allowance as `n` more frames arrive at `now_ms`: it refills at 4x
+    /// up to a burst, and a silence adds its 4x worth on top for its catch-up.
+    fn spend(&mut self, n: u64, now_ms: i64) {
+        let gap = (now_ms - self.last_ms).max(0);
+        if now_ms > self.catch_up_until {
+            self.credit = self.credit.min(FAST_BURST_FRAMES as f64);
+        }
+        if gap >= CATCH_UP_MS {
+            self.catch_up_until = now_ms + CATCH_UP_MS;
+        }
+        self.credit += gap as f64 * MAX_FRAMES_PER_MS - n as f64;
+        self.last_ms = now_ms;
+    }
 }
 
 impl CheatWatch {
@@ -126,20 +162,28 @@ impl CheatWatch {
         }
     }
 
+    /// On a resume at `now_ms`: this app has another Player's stream from
+    /// `at`, in a boot of theirs that began at `boot_ms` (Unix milliseconds,
+    /// by the clock their boot set; `None` for the Run's start). The whole
+    /// boot counts against 4x from then, so what they played while this app
+    /// was away comes at once as a catch-up.
+    pub fn resumed(&mut self, player: PlayerKey, at: GamePoint, boot_ms: Option<i64>, now_ms: i64) {
+        let since = boot_ms
+            .unwrap_or(self.start_ms)
+            .clamp(self.start_ms, now_ms.max(self.start_ms));
+        let credit = FAST_BURST_FRAMES as f64 - at.frame as f64;
+        self.players.insert(player, Pace::from(at, since, credit));
+    }
+
     /// A chunk of another Player's stream, now in order here. Flags a pace
     /// over 4x, and notes a new boot to check against the log's Retries.
     pub fn arrived(&mut self, chunk: &InputChunk, log: &RunLog, now_ms: i64) -> Vec<RunEvent> {
         let player = chunk.player;
         let start_ms = self.start_ms;
-        let pace = self.players.entry(player).or_insert_with(|| Pace {
-            boot: 1,
-            end: 0,
-            last_ms: start_ms,
-            credit: FAST_BURST_FRAMES as f64,
-            retries: BTreeSet::new(),
-            unexplained: None,
-            booted_from: None,
-        });
+        let pace = self
+            .players
+            .entry(player)
+            .or_insert_with(|| Pace::from(GamePoint { boot: 1, frame: 0 }, start_ms, FAST_BURST_FRAMES as f64));
         if chunk.boot > pace.boot {
             pace.unexplained = Some((
                 GamePoint {
@@ -155,12 +199,8 @@ impl CheatWatch {
                 frame: from.frame,
             });
         }
-        // The allowance refills at 4x up to a burst, plus 4x of any silence.
-        let gap = (now_ms - pace.last_ms).max(0) as f64;
-        pace.credit = pace.credit.min(FAST_BURST_FRAMES as f64) + gap * MAX_FRAMES_PER_MS;
-        pace.credit -= chunk.end().saturating_sub(pace.end) as f64;
+        pace.spend(chunk.end().saturating_sub(pace.end), now_ms);
         pace.end = pace.end.max(chunk.end());
-        pace.last_ms = now_ms;
         let mut flags = Vec::new();
         if pace.credit < 0.0 {
             pace.credit = 0.0;

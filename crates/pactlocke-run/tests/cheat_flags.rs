@@ -307,3 +307,69 @@ fn everyone_but_the_flagged_player_can_vote_a_flag_away() {
     everyone_plays(&mut table, 20);
     assert_eq!(table.apps[0].log.flags(), []);
 }
+
+/// Ticket 52: a Player who leaves a Run and resumes it gets the others'
+/// frames from while they were away all at once. That backlog was played at
+/// 4x or slower, so it is no flag; new frames faster than 4x after it are.
+#[test]
+fn the_backlog_after_a_resume_is_not_too_fast_but_a_burst_after_it_is() {
+    use pactlocke_run::{CheatWatch, GamePoint, RETRY_WAIT_MS, RunLog};
+    let log = RunLog::new([0; 32]);
+    // Blue's boot 2 began ten minutes in. This Player kept Blue's Shadow
+    // Game at frame 600 of it, left, and resumes 41 seconds into the boot.
+    let boot_ms = START_MS + 600_000;
+    let mut watch = CheatWatch::new(START_MS);
+    watch.resumed(
+        key(1),
+        GamePoint { boot: 2, frame: 600 },
+        Some(boot_ms),
+        boot_ms + 41_000,
+    );
+
+    // Three seconds later Blue's boot so far arrives in one go, a moment
+    // apart, in chunks as big as an answer to asking for missed frames:
+    // 8190 frames in 44 seconds, under 4x.
+    let now = boot_ms + 44_000;
+    let mut flags = Vec::new();
+    for (from, n, at) in [(600, 4096, now), (4696, 3494, now + 50)] {
+        flags.extend(watch.arrived(&other_presses(1, 2, from, n), &log, at));
+    }
+    flags.extend(watch.due(&log, now + RETRY_WAIT_MS));
+    assert_eq!(flags, [], "the backlog is no flag, nor is boot 2 a new boot");
+
+    // A second on, three answers' worth of new frames: far faster than 4x.
+    let now = now + 1000;
+    for from in [8190, 12286, 16382] {
+        flags.extend(watch.arrived(&other_presses(1, 2, from, 4096), &log, now));
+    }
+    assert_eq!(flags.len(), 1, "{flags:?}");
+    let pactlocke_run::RunEvent::CheatFlag { cheat, boot, frame, .. } = flags[0] else {
+        panic!("{flags:?}");
+    };
+    assert_eq!((cheat, boot), (Cheat::TooFast, 2));
+    assert!(frame > 8190, "in the new frames: {frame}");
+}
+
+/// What a silence earns is for the frames from it, which come at once: a
+/// Player who pauses half an hour gets no credit to play at 8x after.
+#[test]
+fn a_long_pause_is_no_credit_for_playing_fast_after_it() {
+    use pactlocke_run::{CheatWatch, RunLog};
+    let log = RunLog::new([0; 32]);
+    let mut watch = CheatWatch::new(START_MS);
+    let mut flags = watch.arrived(&other_presses(1, 1, 0, 15), &log, START_MS + 250);
+    // Paused 30 minutes, then 15 frames every 31 milliseconds: about 8x.
+    let mut now = START_MS + 250 + 30 * 60_000;
+    let mut frame = 15;
+    while frame < 15 + 8 * 60 * 30 {
+        flags.extend(watch.arrived(&other_presses(1, 1, frame, 15), &log, now));
+        frame += 15;
+        now += 31;
+    }
+    assert_eq!(flags.len(), 1, "{flags:?}");
+    let pactlocke_run::RunEvent::CheatFlag { cheat, frame, .. } = flags[0] else {
+        panic!("{flags:?}");
+    };
+    assert_eq!(cheat, Cheat::TooFast);
+    assert!(frame < 15 + 8 * 60 * 15, "within 15 seconds of it: {frame}");
+}

@@ -33,7 +33,7 @@ mod view;
 pub use areas::{AreaEncounter, area_encounters};
 pub use avatars::{Painter, PartnerAvatar};
 pub use boot::{BootPlan, Booted, boot_core};
-pub use cheats::{Cheat, CheatWatch, FAST_BURST_FRAMES, Flag};
+pub use cheats::{Cheat, CheatWatch, FAST_BURST_FRAMES, Flag, RETRY_WAIT_MS};
 pub use clock::{RunClock, SystemRunClock};
 pub use ending::{LastDeath, Survivor, survivors};
 pub use engine::{PARTY_LOOK_FRAMES, RunEngine, SUSPEND_SLOT_EVERY_MS};
