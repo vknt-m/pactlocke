@@ -619,7 +619,9 @@ impl Headless {
         let call = match log.vote() {
             Some(vote) => vote.call,
             None => log
-                .latest_complete()
+                .retry_points()
+                .last()
+                .map(|c| c.n)
                 .ok_or("there is no Run Checkpoint to go back to yet")?,
         };
         self.lobbies.share(vec![RunEvent::RetryVote { call, yes: true }]);

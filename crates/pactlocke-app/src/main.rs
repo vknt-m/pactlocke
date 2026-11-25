@@ -23,6 +23,7 @@ mod demo;
 mod game_over;
 mod gamepad;
 mod games;
+mod go_back;
 mod headless;
 mod home;
 mod links_panel;
@@ -31,7 +32,6 @@ mod logger;
 mod metal;
 mod player_strip;
 mod randomized;
-mod rescue;
 mod resume;
 mod rom_library;
 mod rom_report;
@@ -397,8 +397,9 @@ struct PactlockeApp {
     copying: Option<RunSummary>,
     /// A lost Run's summary, opened from the Runs list.
     lost: Option<RunSummary>,
-    /// The Rescue menu is open, from Emulation ▸ Rescue.
-    rescue_open: bool,
+    /// The menu of points to go back to is open, for a Rescue (Emulation ▸
+    /// Rescue) or a Retry (Emulation ▸ Retry, or after a wipe).
+    going_back: Option<go_back::GoBack>,
     about: bool,
     /// Paused from Emulation ▸ Pause.
     paused: bool,
@@ -461,7 +462,7 @@ impl PactlockeApp {
             deleting: None,
             copying: None,
             lost: None,
-            rescue_open: false,
+            going_back: None,
             about: false,
             paused: false,
             fast_forward: false,
@@ -1357,10 +1358,15 @@ impl PactlockeApp {
                     }
                     ui.weak(format!("Hold {} for {}", self.settings.fast_forward_key, Speed::X4));
                 });
-                if let Some(left) = playing
-                    .filter(|_| !coop)
-                    .and_then(|p| p.view().and_then(|v| v.retries_left))
-                    && item(ui, &format!("Retry · {left} left"), "", left > 0)
+                let left = match self.lobbies.log().filter(|_| coop) {
+                    Some(log) => log
+                        .locked()
+                        .filter(|l| l.ruleset.retries > 0)
+                        .map(|_| log.retries_left()),
+                    None => playing.and_then(|p| p.view().and_then(|v| v.retries_left)),
+                };
+                if let Some(left) = left
+                    && item(ui, &format!("Retry… · {left} left"), "", left > 0)
                 {
                     act = Some(Menu::Retry);
                 }
@@ -1462,18 +1468,8 @@ impl PactlockeApp {
                 self.settings.save();
             }
             Menu::Speed(speed) => self.set_speed(speed),
-            Menu::Retry => {
-                if let Some(Playing {
-                    play: Play::Run { commands, .. },
-                    ..
-                }) = &self.playing
-                {
-                    let _ = commands.send(RunCommand::Retry {
-                        to: pactlocke_run::RetryTo::Latest,
-                    });
-                }
-            }
-            Menu::Rescue => self.rescue_open = true,
+            Menu::Retry => self.going_back = Some(go_back::GoBack::Retry),
+            Menu::Rescue => self.going_back = Some(go_back::GoBack::Rescue),
             Menu::Screenshot => self.screenshot(),
             Menu::TogglePanel => self.panel_shown = !self.panel_shown,
             Menu::TogglePopOut => self.panel_popped = !self.panel_popped,
@@ -1693,48 +1689,61 @@ impl PactlockeApp {
         }
     }
 
-    /// The Rescue menu, while it is open: with other Players, picking a
-    /// Rescue Point starts a vote; alone, the game goes straight back there.
-    fn rescue_menu(&mut self, ctx: &egui::Context) {
-        if !self.rescue_open {
-            return;
-        }
-        let Some(playing) = &self.playing else {
-            self.rescue_open = false;
+    /// The menu of points to go back to, while it is open: with other
+    /// Players, picking one starts a vote; alone, the game goes straight
+    /// back there. A Retry spends one from the pool; a Rescue is free.
+    fn going_back_menu(&mut self, ctx: &egui::Context) {
+        let Some(way) = self.going_back else {
             return;
         };
-        let Play::Run { commands, .. } = &playing.play else {
-            self.rescue_open = false;
+        let Some(Playing {
+            play: Play::Run { commands, .. },
+            spectate,
+            ..
+        }) = &self.playing
+        else {
+            self.going_back = None;
             return;
         };
         let now = SystemRunClock.now_ms();
-        let (points, blocked) = match (&playing.spectate, self.lobbies.log()) {
+        let view = self.playing.as_ref().and_then(Playing::view).unwrap_or_default();
+        let (points, blocked) = match (spectate, self.lobbies.log()) {
             (Some(spectate), Some(log)) => {
-                let blocked = if !self.lobbies.online() {
-                    Some("You're offline: a Rescue vote can be started once you're back.")
-                } else if log.wiped().is_some() {
-                    Some("A party is wiped: only a Retry can undo that.")
-                } else if log.vote_under_way() {
-                    Some("Another vote is under way: a Rescue vote can be started once it's over.")
-                } else {
-                    None
-                };
-                (rescue::with_friends(log, &spectate.me()), blocked)
+                let points = go_back::with_friends(log, &spectate.me(), way);
+                (points, go_back::blocked_with_friends(log, way, self.lobbies.online()))
             }
-            _ => {
-                let view = playing.view().unwrap_or_default();
-                let blocked = view
-                    .wipe
-                    .is_some()
-                    .then_some("Your party is wiped: only a Retry can undo that.");
-                (rescue::alone(&view.rescue_points), blocked)
-            }
+            _ => match way {
+                go_back::GoBack::Rescue => (
+                    go_back::alone(&view.rescue_points),
+                    view.wipe
+                        .is_some()
+                        .then_some("Your party is wiped: only a Retry can undo that."),
+                ),
+                go_back::GoBack::Retry => (
+                    go_back::alone(&view.retry_points()),
+                    match view.retries_left {
+                        None => Some("This Run has no Retries."),
+                        Some(0) => Some("No Retries are left."),
+                        Some(_) => None,
+                    },
+                ),
+            },
         };
         let commands = commands.clone();
-        match rescue::window(ctx, &mut self.rescue_open, &points, blocked, now) {
-            Some(rescue::Pick::Vote(call)) => self.lobbies.share(vec![RunEvent::RescueVote { call, yes: true }]),
-            Some(rescue::Pick::Alone(to)) => {
-                let _ = commands.send(RunCommand::Rescue { to });
+        let mut open = true;
+        let picked = go_back::window(ctx, &mut open, way, &points, blocked, now);
+        if !open {
+            self.going_back = None;
+        }
+        match picked {
+            Some(go_back::Pick::Vote(call)) => self.lobbies.share(vec![way.vote_event(call, true)]),
+            Some(go_back::Pick::Alone(to)) => {
+                let _ = commands.send(match way {
+                    go_back::GoBack::Rescue => RunCommand::Rescue { to },
+                    go_back::GoBack::Retry => RunCommand::Retry {
+                        to: pactlocke_run::RetryTo::Point(to),
+                    },
+                });
             }
             None => {}
         }
@@ -1979,6 +1988,7 @@ impl PactlockeApp {
                         }
                     }
                     Some(game_over::WipeAnswer::Vote(vote)) => self.lobbies.share(vec![vote]),
+                    Some(game_over::WipeAnswer::ChooseRetry) => self.going_back = Some(go_back::GoBack::Retry),
                     None => {}
                 }
             }
@@ -2436,6 +2446,9 @@ impl eframe::App for PactlockeApp {
                 self.settings.save();
             }
         }
+        if let Some(way) = asks.go_back {
+            self.going_back = Some(way);
+        }
         if let Some(playing) = self.playing.as_mut() {
             if let Some(command) = asks.command.take()
                 && let Play::Run { commands, .. } = &playing.play
@@ -2480,7 +2493,7 @@ impl eframe::App for PactlockeApp {
         self.new_run_prompt(&ctx);
         self.delete_prompt(&ctx);
         self.lost_summary(&ctx);
-        self.rescue_menu(&ctx);
+        self.going_back_menu(&ctx);
         self.game_chooser(&ctx);
         self.solo_copy_prompt(&ctx);
         self.settings_window(&ctx);

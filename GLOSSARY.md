@@ -106,7 +106,7 @@ A copy of another Player's game that your app runs in the background from their 
 _Avoid_: Mirror, replay (a replay is after the fact), ghost
 
 **Run Checkpoint**:
-A moment every Player's game is captured together, taken whenever any Player saves in-game, at every Sync Gate, and at every Rescue Point. It is what a Retry returns to.
+A moment every Player's game is captured together, taken whenever any Player saves in-game, at every Sync Gate, and at every Rescue Point. A Retry returns to one.
 _Avoid_: Save (a save belongs to one Player), savestate (that is the emulator mechanism)
 
 **Boot checkpoint**:
@@ -126,7 +126,7 @@ A Run lost because a Player has no usable Pokémon: under Faint = Dead, every Po
 _Avoid_: Loss, defeat, whiteout (the game's own, which heals the party)
 
 **Retry**:
-An optional Ruleset rule: a small shared number of times the group may vote to send every Player back to the latest Run Checkpoint, undoing everything since.
+An optional Ruleset rule: a small shared number of times the group may vote to send every Player back to a Run Checkpoint, undoing everything since. The vote chooses the point: the latest Run Checkpoint, or any Rescue Point the Run still keeps, so a wipe moments after the newest one can go back further. Each Retry spends one from the pool, whichever point is chosen.
 _Avoid_: Reset (one Player alone), rewind, reload
 
 **Rescue Point**:

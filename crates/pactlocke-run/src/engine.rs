@@ -441,16 +441,16 @@ impl RunEngine {
         rescue: bool,
     ) -> Self {
         let hash = to.hash();
+        let (to_ms, area) = stored
+            .events
+            .iter()
+            .chain(&self.recorded_since)
+            .find_map(|e| match &e.event {
+                RunEvent::Checkpoint { at_ms, area, .. } if e.seq == to_seq => Some((*at_ms, area.clone())),
+                _ => None,
+            })
+            .unwrap_or_default();
         if rescue {
-            let (to_ms, area) = stored
-                .events
-                .iter()
-                .chain(&self.recorded_since)
-                .find_map(|e| match &e.event {
-                    RunEvent::Checkpoint { at_ms, area, .. } if e.seq == to_seq => Some((*at_ms, area.clone())),
-                    _ => None,
-                })
-                .unwrap_or_default();
             self.record(RunEvent::Rescued {
                 to_seq,
                 hash,
@@ -458,7 +458,12 @@ impl RunEngine {
                 area,
             });
         } else {
-            self.record(RunEvent::Retried { to_seq, hash });
+            self.record(RunEvent::Retried {
+                to_seq,
+                hash,
+                to_ms: Some(to_ms),
+                area,
+            });
         }
         self.flush();
         self.retired = true;
@@ -1460,10 +1465,16 @@ impl RunEngine {
         crate::AreaEncounter::take(&mut self.view.encounters, &recorded.event);
         self.area_battles.take(&recorded.event);
         if recorded.event.is_run_checkpoint()
-            && let RunEvent::Checkpoint { hash, .. } = &recorded.event
+            && let RunEvent::Checkpoint { hash, at_ms, area, .. } = &recorded.event
         {
             self.run_checkpoints.insert(hash.clone(), recorded.seq);
             self.latest_run_checkpoint = Some(hash.clone());
+            self.view.latest_checkpoint = Some(crate::CheckpointView {
+                seq: recorded.seq,
+                hash: hash.clone(),
+                at_ms: *at_ms,
+                area: area.clone(),
+            });
         }
         if let RunEvent::Retried { hash, .. } = &recorded.event {
             self.retries_taken = self.retries_taken.saturating_add(1);
@@ -1490,7 +1501,7 @@ impl RunEngine {
             while self.rescue_window.len() > RESCUE_POINTS_KEPT {
                 self.rescue_window.pop_front();
             }
-            self.view.rescue_points.push(crate::RescuePointView {
+            self.view.rescue_points.push(crate::CheckpointView {
                 seq: recorded.seq,
                 hash: hash.clone(),
                 at_ms: *at_ms,

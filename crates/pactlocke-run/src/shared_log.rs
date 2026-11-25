@@ -265,7 +265,7 @@ impl std::fmt::Display for LogError {
             }
             LogError::BadRetry { seq } => write!(
                 f,
-                "entry {seq} is a Retry nobody agreed to: not everyone voted Yes, no Retry is left, or it isn't the latest Run Checkpoint"
+                "entry {seq} is a Retry nobody agreed to: not everyone voted Yes, no Retry is left, or its Run Checkpoint isn't offered"
             ),
             LogError::BadRescue { seq } => write!(
                 f,
@@ -686,6 +686,19 @@ impl RunLog {
         points.into_iter().skip(older).filter(|c| self.is_complete(c)).collect()
     }
 
+    /// The Run Checkpoints a Retry can go back to now, oldest first: the
+    /// latest complete one that isn't a Rescue Point (an in-game save or a
+    /// Sync Gate), and every Rescue Point a Rescue could go back to. A wiped
+    /// Player's game is stopped, so no point after the wipe is complete.
+    pub fn retry_points(&self) -> Vec<Call> {
+        let calls = self.calls();
+        let latest = self.latest_complete();
+        let mut points: Vec<Call> = calls.into_iter().filter(|c| Some(c.n) == latest).collect();
+        points.extend(self.rescue_points());
+        points.sort_by_key(|c| c.n);
+        points
+    }
+
     /// Whether the Host should call a Rescue Point now: it has been
     /// [`RESCUE_POINT_EVERY_MS`] since the last was called, or since the Run
     /// started.
@@ -760,9 +773,9 @@ impl RunLog {
     }
 
     /// The Retry vote open now, if any: its Run Checkpoint and who said Yes.
-    /// A vote starts at a Yes with none open, for the latest complete Run
-    /// Checkpoint. It ends at the first No, at a Retry or a Rescue, or once
-    /// a newer Run Checkpoint is complete.
+    /// A vote starts at a Yes with none open, for one of the
+    /// [`retry_points`](Self::retry_points). It ends at the first No, at a
+    /// Retry or a Rescue, or once its Run Checkpoint is no longer offered.
     pub fn vote(&self) -> Option<Vote> {
         let mut open: Option<Vote> = None;
         for (author, body) in self.bodies() {
@@ -772,7 +785,8 @@ impl RunLog {
                 _ => {}
             }
         }
-        open.filter(|vote| Some(vote.call) == self.latest_complete())
+        let points = self.retry_points();
+        open.filter(|vote| points.iter().any(|c| c.n == vote.call))
     }
 
     /// The Dropout vote open now, if any: who would leave and who said Yes.
@@ -834,7 +848,7 @@ impl RunLog {
     /// voted No after the wipe.
     pub fn game_over(&self) -> Option<Wiped> {
         let wiped = self.wiped()?;
-        if self.retries_left() == 0 || self.latest_complete().is_none() {
+        if self.retries_left() == 0 || self.retry_points().is_empty() {
             return Some(wiped);
         }
         let declined = self

@@ -62,8 +62,8 @@ pub use stream::{
     StreamHub, StreamMessage, StreamOut, StreamStore, StreamWant,
 };
 pub use view::{
-    Doing, FeedEntry, FeedIcon, FeedKind, GameOverView, Grave, LevelCapView, NativeOptionView, NicknameWanted,
-    RescuePointView, RunView, WipeView, graves, minutes_ago,
+    CheckpointView, Doing, FeedEntry, FeedIcon, FeedKind, GameOverView, Grave, LevelCapView, NativeOptionView,
+    NicknameWanted, RunView, WipeView, graves, minutes_ago,
 };
 
 use pactlocke_game::LevelCap;
@@ -114,7 +114,7 @@ pub struct Ruleset {
     #[serde(default)]
     pub links: bool,
     /// The shared pool of Retries, 0 to [`MAX_RETRIES`]: each sends every
-    /// Player back to the latest Run Checkpoint, by everyone's vote (a solo
+    /// Player back to a chosen Run Checkpoint, by everyone's vote (a solo
     /// Player needs no vote). 0 turns Retries off.
     #[serde(default)]
     pub retries: u8,

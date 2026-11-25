@@ -402,57 +402,25 @@ pub fn gate_vote(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey, online:
     cast
 }
 
-/// Retries in a Run with other Players: what is left of the pool, and the
-/// vote. Returns this Player's vote when they cast one.
-pub fn votes(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey, online: bool) -> Option<RunEvent> {
+/// Retries in a Run with other Players: a button to start a Retry vote,
+/// with what is left of the pool, while no vote is under way (the vote
+/// itself shows as a banner). Says whether the Player asked to choose a
+/// point to Retry from.
+pub fn start_retry_vote(ui: &mut eframe::egui::Ui, log: &RunLog, online: bool) -> bool {
     let pool = log.locked().map_or(0, |l| l.ruleset.retries);
-    if pool == 0 {
-        return None;
+    if pool == 0 || log.vote().is_some() {
+        return false;
     }
     let left = log.retries_left();
-    let players = log.active().len();
-    let mut cast = None;
-    match log.vote() {
-        Some(vote) => vote_banner(ui, |ui| {
-            ui.strong(format!(
-                "Retry vote: back to Run Checkpoint {} · {} of {players} said Yes",
-                vote.call,
-                vote.yes.len()
-            ));
-            if !vote.yes.contains(&me) && online {
-                ui.horizontal(|ui| {
-                    if ui.button("Yes").clicked() {
-                        cast = Some(RunEvent::RetryVote {
-                            call: vote.call,
-                            yes: true,
-                        });
-                    }
-                    if ui.button("No").clicked() {
-                        cast = Some(RunEvent::RetryVote {
-                            call: vote.call,
-                            yes: false,
-                        });
-                    }
-                });
-            }
-        }),
-        None => {
-            let latest = log.latest_complete();
-            let start = ui.add_enabled(
-                left > 0 && latest.is_some() && online && !log.vote_under_way(),
-                eframe::egui::Button::new(format!("Start a Retry vote · {left} left")),
-            );
-            let start = start.on_hover_text(
-                "Everyone goes back to the latest Run Checkpoint if everyone says Yes; the first No ends the vote",
-            );
-            if start.clicked()
-                && let Some(call) = latest
-            {
-                cast = Some(RunEvent::RetryVote { call, yes: true });
-            }
-        }
-    }
-    cast
+    let blocked = crate::go_back::blocked_with_friends(log, crate::go_back::GoBack::Retry, online);
+    ui.add_enabled(
+        blocked.is_none() && !log.retry_points().is_empty(),
+        eframe::egui::Button::new(format!("Start a Retry vote… · {left} left")),
+    )
+    .on_hover_text(
+        "Choose a point to go back to; everyone goes back there if everyone says Yes, and the first No ends the vote",
+    )
+    .clicked()
 }
 
 /// What every Shadow Game here has shown, by Player.

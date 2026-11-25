@@ -28,7 +28,10 @@ pub struct RunView {
     /// The Rescue Points this Player's game can go back to, oldest first.
     /// Alone, a Rescue goes to one of these; with friends, the Run log
     /// says which every Player has their part of.
-    pub rescue_points: Vec<RescuePointView>,
+    pub rescue_points: Vec<CheckpointView>,
+    /// The newest Run Checkpoint this Player's game can go back to, of any
+    /// kind: alone, a Retry offers it with the Rescue Points.
+    pub latest_checkpoint: Option<CheckpointView>,
     /// How many Rescues this Player's game has made.
     pub rescues: u32,
     /// The Player's party, as of the last look.
@@ -48,12 +51,13 @@ pub struct RunView {
     pub native_options: Vec<NativeOptionView>,
 }
 
-/// A Rescue Point as this Player's game took it.
+/// A Run Checkpoint this Player's game can go back to, as it took it: a
+/// Rescue Point, or the latest Run Checkpoint of any kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RescuePointView {
+pub struct CheckpointView {
     /// Its event in this Player's Run file.
     pub seq: u64,
-    /// Its checkpoint's hash, which a Rescue goes back to.
+    /// Its checkpoint's hash, which a Rescue or a Retry goes back to.
     pub hash: String,
     /// When it was taken (Unix milliseconds).
     pub at_ms: i64,
@@ -62,6 +66,20 @@ pub struct RescuePointView {
 }
 
 impl RunView {
+    /// Alone: the points a Retry can go back to, oldest first: the Rescue
+    /// Points and the newest Run Checkpoint (an in-game save, say), if it
+    /// isn't one of them.
+    pub fn retry_points(&self) -> Vec<CheckpointView> {
+        let mut points = self.rescue_points.clone();
+        if let Some(latest) = &self.latest_checkpoint
+            && !points.iter().any(|p| p.hash == latest.hash)
+        {
+            points.push(latest.clone());
+        }
+        points.sort_by_key(|p| p.seq);
+        points
+    }
+
     /// The Areas whose Encounter is used, in the order they closed.
     pub fn closed_areas(&self) -> Vec<String> {
         self.encounters.iter().map(|e| e.area.clone()).collect()
@@ -233,6 +251,18 @@ pub fn minutes_ago(ms: i64) -> String {
 
 /// The feed's line for a Rescue back to a Rescue Point taken `ago_ms`
 /// before it, in `area`.
+/// "Retry: back to the Run Checkpoint from 12 min ago in Route 3, …".
+fn retried_line(at_ms: i64, to_ms: Option<i64>, area: Option<&str>) -> String {
+    let place = area.map(|a| format!(" in {a}")).unwrap_or_default();
+    match to_ms {
+        Some(to_ms) => format!(
+            "Retry: back to the Run Checkpoint from {}{place}, and everything since is undone",
+            minutes_ago(at_ms - to_ms)
+        ),
+        None => "Retry: back to a Run Checkpoint, and everything since is undone".to_owned(),
+    }
+}
+
 fn rescued_line(ago_ms: i64, area: Option<&str>) -> String {
     let place = area.map(|a| format!(" in {a}")).unwrap_or_default();
     format!(
@@ -504,10 +534,9 @@ impl FeedEntry {
             }
             RunEvent::RetryFailed { reason } => (FeedKind::Problem, format!("The Retry couldn't be made: {reason}")),
             RunEvent::RescueFailed { reason } => (FeedKind::Problem, format!("The Rescue couldn't be made: {reason}")),
-            RunEvent::Retried { .. } => (
-                FeedKind::Run,
-                "Retry: back to the latest Run Checkpoint, and everything since is undone".to_owned(),
-            ),
+            RunEvent::Retried { to_ms, area, .. } => {
+                (FeedKind::Run, retried_line(recorded.at_ms, *to_ms, area.as_deref()))
+            }
             RunEvent::Rescued { to_ms, area, .. } => {
                 (FeedKind::Run, rescued_line(recorded.at_ms - to_ms, area.as_deref()))
             }

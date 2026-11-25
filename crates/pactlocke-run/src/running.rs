@@ -156,6 +156,10 @@ pub enum RunCommand {
 pub enum RetryTo {
     /// Alone: the latest Run Checkpoint, spending one of this Run's Retries.
     Latest,
+    /// Alone: the Run Checkpoint with this hash, one of the view's
+    /// [`retry_points`](crate::RunView::retry_points), spending one of this
+    /// Run's Retries.
+    Point(String),
     /// With other Players, as the Run log says: this Player's part of the
     /// Run Checkpoint everyone voted for, by its hash.
     Checkpoint(String),
@@ -242,8 +246,8 @@ impl<G: PlayedGame> RunningGame<G> {
     }
 
     /// A Retry: the game goes back to this Player's Run Checkpoint with
-    /// hash `to` (or, alone, to the latest one, spending a Retry), as a new
-    /// boot. Everything recorded after it is void.
+    /// hash `to` (or, alone, to the latest one or a chosen one, spending a
+    /// Retry), as a new boot. Everything recorded after it is void.
     /// Nothing is recorded unless the game got back there.
     pub fn retry(&mut self, to: &RetryTo) -> Result<(), String> {
         let hash = match to {
@@ -253,7 +257,11 @@ impl<G: PlayedGame> RunningGame<G> {
                 .latest_run_checkpoint()
                 .ok_or("there is no Run Checkpoint to go back to yet")?
                 .to_owned(),
-            RetryTo::Checkpoint(hash) => hash.clone(),
+            RetryTo::Point(_) if self.engine.retries_left() == 0 => return Err("no Retries are left".to_owned()),
+            RetryTo::Point(hash) if !self.engine.view().retry_points().iter().any(|p| p.hash == *hash) => {
+                return Err("that point isn't one a Retry can go back to".to_owned());
+            }
+            RetryTo::Point(hash) | RetryTo::Checkpoint(hash) => hash.clone(),
         };
         self.go_back(&hash, false)
     }

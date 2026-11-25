@@ -15,6 +15,8 @@ pub enum WipeAnswer {
     Command(RunCommand),
     /// With friends: their Retry vote, Yes or No.
     Vote(RunEvent),
+    /// The menu of points to Retry from.
+    ChooseRetry,
 }
 
 /// The wiped party to show now, if the Run isn't over yet: alone, this
@@ -55,41 +57,59 @@ pub fn wipe_bar(
             ui.strong(&wipe.how);
             match (log, me) {
                 (Some(log), Some(me)) => {
-                    let call = log.vote().map(|v| v.call).or_else(|| log.latest_complete());
-                    let voted = log.vote().is_some_and(|v| v.yes.contains(&me));
+                    let now = pactlocke_run::RunClock::now_ms(&pactlocke_run::SystemRunClock);
                     let left = log.retries_left();
                     ui.add(
                         egui::Label::new(format!(
-                            "Under Faint = Dead, that is a game over for everyone, unless everyone votes to Retry from the latest Run Checkpoint ({left} {} left). The first No ends the Run.",
+                            "Under Faint = Dead, that is a game over for everyone, unless everyone votes to Retry from a point before it ({left} {} left). The first No ends the Run.",
                             plural(left, "Retry", "Retries")
                         ))
                         .wrap(),
                     );
-                    if let Some(call) = call.filter(|_| online && !voted) {
-                        ui.horizontal(|ui| {
-                            if ui.button("Vote to Retry").clicked() {
-                                answer = Some(WipeAnswer::Vote(RunEvent::RetryVote { call, yes: true }));
+                    let voted = crate::go_back::voted_point(log, &me, crate::go_back::GoBack::Retry, now);
+                    let newest = log.retry_points().last().map(|c| c.n);
+                    match voted {
+                        Some((vote, when, areas)) => {
+                            ui.label(format!("Retry vote: back to {when}"));
+                            ui.weak(areas);
+                            if vote.yes.contains(&me) {
+                                ui.weak("You voted to Retry: waiting for the others.");
+                            } else if online {
+                                ui.horizontal(|ui| {
+                                    if ui.button("Retry from there").clicked() {
+                                        answer = Some(WipeAnswer::Vote(RunEvent::RetryVote { call: vote.call, yes: true }));
+                                    }
+                                    if ui.button("End the Run").clicked() {
+                                        answer = Some(WipeAnswer::Vote(RunEvent::RetryVote { call: vote.call, yes: false }));
+                                    }
+                                });
                             }
-                            if ui.button("End the Run").clicked() {
-                                answer = Some(WipeAnswer::Vote(RunEvent::RetryVote { call, yes: false }));
+                        }
+                        None if online => {
+                            if let Some(call) = newest {
+                                ui.horizontal(|ui| {
+                                    if ui.button("Choose where to Retry from…").clicked() {
+                                        answer = Some(WipeAnswer::ChooseRetry);
+                                    }
+                                    if ui.button("End the Run").clicked() {
+                                        answer = Some(WipeAnswer::Vote(RunEvent::RetryVote { call, yes: false }));
+                                    }
+                                });
                             }
-                        });
-                    } else if voted {
-                        ui.weak("You voted to Retry: waiting for the others.");
+                        }
+                        None => {}
                     }
                 }
                 _ if wipe.retry_offered => {
                     ui.add(
                         egui::Label::new(
-                            "Under Faint = Dead, that is a game over, unless you Retry from your latest Run Checkpoint.",
+                            "Under Faint = Dead, that is a game over, unless you Retry from a point before it.",
                         )
                         .wrap(),
                     );
                     ui.horizontal(|ui| {
-                        if ui.button("Retry").clicked() {
-                            answer = Some(WipeAnswer::Command(RunCommand::Retry {
-                                to: pactlocke_run::RetryTo::Latest,
-                            }));
+                        if ui.button("Choose where to Retry from…").clicked() {
+                            answer = Some(WipeAnswer::ChooseRetry);
                         }
                         if ui.button("End the Run").clicked() {
                             answer = Some(WipeAnswer::Command(RunCommand::EndRun));

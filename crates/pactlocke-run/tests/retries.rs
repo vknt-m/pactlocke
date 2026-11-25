@@ -49,9 +49,8 @@ fn alone_a_retry_goes_back_to_the_last_in_game_save_and_undoes_everything_since(
     retry_alone(&mut table);
     let feed = table.apps[0].view_feed();
     assert!(
-        feed[0..3]
-            .iter()
-            .any(|e| e == "Retry: back to the latest Run Checkpoint, and everything since is undone"),
+        feed[0..3].iter().any(|e| e
+            == "Retry: back to the Run Checkpoint from under a minute ago in Route 1, and everything since is undone"),
         "{feed:?}"
     );
     assert!(

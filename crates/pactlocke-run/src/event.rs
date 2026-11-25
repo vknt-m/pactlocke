@@ -63,6 +63,13 @@ pub enum RunEvent {
         to_seq: u64,
         /// The Run Checkpoint's SHA-1.
         hash: String,
+        /// When the Run Checkpoint was taken (Unix milliseconds); none in
+        /// Run files from before a Retry could choose its point.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_ms: Option<i64>,
+        /// The Area the game was in there, by name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        area: Option<String>,
     },
     /// A Retry was called for but couldn't be made.
     RetryFailed {
@@ -729,7 +736,7 @@ impl RunEvent {
     /// with event `to_seq`, whose hash this is.
     pub fn went_back(&self) -> Option<(u64, &str)> {
         match self {
-            RunEvent::Retried { to_seq, hash } | RunEvent::Rescued { to_seq, hash, .. } => Some((*to_seq, hash)),
+            RunEvent::Retried { to_seq, hash, .. } | RunEvent::Rescued { to_seq, hash, .. } => Some((*to_seq, hash)),
             _ => None,
         }
     }

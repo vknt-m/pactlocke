@@ -40,6 +40,8 @@ pub struct Asks {
     pub vote: Option<RunEvent>,
     pub dropout: Option<DropoutAsk>,
     pub command: Option<RunCommand>,
+    /// The menu of points to go back to, for a Retry.
+    pub go_back: Option<crate::go_back::GoBack>,
 }
 
 /// A Player as the panel shows them: their key, name and colour's index.
@@ -154,15 +156,27 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
                 });
         }
         let online = lobbies.online();
+        let now_ms = pactlocke_run::RunClock::now_ms(&pactlocke_run::SystemRunClock);
+        if crate::spectate::start_retry_vote(ui, log, online) {
+            asks.go_back = Some(crate::go_back::GoBack::Retry);
+        }
         asks.vote = let_go
             .or(crate::spectate::gate_vote(ui, log, spectate.me(), online))
-            .or(crate::spectate::votes(ui, log, spectate.me(), online))
-            .or(crate::rescue::vote(
+            .or(crate::go_back::vote(
                 ui,
                 log,
                 spectate.me(),
                 online,
-                pactlocke_run::RunClock::now_ms(&pactlocke_run::SystemRunClock),
+                now_ms,
+                crate::go_back::GoBack::Retry,
+            ))
+            .or(crate::go_back::vote(
+                ui,
+                log,
+                spectate.me(),
+                online,
+                now_ms,
+                crate::go_back::GoBack::Rescue,
             ))
             .or(crate::spectate::flag_votes(ui, log, spectate.me(), online));
         asks.dropout = crate::spectate::dropouts(ui, log, spectate, lobbies.online());
@@ -235,8 +249,8 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
                     }
                     Tab::Graveyard => graveyard(ui, &run, &players, &graves, icons, now),
                     Tab::Ruleset => {
-                        if let Some(command) = ruleset_tab(ui, &run, lobbies) {
-                            asks.command = Some(command);
+                        if ruleset_tab(ui, &run, lobbies) {
+                            asks.go_back = Some(crate::go_back::GoBack::Retry);
                         }
                         if !coop {
                             return;
@@ -717,8 +731,9 @@ fn party(ui: &mut egui::Ui, run: &RunPanel<'_>, players: &[Who], links: &[Link],
 
 /// The Ruleset: every rule, the level cap, Retries (with the solo Retry),
 /// Sync Gates and the Encounters used.
-fn ruleset_tab(ui: &mut egui::Ui, run: &RunPanel<'_>, lobbies: &Lobbies) -> Option<RunCommand> {
-    let mut command = None;
+/// The Ruleset tab. Says whether the Player asked to choose a Retry point.
+fn ruleset_tab(ui: &mut egui::Ui, run: &RunPanel<'_>, lobbies: &Lobbies) -> bool {
+    let mut choose_retry = false;
     let r = run.ruleset;
     // Each fact wraps to the panel's width, however narrow.
     let fact = |ui: &mut egui::Ui, name: &str, value: String| {
@@ -783,13 +798,13 @@ fn ruleset_tab(ui: &mut egui::Ui, run: &RunPanel<'_>, lobbies: &Lobbies) -> Opti
         let retry = ui
             .add_enabled(
                 left > 0 && run.view.run_checkpoint,
-                egui::Button::new(format!("Retry · {left} left")),
+                egui::Button::new(format!("Retry… · {left} left")),
             )
-            .on_hover_text("Go back to your latest Run Checkpoint (your last in-game save), undoing everything since");
+            .on_hover_text(
+                "Choose a point to go back to, your latest Run Checkpoint or a Rescue Point, undoing everything since",
+            );
         if retry.clicked() {
-            command = Some(RunCommand::Retry {
-                to: pactlocke_run::RetryTo::Latest,
-            });
+            choose_retry = true;
         }
     }
     ui.add_space(6.0);
@@ -838,5 +853,5 @@ fn ruleset_tab(ui: &mut egui::Ui, run: &RunPanel<'_>, lobbies: &Lobbies) -> Opti
         };
         row.response.on_hover_text(help);
     }
-    command
+    choose_retry
 }

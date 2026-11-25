@@ -122,7 +122,7 @@ pub fn retries(ruleset: &Ruleset) -> String {
     match ruleset.retries {
         0 => "Retries are off: what happens stays.".to_owned(),
         pool => format!(
-            "The Run has {pool} {}. A Retry sends every Player's game back to the latest Run Checkpoint (an in-game save, or a Sync Gate), undoing everything since. Alone you take one when you like; with friends everyone must vote Yes, and the first No ends the vote.",
+            "The Run has {pool} {}. A Retry sends every Player's game back to a point you choose, the latest Run Checkpoint (an in-game save, or a Sync Gate) or a Rescue Point before it, undoing everything since. Alone you take one when you like; with friends everyone must vote Yes, and the first No ends the vote.",
             plural(pool, "Retry", "Retries")
         ),
     }
