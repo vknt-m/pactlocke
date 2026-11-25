@@ -487,6 +487,25 @@ impl Table {
         self.tick();
     }
 
+    /// Player `i` votes on a Rescue back to the `call`th Run Checkpoint.
+    pub fn votes_to_rescue(&mut self, i: usize, call: u64, yes: bool) {
+        self.submit(i, &LogBody::Event(RunEvent::RescueVote { call, yes }));
+        self.tick();
+    }
+
+    /// Time moves on to the next Rescue Point, and every Player plays a
+    /// little, so the Host calls it and everyone gives their part.
+    pub fn next_rescue_point(&mut self) {
+        self.clock.advance_ms(pactlocke_run::RESCUE_POINT_EVERY_MS);
+        for _ in 0..4 {
+            for i in 0..self.apps.len() {
+                if !self.offline.contains(&i) {
+                    self.plays(i, 10);
+                }
+            }
+        }
+    }
+
     /// Player `i` saves in-game (the fake saves on START and SELECT together).
     pub fn saves(&mut self, i: usize) {
         self.apps[i].running.run_frame(pactlocke_game::SAVE_KEYS);
@@ -661,6 +680,16 @@ impl Table {
         }
         if let Some(player) = self.host_log.dropout_due() {
             self.submit(host, &LogBody::Dropout { player });
+        }
+        if let Some(call) = self.host_log.rescue_due() {
+            self.submit(host, &LogBody::Rescue { call });
+        }
+        if self.host_log.rescue_point_due(self.now()) {
+            self.apps[host]
+                .running
+                .commands()
+                .send(pactlocke_run::RunCommand::CallRescuePoint)
+                .unwrap();
         }
         for app in &mut self.apps {
             let mut commands = app.follower.follow(&app.log);

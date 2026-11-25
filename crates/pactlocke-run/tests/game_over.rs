@@ -249,3 +249,24 @@ fn a_pokemon_released_or_still_alive_is_timed_to_its_release_or_the_end() {
     assert_eq!(longest[0].lived_ms, 50_000, "the released one, up to its release");
     assert!(!longest[0].alive, "released, so not alive at the end");
 }
+
+#[test]
+fn with_friends_a_wiped_party_cant_be_rescued_only_retried() {
+    let mut table = Table::start(&["Red", "Blue"], soul_link(1));
+    both_play(&mut table, 60);
+    table.saves(0);
+    table.next_rescue_point();
+    let point = table.apps[1].log.rescue_points()[0].n;
+    red_wipes(&mut table);
+    assert!(table.apps[1].log.wiped().is_some());
+
+    for i in 0..2 {
+        table.votes_to_rescue(i, point, true);
+    }
+    both_play(&mut table, 40);
+    let log = &table.apps[1].log;
+    assert_eq!(log.rescue_vote(), None, "no Rescue vote while the wipe stands");
+    assert_eq!(log.rescues(), 0);
+    assert!(log.wiped().is_some(), "the wipe still stands");
+    assert!(log.game_over().is_none(), "the Retry vote is still to come");
+}

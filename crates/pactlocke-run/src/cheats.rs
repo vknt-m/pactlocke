@@ -270,10 +270,10 @@ impl CheatWatch {
     }
 }
 
-/// The Retry in the log that sent this Player's game back to `at`, not one
-/// of `used` already.
+/// The Retry or Rescue in the log that sent this Player's game back to
+/// `at`, not one of `used` already.
 fn retry_to(log: &RunLog, player: &PlayerKey, at: GamePoint, used: &BTreeSet<u64>) -> Option<u64> {
-    log.retries()
+    log.go_backs()
         .into_iter()
         .find(|(call, to)| !used.contains(call) && to.get(player) == Some(&at))
         .map(|(call, _)| call)

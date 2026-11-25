@@ -266,6 +266,9 @@ impl HostCoop {
         if let Some(call) = self.log.retry_due() {
             self.submit(Some(node), &LogBody::Retry { call });
         }
+        if let Some(call) = self.log.rescue_due() {
+            self.submit(Some(node), &LogBody::Rescue { call });
+        }
         if let Some(player) = self.log.dropout_due() {
             self.submit(Some(node), &LogBody::Dropout { player });
         }

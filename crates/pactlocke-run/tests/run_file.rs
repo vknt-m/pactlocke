@@ -480,3 +480,86 @@ fn a_run_lost_to_a_game_over_is_listed_so_with_how_it_ended() {
     );
     assert!(over.at_ms >= START_MS);
 }
+
+#[test]
+fn the_run_file_keeps_the_newest_rescue_points_apart_from_other_run_checkpoints() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = RunLibrary::open(dir.path()).unwrap();
+    let clock = TestClock::at(START_MS);
+    let mut player = Player::starts_a_run_in(Box::new(library.create().unwrap()), clock.clone(), first_encounter());
+    player.engine.take_checkpoint(core_checkpoint(0));
+    // Twelve parts of the Host's Rescue Points, with an in-game save after each.
+    for call in 1..=12u8 {
+        player.engine.join_rescue_point(u64::from(call) * 2);
+        player.plays(1);
+        assert!(player.engine.checkpoint_wanted(), "taken at a quiet overworld moment");
+        player.engine.take_checkpoint(core_checkpoint(call));
+        player.plays(10);
+        player.engine.save_memory_seen(&[call]);
+        player.engine.take_checkpoint(core_checkpoint(100 + call));
+    }
+    drop(player);
+
+    let id = library.list()[0].id.clone();
+    let db = rusqlite::Connection::open(dir.path().join(format!("{}.pactrun", id.0))).unwrap();
+    let count = |filter: &str| -> i64 {
+        db.query_row(&format!("SELECT COUNT(*) FROM checkpoints WHERE {filter}"), [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(
+        count("reason LIKE '%rescue_point%'"),
+        pactlocke_run::RESCUE_POINTS_KEPT as i64,
+        "the newest ten Rescue Point parts"
+    );
+    assert_eq!(
+        count("reason NOT LIKE '%rescue_point%'"),
+        4,
+        "and, apart from them, the boot checkpoint and the newest three other Run Checkpoints"
+    );
+    let oldest: String = db
+        .query_row(
+            "SELECT reason FROM checkpoints WHERE reason LIKE '%rescue_point%' ORDER BY id LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        oldest, r#"{"joined_rescue_point":{"call":6}}"#,
+        "the two oldest are overwritten"
+    );
+}
+
+#[test]
+fn the_runs_list_says_how_many_rescues_a_run_used() {
+    use pactlocke_emu::CoreAdapter;
+    use pactlocke_run::{RunCommand, RunEngine, RunningGame};
+    let dir = tempfile::tempdir().unwrap();
+    let library = RunLibrary::open(dir.path()).unwrap();
+    let clock = TestClock::at(START_MS);
+    let engine = RunEngine::start(
+        new_solo_run(first_encounter()),
+        Box::new(library.create().unwrap()),
+        Box::new(clock.clone()),
+    )
+    .unwrap();
+    let mut running = RunningGame::boot(pactlocke_game::FakeGame::default(), engine, START_MS).unwrap();
+    let plays = |running: &mut RunningGame<pactlocke_game::FakeGame>, n: usize| {
+        for _ in 0..n {
+            running.run_frame(Keys::NONE);
+            clock.advance_ms(17);
+        }
+    };
+    plays(&mut running, 100);
+    clock.advance_ms(pactlocke_run::RESCUE_POINT_EVERY_MS);
+    plays(&mut running, 40);
+    for _ in 0..2 {
+        let to = running.engine().view().rescue_points[0].hash.clone();
+        running.commands().send(RunCommand::Rescue { to }).unwrap();
+        plays(&mut running, 40);
+    }
+    assert_eq!(running.engine().view().rescues, 2);
+    drop(running);
+    assert_eq!(library.list()[0].rescues, 2);
+}

@@ -20,7 +20,8 @@ use crate::{CheckpointReason, LogEntry, PlayerKey, Recorded, Ruleset, ShadowChec
 const EXTENSION: &str = "pactrun";
 
 /// How many Run Checkpoints the file keeps, besides the newest boot
-/// checkpoint; older ones are pruned (their hashes stay in the log).
+/// checkpoint and the newest [`crate::RESCUE_POINTS_KEPT`] parts of Rescue
+/// Points; older ones are pruned (their hashes stay in the log).
 const RUN_CHECKPOINTS_KEPT: i64 = 3;
 
 /// zstd's level for checkpoints: quick, and a savestate shrinks well.
@@ -131,6 +132,8 @@ pub struct RunSummary {
     pub last_played_ms: i64,
     /// Deaths recorded in it, a Retry's undone ones included.
     pub deaths: u32,
+    /// Rescues this Player's game made in it.
+    pub rescues: u32,
     /// Whether it is a Run with friends: its file keeps a Run log.
     pub with_friends: bool,
     /// In a Run with friends, every Player's name in join order (the Host
@@ -321,6 +324,13 @@ fn summary(path: &Path) -> Option<RunSummary> {
             |row| row.get(0),
         )
         .unwrap_or(0);
+    let rescues: u32 = db
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE event LIKE '%\"kind\":\"rescued\"%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
     // A file from before Run logs were kept has no table for one.
     let with_friends = db
         .query_row("SELECT EXISTS (SELECT 1 FROM run_log)", [], |row| row.get(0))
@@ -353,6 +363,7 @@ fn summary(path: &Path) -> Option<RunSummary> {
     Some(RunSummary {
         id,
         deaths,
+        rescues,
         game_over,
         with_friends,
         players,
@@ -689,11 +700,25 @@ fn store_checkpoint(
     )?;
     if let Slot::Checkpoints = slot {
         let boot = serde_json::to_string(&CheckpointReason::Boot).expect("a reason serialises");
+        let point = serde_json::to_string(&CheckpointReason::RescuePoint).expect("a reason serialises");
+        // `{"joined_rescue_point":{"call":0}}` up to its call: every part of a Host's Rescue Point.
+        let joined =
+            serde_json::to_string(&CheckpointReason::JoinedRescuePoint { call: 0 }).expect("a reason serialises");
+        let joined = format!("{}%", &joined[..=joined.find(':').expect("a tagged reason")]);
         tx.execute(
             "DELETE FROM checkpoints WHERE id NOT IN (
-                 SELECT id FROM checkpoints WHERE reason != ?1 ORDER BY id DESC LIMIT ?2
+                 SELECT id FROM checkpoints WHERE reason != ?1 AND reason != ?3 AND reason NOT LIKE ?4
+                 ORDER BY id DESC LIMIT ?2
+             ) AND id NOT IN (
+                 SELECT id FROM checkpoints WHERE reason = ?3 OR reason LIKE ?4 ORDER BY id DESC LIMIT ?5
              ) AND id NOT IN (SELECT MAX(id) FROM checkpoints WHERE reason = ?1)",
-            params![boot, RUN_CHECKPOINTS_KEPT],
+            params![
+                boot,
+                RUN_CHECKPOINTS_KEPT,
+                point,
+                joined,
+                crate::RESCUE_POINTS_KEPT as i64
+            ],
         )?;
     }
     tx.commit()

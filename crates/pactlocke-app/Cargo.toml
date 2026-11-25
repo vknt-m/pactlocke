@@ -27,3 +27,4 @@ png = "0.17"
 log = { version = "0.4", features = ["std"] }
 # iroh logs through tracing: with no tracing subscriber, its events reach `log`.
 tracing = { version = "0.1", features = ["log"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }

@@ -12,7 +12,7 @@ use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{CheckpointReason, Locked, RunEvent};
+use crate::{CheckpointReason, Locked, RESCUE_POINT_EVERY_MS, RESCUE_POINTS_KEPT, RunEvent};
 
 /// What an author signs before their counter and the entry: the Run, so an
 /// entry can't be replayed into another Run.
@@ -76,6 +76,14 @@ pub enum LogBody {
     /// to their part of the `call`th Run Checkpoint, and each Player's
     /// entries after it are void.
     Retry {
+        /// Which Run Checkpoint in the log, counting from 1.
+        call: u64,
+    },
+    /// By the Host, once everyone voted Yes: a Rescue. Every Player goes
+    /// back to their part of the `call`th Run Checkpoint, a Rescue Point,
+    /// and each Player's entries after it are void, as for a Retry, but no
+    /// Retry is spent.
+    Rescue {
         /// Which Run Checkpoint in the log, counting from 1.
         call: u64,
     },
@@ -208,6 +216,11 @@ pub enum LogError {
         /// The entry's place in the log.
         seq: u64,
     },
+    /// A Rescue without everyone's vote, or to a Rescue Point not offered.
+    BadRescue {
+        /// The entry's place in the log.
+        seq: u64,
+    },
     /// A takeover by someone who isn't next in join order after the Host.
     BadTakeover {
         /// The entry's place in the log.
@@ -253,6 +266,10 @@ impl std::fmt::Display for LogError {
             LogError::BadRetry { seq } => write!(
                 f,
                 "entry {seq} is a Retry nobody agreed to: not everyone voted Yes, no Retry is left, or it isn't the latest Run Checkpoint"
+            ),
+            LogError::BadRescue { seq } => write!(
+                f,
+                "entry {seq} is a Rescue nobody agreed to: not everyone voted Yes, or its Rescue Point isn't offered"
             ),
         }
     }
@@ -471,6 +488,15 @@ impl RunLog {
                     return Err(LogError::BadRetry { seq });
                 }
             }
+            Kind::Rescue if s.author != self.host => return Err(LogError::NotHost { seq }),
+            Kind::Rescue => {
+                let Ok(LogBody::Rescue { call }) = serde_json::from_slice(&s.body) else {
+                    return Err(LogError::Body { seq });
+                };
+                if self.rescue_due() != Some(call) {
+                    return Err(LogError::BadRescue { seq });
+                }
+            }
             Kind::Event => {
                 let in_roster = self.active().contains(&s.author);
                 if !in_roster {
@@ -576,41 +602,56 @@ impl RunLog {
     }
 
     /// Every Run Checkpoint in order, from the 1st: who called it (their
-    /// in-game save, or a Sync Gate) and each Player's part, the checkpoint
-    /// of their own game they took for it. A Retry voids every Run
-    /// Checkpoint after the one it went back to; they keep their numbers.
+    /// in-game save, a Sync Gate, or the Host's Rescue Point) and each
+    /// Player's part, the checkpoint of their own game they took for it. A
+    /// Retry or a Rescue voids every Run Checkpoint after the one it went
+    /// back to; they keep their numbers. A Rescue Point only the Host of
+    /// the moment calls: one from anyone else is no call.
     pub fn calls(&self) -> Vec<Call> {
         let mut calls: Vec<Call> = Vec::new();
+        let mut host = self.first_host;
         for (index, (author, body)) in self.bodies().enumerate() {
             match body {
+                LogBody::Takeover => host = author,
+                LogBody::Event(RunEvent::Checkpoint {
+                    reason: CheckpointReason::RescuePoint,
+                    ..
+                }) if author != host => {}
                 LogBody::Event(RunEvent::Checkpoint {
                     reason,
                     hash,
                     boot,
                     frame,
+                    at_ms,
+                    area,
                 }) => {
                     let part = Part {
                         entry: index,
                         at: GamePoint { boot, frame },
                         hash,
+                        at_ms,
+                        area,
                     };
                     match reason {
                         CheckpointReason::Boot => {}
-                        CheckpointReason::Joined { call } => {
+                        CheckpointReason::Joined { call } | CheckpointReason::JoinedRescuePoint { call } => {
                             if let Some(called) = numbered_mut(&mut calls, call).filter(|c| !c.void) {
                                 called.parts.entry(author).or_insert(part);
                             }
                         }
-                        CheckpointReason::InGameSave | CheckpointReason::SyncGate | CheckpointReason::Asked => calls
-                            .push(Call {
-                                n: calls.len() as u64 + 1,
-                                by: author,
-                                parts: BTreeMap::from([(author, part)]),
-                                void: false,
-                            }),
+                        CheckpointReason::InGameSave
+                        | CheckpointReason::SyncGate
+                        | CheckpointReason::Asked
+                        | CheckpointReason::RescuePoint => calls.push(Call {
+                            n: calls.len() as u64 + 1,
+                            by: author,
+                            parts: BTreeMap::from([(author, part)]),
+                            void: false,
+                            rescue_point: reason == CheckpointReason::RescuePoint,
+                        }),
                     }
                 }
-                LogBody::Retry { call } => {
+                LogBody::Retry { call } | LogBody::Rescue { call } => {
                     for later in calls.iter_mut().filter(|c| c.n > call) {
                         later.void = true;
                     }
@@ -626,9 +667,86 @@ impl RunLog {
         !called.void && self.roster.is_some() && self.active().iter().all(|p| called.parts.contains_key(p))
     }
 
-    /// The newest Run Checkpoint every Player has their part of: the one a Retry goes back to.
+    /// The newest Run Checkpoint every Player has their part of, not a
+    /// Rescue Point: the one a Retry goes back to.
     pub fn latest_complete(&self) -> Option<u64> {
-        self.calls().iter().rev().find(|c| self.is_complete(c)).map(|c| c.n)
+        self.calls()
+            .iter()
+            .rev()
+            .find(|c| !c.rescue_point && self.is_complete(c))
+            .map(|c| c.n)
+    }
+
+    /// The Rescue Points a Rescue can go back to now, oldest first: of the
+    /// newest [`RESCUE_POINTS_KEPT`] called (the ones every Run file keeps),
+    /// those every Player has their part of and no Retry or Rescue voided.
+    pub fn rescue_points(&self) -> Vec<Call> {
+        let points: Vec<Call> = self.calls().into_iter().filter(|c| c.rescue_point).collect();
+        let older = points.len().saturating_sub(RESCUE_POINTS_KEPT);
+        points.into_iter().skip(older).filter(|c| self.is_complete(c)).collect()
+    }
+
+    /// Whether the Host should call a Rescue Point now: it has been
+    /// [`RESCUE_POINT_EVERY_MS`] since the last was called, or since the Run
+    /// started.
+    pub fn rescue_point_due(&self, now_ms: i64) -> bool {
+        let Some(locked) = self.locked() else {
+            return false;
+        };
+        let last = self
+            .calls()
+            .iter()
+            .filter(|c| c.rescue_point)
+            .filter_map(Call::called_at_ms)
+            .max()
+            .unwrap_or(locked.start_ms);
+        now_ms - last >= RESCUE_POINT_EVERY_MS
+    }
+
+    /// The Rescue vote open now, if any: its Rescue Point and who said Yes.
+    /// A vote starts at a Yes with none open, and ends at the first No, at a
+    /// Retry or a Rescue, or once its Rescue Point is no longer offered.
+    /// While a wiped party stands there is none: only a Retry can undo a wipe.
+    pub fn rescue_vote(&self) -> Option<Vote> {
+        if self.wiped().is_some() {
+            return None;
+        }
+        let mut open: Option<Vote> = None;
+        for (author, body) in self.bodies() {
+            match body {
+                LogBody::Event(RunEvent::RescueVote { call, yes }) => open_or_count(&mut open, author, call, yes),
+                LogBody::Retry { .. } | LogBody::Rescue { .. } => open = None,
+                _ => {}
+            }
+        }
+        let points = self.rescue_points();
+        open.filter(|vote| points.iter().any(|c| c.n == vote.call))
+    }
+
+    /// The Rescue Point a Rescue should go back to now: the open vote's,
+    /// once every Player still in the Run said Yes. The Host records it;
+    /// every Player checks it.
+    pub fn rescue_due(&self) -> Option<u64> {
+        let vote = self.rescue_vote()?;
+        self.everyone_said_yes(&vote).then_some(vote.call)
+    }
+
+    /// Whether every Player still in the Run said Yes on this vote.
+    fn everyone_said_yes(&self, vote: &Vote) -> bool {
+        self.roster.is_some() && self.active().iter().all(|p| vote.yes.contains(p))
+    }
+
+    /// How many Rescues the Run has used.
+    pub fn rescues(&self) -> usize {
+        self.bodies()
+            .filter(|(_, b)| matches!(b, LogBody::Rescue { .. }))
+            .count()
+    }
+
+    /// Whether a vote is under way that Players are asked to answer: a
+    /// Retry, a Rescue or letting a Sync Gate go. Only one is asked at a time.
+    pub fn vote_under_way(&self) -> bool {
+        self.vote().is_some() || self.rescue_vote().is_some() || self.gate_vote().is_some()
     }
 
     /// Retries left in the Run's shared pool.
@@ -643,26 +761,14 @@ impl RunLog {
 
     /// The Retry vote open now, if any: its Run Checkpoint and who said Yes.
     /// A vote starts at a Yes with none open, for the latest complete Run
-    /// Checkpoint. It ends at the first No, at the Retry, or once a newer
-    /// Run Checkpoint is complete.
+    /// Checkpoint. It ends at the first No, at a Retry or a Rescue, or once
+    /// a newer Run Checkpoint is complete.
     pub fn vote(&self) -> Option<Vote> {
         let mut open: Option<Vote> = None;
         for (author, body) in self.bodies() {
             match body {
-                LogBody::Event(RunEvent::RetryVote { call, yes }) => match &mut open {
-                    None if yes => {
-                        open = Some(Vote {
-                            call,
-                            yes: BTreeSet::from([author]),
-                        });
-                    }
-                    Some(vote) if vote.call == call && yes => {
-                        vote.yes.insert(author);
-                    }
-                    Some(vote) if vote.call == call => open = None,
-                    _ => {}
-                },
-                LogBody::Retry { .. } => open = None,
+                LogBody::Event(RunEvent::RetryVote { call, yes }) => open_or_count(&mut open, author, call, yes),
+                LogBody::Retry { .. } | LogBody::Rescue { .. } => open = None,
                 _ => {}
             }
         }
@@ -780,28 +886,26 @@ impl RunLog {
     /// every Player checks it.
     pub fn retry_due(&self) -> Option<u64> {
         let vote = self.vote()?;
-        self.roster.as_ref()?;
-        let everyone = self.active().iter().all(|p| vote.yes.contains(p));
-        (everyone && self.retries_left() > 0).then_some(vote.call)
+        (self.everyone_said_yes(&vote) && self.retries_left() > 0).then_some(vote.call)
     }
 
     /// Every Player's events that stand, in log order, with their authors. A
-    /// Retry voids each Player's entries after their part of its Run
-    /// Checkpoint, up to the entry that says their game went back (any sent
-    /// from before it on the way are void too).
+    /// Retry or a Rescue voids each Player's entries after their part of its
+    /// Run Checkpoint, up to the entry that says their game went back (any
+    /// sent from before it on the way are void too).
     pub fn standing_events(&self) -> Vec<(PlayerKey, RunEvent)> {
         let mut standing: Vec<(usize, PlayerKey, RunEvent)> = Vec::new();
         let mut going_back: BTreeSet<PlayerKey> = BTreeSet::new();
         let mut calls: Option<Vec<Call>> = None;
         for (index, (author, body)) in self.bodies().enumerate() {
             match body {
-                LogBody::Event(RunEvent::Retried { .. }) => {
+                LogBody::Event(RunEvent::Retried { .. } | RunEvent::Rescued { .. }) => {
                     going_back.remove(&author);
                 }
                 LogBody::Event(event) if event.outlives_retries() => standing.push((index, author, event)),
                 LogBody::Event(_) if going_back.contains(&author) => {}
                 LogBody::Event(event) => standing.push((index, author, event)),
-                LogBody::Retry { call } => {
+                LogBody::Retry { call } | LogBody::Rescue { call } => {
                     let calls = calls.get_or_insert_with(|| self.calls());
                     if let Some(called) = numbered(calls, call) {
                         standing.retain(|(at, who, event)| {
@@ -816,13 +920,13 @@ impl RunLog {
         standing.into_iter().map(|(_, author, event)| (author, event)).collect()
     }
 
-    /// Every Retry in the log, in order: its call, and where it sent each
-    /// Player's game back to.
-    pub fn retries(&self) -> Vec<(u64, BTreeMap<PlayerKey, GamePoint>)> {
+    /// Every Retry and Rescue in the log, in order: its call, and where it
+    /// sent each Player's game back to.
+    pub fn go_backs(&self) -> Vec<(u64, BTreeMap<PlayerKey, GamePoint>)> {
         let calls = self.calls();
         self.bodies()
             .filter_map(|(_, body)| match body {
-                LogBody::Retry { call } => {
+                LogBody::Retry { call } | LogBody::Rescue { call } => {
                     let called = numbered(&calls, call)?;
                     Some((call, called.parts.iter().map(|(p, part)| (*p, part.at)).collect()))
                 }
@@ -1095,6 +1199,7 @@ enum Kind {
     Locked,
     Event,
     Retry,
+    Rescue,
     Takeover,
     Dropout,
 }
@@ -1136,8 +1241,17 @@ pub struct Call {
     pub by: PlayerKey,
     /// Each Player's part of it, by Player.
     pub parts: BTreeMap<PlayerKey, Part>,
-    /// A Retry went back to an earlier one: it can't be gone back to.
+    /// A Retry or a Rescue went back to an earlier one: it can't be gone back to.
     pub void: bool,
+    /// The Host called it as a Rescue Point.
+    pub rescue_point: bool,
+}
+
+impl Call {
+    /// When its caller took their part of it (Unix milliseconds).
+    pub fn called_at_ms(&self) -> Option<i64> {
+        self.parts.get(&self.by).map(|p| p.at_ms)
+    }
 }
 
 /// One Player's part of a Run Checkpoint: the checkpoint of their own game.
@@ -1149,6 +1263,10 @@ pub struct Part {
     pub at: GamePoint,
     /// The checkpoint's hash, as their Run file has it.
     pub hash: String,
+    /// When it was taken (Unix milliseconds).
+    pub at_ms: i64,
+    /// The Area their game was in, by name.
+    pub area: Option<String>,
 }
 
 /// A Player's party wiped under Faint = Dead, as the Run log has it.
@@ -1160,7 +1278,25 @@ pub struct Wiped {
     pub last: crate::LastDeath,
 }
 
-/// An open Retry vote.
+/// A Yes or a No on a vote for going back to the `call`th Run Checkpoint:
+/// the first Yes with none open starts it, and the first No on it ends it.
+fn open_or_count(open: &mut Option<Vote>, author: PlayerKey, call: u64, yes: bool) {
+    match open {
+        None if yes => {
+            *open = Some(Vote {
+                call,
+                yes: BTreeSet::from([author]),
+            });
+        }
+        Some(vote) if vote.call == call && yes => {
+            vote.yes.insert(author);
+        }
+        Some(vote) if vote.call == call => *open = None,
+        _ => {}
+    }
+}
+
+/// An open Retry or Rescue vote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Vote {
     /// The Run Checkpoint it would go back to.
@@ -1210,6 +1346,7 @@ fn body_kind(body: &[u8]) -> Option<Kind> {
         "locked" => Some(Kind::Locked),
         "event" => Some(Kind::Event),
         "retry" => Some(Kind::Retry),
+        "rescue" => Some(Kind::Rescue),
         "takeover" => Some(Kind::Takeover),
         "dropout" => Some(Kind::Dropout),
         _ => None,
@@ -1326,8 +1463,12 @@ impl LogFollower {
                     let called = calls
                         .iter()
                         .find(|c| c.by == author && c.parts.get(&author).is_some_and(|p| p.entry == index));
-                    if let Some(called) = called.filter(|c| !c.void) {
-                        commands.push(crate::RunCommand::JoinCheckpoint { call: called.n });
+                    match called.filter(|c| !c.void) {
+                        Some(called) if called.rescue_point => {
+                            commands.push(crate::RunCommand::JoinRescuePoint { call: called.n });
+                        }
+                        Some(called) => commands.push(crate::RunCommand::JoinCheckpoint { call: called.n }),
+                        None => {}
                     }
                 }
                 // A flag reaches every feed once, the first time it is logged;
@@ -1389,6 +1530,11 @@ impl LogFollower {
                         commands.push(crate::RunCommand::Retry {
                             to: crate::RetryTo::Checkpoint(part.hash.clone()),
                         });
+                    }
+                }
+                LogBody::Rescue { call } if log.active().contains(&self.me) => {
+                    if let Some(part) = numbered(&calls, call).and_then(|c| c.parts.get(&self.me)) {
+                        commands.push(crate::RunCommand::Rescue { to: part.hash.clone() });
                     }
                 }
                 _ => {}

@@ -291,6 +291,10 @@ impl Spectate {
         }
         self.fed = log.entries().len();
         let mut commands = self.follower.follow(log);
+        // The Host calls the Rescue Points; their game says if it has one waiting.
+        if log.host() == self.me && log.rescue_point_due(now) {
+            commands.push(RunCommand::CallRescuePoint);
+        }
         if log.locked().is_some_and(|l| l.ruleset.links) {
             let links = self.links(log);
             commands.extend(self.keeper.keep(log, &links));
@@ -357,7 +361,7 @@ impl pactlocke_emu::AudioSink for Silent {
 }
 
 /// A vote under way, in a banner that stands out from the rest of the panel.
-fn vote_banner(ui: &mut eframe::egui::Ui, contents: impl FnOnce(&mut eframe::egui::Ui)) {
+pub fn vote_banner(ui: &mut eframe::egui::Ui, contents: impl FnOnce(&mut eframe::egui::Ui)) {
     let colour = ui.visuals().warn_fg_color;
     eframe::egui::Frame::new()
         .fill(colour.gamma_multiply(0.12))
@@ -435,7 +439,7 @@ pub fn votes(ui: &mut eframe::egui::Ui, log: &RunLog, me: PlayerKey, online: boo
         None => {
             let latest = log.latest_complete();
             let start = ui.add_enabled(
-                left > 0 && latest.is_some() && online,
+                left > 0 && latest.is_some() && online && !log.vote_under_way(),
                 eframe::egui::Button::new(format!("Start a Retry vote · {left} left")),
             );
             let start = start.on_hover_text(

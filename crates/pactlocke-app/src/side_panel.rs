@@ -139,7 +139,7 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
                     // For a gate the app can't see someone is past.
                     let start = ui
                         .add_enabled(
-                            lobbies.online() && log.gate_vote().is_none(),
+                            lobbies.online() && !log.vote_under_way(),
                             egui::Button::new("Vote to let it go").small(),
                         )
                         .on_hover_text(
@@ -157,6 +157,13 @@ pub fn show(ui: &mut egui::Ui, run: RunPanel<'_>, icons: &mut Icons, lobbies: &m
         asks.vote = let_go
             .or(crate::spectate::gate_vote(ui, log, spectate.me(), online))
             .or(crate::spectate::votes(ui, log, spectate.me(), online))
+            .or(crate::rescue::vote(
+                ui,
+                log,
+                spectate.me(),
+                online,
+                pactlocke_run::RunClock::now_ms(&pactlocke_run::SystemRunClock),
+            ))
             .or(crate::spectate::flag_votes(ui, log, spectate.me(), online));
         asks.dropout = crate::spectate::dropouts(ui, log, spectate, lobbies.online());
     }

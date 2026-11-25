@@ -151,8 +151,8 @@ pub(crate) fn plan(stored: &StoredRun) -> (BootPlan, ResumedFrom) {
             Some(from) => (BootPlan::Suspended(from.clone()), ResumedFrom::Suspend),
             None => from_save(),
         },
-        // A Retry that never got its new boot going: as after a clean close.
-        Some(RunEvent::Closed | RunEvent::Retried { .. }) | None => from_save(),
+        // A Retry or Rescue that never got its new boot going: as after a clean close.
+        Some(RunEvent::Closed | RunEvent::Retried { .. } | RunEvent::Rescued { .. }) | None => from_save(),
         Some(_) => newest
             .and_then(|from| rebuild(from, stored, last_boot))
             .unwrap_or_else(from_save),

@@ -106,7 +106,7 @@ A copy of another Player's game that your app runs in the background from their 
 _Avoid_: Mirror, replay (a replay is after the fact), ghost
 
 **Run Checkpoint**:
-A moment every Player's game is captured together, taken whenever any Player saves in-game and at every Sync Gate. It is what a Retry returns to.
+A moment every Player's game is captured together, taken whenever any Player saves in-game, at every Sync Gate, and at every Rescue Point. It is what a Retry returns to.
 _Avoid_: Save (a save belongs to one Player), savestate (that is the emulator mechanism)
 
 **Boot checkpoint**:
@@ -128,6 +128,14 @@ _Avoid_: Loss, defeat, whiteout (the game's own, which heals the party)
 **Retry**:
 An optional Ruleset rule: a small shared number of times the group may vote to send every Player back to the latest Run Checkpoint, undoing everything since.
 _Avoid_: Reset (one Player alone), rewind, reload
+
+**Rescue Point**:
+A Run Checkpoint the Host calls about every 4 minutes, which each Player gives their part of at their next quiet overworld moment (no battle, no script running). The Run keeps the newest 10, about the last 40 minutes. Alone, the Player's own app calls them.
+_Avoid_: Snapshot, autosave, restore point
+
+**Rescue**:
+Every Player going back together to a Rescue Point, when a game is stuck (a soft lock or a black screen). Any Player may ask for one at any time; everyone must vote Yes, and the first No ends the vote. Everything since is undone, as for a Retry, but no Retry is spent. Alone, it needs no vote.
+_Avoid_: Retry (that follows a wipe and spends one from the pool), rewind, reload
 
 ### Games and hacks
 

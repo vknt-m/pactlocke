@@ -184,11 +184,15 @@ fn another_players_feed_shows_their_in_game_saves_and_not_their_blocked_battles(
         hash: "00".into(),
         boot: 1,
         frame: 10,
+        at_ms: START_MS,
+        area: None,
     };
     let saved = FeedEntry::of_others(&checkpoint(CheckpointReason::InGameSave), START_MS).unwrap();
     assert_eq!(saved.text, "Saved in-game: a Run Checkpoint is kept");
     for reason in [
         CheckpointReason::Joined { call: 1 },
+        CheckpointReason::RescuePoint,
+        CheckpointReason::JoinedRescuePoint { call: 1 },
         CheckpointReason::SyncGate,
         CheckpointReason::Asked,
     ] {

@@ -31,6 +31,28 @@ pub enum RunEvent {
         /// The frame boundary it was taken at.
         #[serde(default)]
         frame: u64,
+        /// When it was taken (Unix milliseconds; 0 in a Run file from before this was kept).
+        #[serde(default)]
+        at_ms: i64,
+        /// The Area the game was in, by name, if it was in one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        area: Option<String>,
+    },
+    /// A Rescue: the game went back to the Rescue Point whose event is
+    /// `to_seq` (in this Player's own Run file) and whose hash is `hash`,
+    /// taken at `to_ms` in `area`. Everything this Player recorded after it
+    /// is void, as for a Retry, but no Retry is spent. In the shared Run log
+    /// it says this Player's game is back.
+    Rescued {
+        /// The Rescue Point's event, in this Player's own Run file.
+        to_seq: u64,
+        /// The Rescue Point's SHA-1.
+        hash: String,
+        /// When the Rescue Point was taken (Unix milliseconds).
+        to_ms: i64,
+        /// The Area the game was in there, by name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        area: Option<String>,
     },
     /// A Retry: the game went back to the Run Checkpoint whose event is
     /// `to_seq` (in this Player's own Run file) and whose hash is `hash`.
@@ -45,6 +67,11 @@ pub enum RunEvent {
     /// A Retry was called for but couldn't be made.
     RetryFailed {
         /// Why the Retry couldn't be made.
+        reason: String,
+    },
+    /// A Rescue was called for but couldn't be made.
+    RescueFailed {
+        /// Why the Rescue couldn't be made.
         reason: String,
     },
     /// The battle that was a source's Encounter is over: `pid` is the
@@ -138,6 +165,15 @@ pub enum RunEvent {
     /// A Player's vote on a Retry back to the `call`th Run Checkpoint: the
     /// first Yes starts the vote, and the first No ends it.
     RetryVote {
+        /// Which Run Checkpoint in the Run log, counting from 1.
+        call: u64,
+        /// Whether this Player says Yes.
+        yes: bool,
+    },
+    /// A Player's vote on a Rescue back to the `call`th Run Checkpoint, a
+    /// Rescue Point: the first Yes starts the vote, everyone must say Yes,
+    /// and the first No ends it.
+    RescueVote {
         /// Which Run Checkpoint in the Run log, counting from 1.
         call: u64,
         /// Whether this Player says Yes.
@@ -624,6 +660,23 @@ pub enum CheckpointReason {
         /// Which Run Checkpoint in the Run log, counting from 1.
         call: u64,
     },
+    /// A Rescue Point: called about every [`crate::RESCUE_POINT_EVERY_MS`],
+    /// by the Host in a Run with friends, at a quiet overworld moment.
+    RescuePoint,
+    /// Another Player's Rescue Point, the `call`th Run Checkpoint in the Run
+    /// log: this Player's part of it, taken at a quiet overworld moment.
+    JoinedRescuePoint {
+        /// Which Run Checkpoint in the Run log, counting from 1.
+        call: u64,
+    },
+}
+
+impl CheckpointReason {
+    /// Part of a Rescue Point: the Run file keeps the newest
+    /// [`crate::RESCUE_POINTS_KEPT`] of these apart from other Run Checkpoints.
+    pub fn is_rescue_point(&self) -> bool {
+        matches!(self, Self::RescuePoint | Self::JoinedRescuePoint { .. })
+    }
 }
 
 impl RunEvent {
@@ -642,9 +695,11 @@ impl RunEvent {
                 | RunEvent::Died { .. }
                 | RunEvent::PartyWiped { .. }
                 | RunEvent::RetryVote { .. }
+                | RunEvent::RescueVote { .. }
                 | RunEvent::DropoutVote { .. }
                 | RunEvent::FlagVote { .. }
                 | RunEvent::Retried { .. }
+                | RunEvent::Rescued { .. }
                 | RunEvent::EncounterOver { .. }
                 | RunEvent::Skipped { .. }
                 | RunEvent::GateReady { .. }
@@ -668,6 +723,15 @@ impl RunEvent {
     /// A Run Checkpoint: one a Retry can go back to (not a boot checkpoint).
     pub fn is_run_checkpoint(&self) -> bool {
         matches!(self, RunEvent::Checkpoint { reason, .. } if *reason != CheckpointReason::Boot)
+    }
+
+    /// A Retry or a Rescue: the game went back to the Run Checkpoint stored
+    /// with event `to_seq`, whose hash this is.
+    pub fn went_back(&self) -> Option<(u64, &str)> {
+        match self {
+            RunEvent::Retried { to_seq, hash } | RunEvent::Rescued { to_seq, hash, .. } => Some((*to_seq, hash)),
+            _ => None,
+        }
     }
 
     /// What a Retry never undoes: a cheat flag stands whatever happens after it.

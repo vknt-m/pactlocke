@@ -36,7 +36,7 @@ pub use boot::{BootPlan, Booted, boot_core};
 pub use cheats::{Cheat, CheatWatch, FAST_BURST_FRAMES, Flag, RETRY_WAIT_MS};
 pub use clock::{RunClock, SystemRunClock};
 pub use ending::{LastDeath, Survivor, survivors};
-pub use engine::{PARTY_LOOK_FRAMES, RunEngine, SUSPEND_SLOT_EVERY_MS};
+pub use engine::{PARTY_LOOK_FRAMES, RESCUE_POINT_EVERY_MS, RESCUE_POINTS_KEPT, RunEngine, SUSPEND_SLOT_EVERY_MS};
 pub use event::{AreaRef, CheckpointReason, DeathCause, Recorded, ResumedFrom, RunEvent, SourceRef};
 pub use file::{CopiedFrom, RunFile, RunId, RunLibrary, RunSummary};
 pub use links::{Judge, Link, LinkKeeper, LinkStanding, Member, WaitingOnLink, links};
@@ -62,8 +62,8 @@ pub use stream::{
     StreamHub, StreamMessage, StreamOut, StreamStore, StreamWant,
 };
 pub use view::{
-    Doing, FeedEntry, FeedIcon, FeedKind, GameOverView, Grave, LevelCapView, NativeOptionView, NicknameWanted, RunView,
-    WipeView, graves,
+    Doing, FeedEntry, FeedIcon, FeedKind, GameOverView, Grave, LevelCapView, NativeOptionView, NicknameWanted,
+    RescuePointView, RunView, WipeView, graves, minutes_ago,
 };
 
 use pactlocke_game::LevelCap;

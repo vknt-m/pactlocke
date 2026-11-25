@@ -31,6 +31,7 @@ mod logger;
 mod metal;
 mod player_strip;
 mod randomized;
+mod rescue;
 mod resume;
 mod rom_library;
 mod rom_report;
@@ -396,6 +397,8 @@ struct PactlockeApp {
     copying: Option<RunSummary>,
     /// A lost Run's summary, opened from the Runs list.
     lost: Option<RunSummary>,
+    /// The Rescue menu is open, from Emulation ▸ Rescue.
+    rescue_open: bool,
     about: bool,
     /// Paused from Emulation ▸ Pause.
     paused: bool,
@@ -458,6 +461,7 @@ impl PactlockeApp {
             deleting: None,
             copying: None,
             lost: None,
+            rescue_open: false,
             about: false,
             paused: false,
             fast_forward: false,
@@ -1360,6 +1364,9 @@ impl PactlockeApp {
                 {
                     act = Some(Menu::Retry);
                 }
+                if item(ui, "Rescue…", "", in_run) {
+                    act = Some(Menu::Rescue);
+                }
                 if check(ui, "Mute", self.mute_shortcut(), self.settings.muted) {
                     act = Some(Menu::Mute);
                 }
@@ -1466,6 +1473,7 @@ impl PactlockeApp {
                     });
                 }
             }
+            Menu::Rescue => self.rescue_open = true,
             Menu::Screenshot => self.screenshot(),
             Menu::TogglePanel => self.panel_shown = !self.panel_shown,
             Menu::TogglePopOut => self.panel_popped = !self.panel_popped,
@@ -1685,6 +1693,53 @@ impl PactlockeApp {
         }
     }
 
+    /// The Rescue menu, while it is open: with other Players, picking a
+    /// Rescue Point starts a vote; alone, the game goes straight back there.
+    fn rescue_menu(&mut self, ctx: &egui::Context) {
+        if !self.rescue_open {
+            return;
+        }
+        let Some(playing) = &self.playing else {
+            self.rescue_open = false;
+            return;
+        };
+        let Play::Run { commands, .. } = &playing.play else {
+            self.rescue_open = false;
+            return;
+        };
+        let now = SystemRunClock.now_ms();
+        let (points, blocked) = match (&playing.spectate, self.lobbies.log()) {
+            (Some(spectate), Some(log)) => {
+                let blocked = if !self.lobbies.online() {
+                    Some("You're offline: a Rescue vote can be started once you're back.")
+                } else if log.wiped().is_some() {
+                    Some("A party is wiped: only a Retry can undo that.")
+                } else if log.vote_under_way() {
+                    Some("Another vote is under way: a Rescue vote can be started once it's over.")
+                } else {
+                    None
+                };
+                (rescue::with_friends(log, &spectate.me()), blocked)
+            }
+            _ => {
+                let view = playing.view().unwrap_or_default();
+                let blocked = view
+                    .wipe
+                    .is_some()
+                    .then_some("Your party is wiped: only a Retry can undo that.");
+                (rescue::alone(&view.rescue_points), blocked)
+            }
+        };
+        let commands = commands.clone();
+        match rescue::window(ctx, &mut self.rescue_open, &points, blocked, now) {
+            Some(rescue::Pick::Vote(call)) => self.lobbies.share(vec![RunEvent::RescueVote { call, yes: true }]),
+            Some(rescue::Pick::Alone(to)) => {
+                let _ = commands.send(RunCommand::Rescue { to });
+            }
+            None => {}
+        }
+    }
+
     /// A lost Run's summary, from the Runs list.
     fn lost_summary(&mut self, ctx: &egui::Context) {
         let Some(summary) = &self.lost else {
@@ -1702,8 +1757,9 @@ impl PactlockeApp {
             ui.add_space(6.0);
             game_over::survivors(ui, &over.longest);
             ui.label(format!(
-                "Deaths: {} · play time {}",
+                "Deaths: {} · Rescues used: {} · play time {}",
                 summary.deaths,
+                summary.rescues,
                 game_over::duration(over.play_ms)
             ));
             ui.add_space(6.0);
@@ -2073,6 +2129,7 @@ enum Menu {
     Mute,
     Speed(Speed),
     Retry,
+    Rescue,
     Screenshot,
     TogglePanel,
     TogglePopOut,
@@ -2423,6 +2480,7 @@ impl eframe::App for PactlockeApp {
         self.new_run_prompt(&ctx);
         self.delete_prompt(&ctx);
         self.lost_summary(&ctx);
+        self.rescue_menu(&ctx);
         self.game_chooser(&ctx);
         self.solo_copy_prompt(&ctx);
         self.settings_window(&ctx);

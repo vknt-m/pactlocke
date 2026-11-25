@@ -116,6 +116,7 @@ pub fn screen(ui: &mut egui::Ui, over: &GameOverView, view: &RunView, log: Optio
             survivors(ui, &over.longest);
             ui.add_space(12.0);
             tallies(ui, view, log);
+            rescues(ui, view, log);
             ui.add_space(6.0);
             ui.label(format!("Play time: {}", duration(over.play_ms)));
             ui.add_space(12.0);
@@ -197,6 +198,12 @@ fn tallies(ui: &mut egui::Ui, view: &RunView, log: Option<&RunLog>) {
             );
         }
     }
+}
+
+/// How many Rescues the Run used: with friends from the Run log, alone from the Run.
+fn rescues(ui: &mut egui::Ui, view: &RunView, log: Option<&RunLog>) {
+    let used = log.map_or(view.rescues as usize, RunLog::rescues);
+    ui.label(format!("Rescues used: {used}"));
 }
 
 /// Every Pokémon that died: this Player's own graveyard, and with friends

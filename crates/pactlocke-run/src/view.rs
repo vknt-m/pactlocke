@@ -25,6 +25,12 @@ pub struct RunView {
     pub retries_left: Option<u8>,
     /// Whether there is a Run Checkpoint a Retry can go back to.
     pub run_checkpoint: bool,
+    /// The Rescue Points this Player's game can go back to, oldest first.
+    /// Alone, a Rescue goes to one of these; with friends, the Run log
+    /// says which every Player has their part of.
+    pub rescue_points: Vec<RescuePointView>,
+    /// How many Rescues this Player's game has made.
+    pub rescues: u32,
     /// The Player's party, as of the last look.
     pub party: Vec<crate::SeenPokemon>,
     /// Where the Player is and what they are doing, for the Player strip.
@@ -40,6 +46,19 @@ pub struct RunView {
     pub game_over: Option<GameOverView>,
     /// The Ruleset's rules this game does through its own options, as of the last look.
     pub native_options: Vec<NativeOptionView>,
+}
+
+/// A Rescue Point as this Player's game took it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RescuePointView {
+    /// Its event in this Player's Run file.
+    pub seq: u64,
+    /// Its checkpoint's hash, which a Rescue goes back to.
+    pub hash: String,
+    /// When it was taken (Unix milliseconds).
+    pub at_ms: i64,
+    /// The Area the game was in, by name.
+    pub area: Option<String>,
 }
 
 impl RunView {
@@ -203,6 +222,25 @@ impl Grave {
     }
 }
 
+/// How long ago, for a Rescue Point: "under a minute ago", "8 min ago", "1 h 5 min ago".
+pub fn minutes_ago(ms: i64) -> String {
+    match ms / 60_000 {
+        ..1 => "under a minute ago".to_owned(),
+        minutes @ 1..60 => format!("{minutes} min ago"),
+        minutes => format!("{} h {} min ago", minutes / 60, minutes % 60),
+    }
+}
+
+/// The feed's line for a Rescue back to a Rescue Point taken `ago_ms`
+/// before it, in `area`.
+fn rescued_line(ago_ms: i64, area: Option<&str>) -> String {
+    let place = area.map(|a| format!(" in {a}")).unwrap_or_default();
+    format!(
+        "Rescue: back to the Rescue Point from {}{place}. Everything since is undone, and no Retry was spent",
+        minutes_ago(ago_ms)
+    )
+}
+
 /// Every Player's Dead, newest first, as the shared Run log has them: the
 /// Deaths a Retry undid aren't among them.
 pub fn graves(log: &crate::RunLog) -> std::collections::BTreeMap<crate::PlayerKey, Vec<Grave>> {
@@ -319,7 +357,10 @@ impl FeedIcon {
             | RunEvent::GatePassed { .. }
             | RunEvent::GateOpened { .. }
             | RunEvent::GateRefused { .. } => FeedIcon::Gate,
-            RunEvent::Retried { .. } | RunEvent::RetryFailed { .. } => FeedIcon::Retry,
+            RunEvent::Retried { .. }
+            | RunEvent::Rescued { .. }
+            | RunEvent::RetryFailed { .. }
+            | RunEvent::RescueFailed { .. } => FeedIcon::Retry,
             RunEvent::SpeedChanged { .. } | RunEvent::OthersSpeed { .. } => FeedIcon::Speed,
             RunEvent::CheatFlag { .. } | RunEvent::Flagged { .. } | RunEvent::FlagCleared { .. } => FeedIcon::Cheat,
             RunEvent::Checkpoint { .. } => FeedIcon::Save,
@@ -376,7 +417,9 @@ impl FeedEntry {
                 | RunEvent::GateRefused { .. }
                 | RunEvent::GateOpened { .. }
                 | RunEvent::Retried { .. }
+                | RunEvent::Rescued { .. }
                 | RunEvent::RetryFailed { .. }
+                | RunEvent::RescueFailed { .. }
         ) {
             return None;
         }
@@ -416,6 +459,7 @@ impl FeedEntry {
             | RunEvent::Closed
             | RunEvent::GateVote { .. }
             | RunEvent::RetryVote { .. }
+            | RunEvent::RescueVote { .. }
             | RunEvent::DropoutVote { .. }
             | RunEvent::FlagVote { .. } => return None,
             RunEvent::FlagCleared { player, frame } => (
@@ -459,10 +503,14 @@ impl FeedEntry {
                 (FeedKind::Block, format!("{} is closed for you too: {why}", source.name))
             }
             RunEvent::RetryFailed { reason } => (FeedKind::Problem, format!("The Retry couldn't be made: {reason}")),
+            RunEvent::RescueFailed { reason } => (FeedKind::Problem, format!("The Rescue couldn't be made: {reason}")),
             RunEvent::Retried { .. } => (
                 FeedKind::Run,
                 "Retry: back to the latest Run Checkpoint, and everything since is undone".to_owned(),
             ),
+            RunEvent::Rescued { to_ms, area, .. } => {
+                (FeedKind::Run, rescued_line(recorded.at_ms - to_ms, area.as_deref()))
+            }
             RunEvent::Suspended => (FeedKind::Run, "Run suspended".to_owned()),
             RunEvent::GameReset => (FeedKind::Run, "The game was reset to an older save".to_owned()),
             // Another Player's flag reaches the feed through the Run log, as `Flagged`.

@@ -38,10 +38,25 @@ pub enum RunCommand {
         /// Which Run Checkpoint in the Run log, counting from 1.
         call: u64,
     },
+    /// The Host's Rescue Point, the `call`th Run Checkpoint in the Run log:
+    /// this game is captured with it at the next quiet overworld moment.
+    JoinRescuePoint {
+        /// Which Run Checkpoint in the Run log, counting from 1.
+        call: u64,
+    },
+    /// In a Run with friends, on the Host's app: a Rescue Point is due, so
+    /// this game calls one at the next quiet overworld moment.
+    CallRescuePoint,
     /// A Retry.
     Retry {
         /// Where the Retry goes back to.
         to: RetryTo,
+    },
+    /// A Rescue: the game goes back to this Player's part of a Rescue
+    /// Point, by its hash. No Retry is spent.
+    Rescue {
+        /// The hash of this Player's part of the Rescue Point.
+        to: String,
     },
     /// Links: this Pokémon dies with its Link (`why` says how it broke).
     LinkDeath {
@@ -240,7 +255,23 @@ impl<G: PlayedGame> RunningGame<G> {
                 .to_owned(),
             RetryTo::Checkpoint(hash) => hash.clone(),
         };
-        let (seq, checkpoint) = self.engine.find_run_checkpoint(&hash)?;
+        self.go_back(&hash, false)
+    }
+
+    /// A Rescue: the game goes back to this Player's part of the Rescue
+    /// Point with hash `to`, as for a Retry, but no Retry is spent.
+    /// Nothing is recorded unless the game got back there.
+    pub fn rescue(&mut self, to: &str) -> Result<(), String> {
+        if self.engine.view().wipe.is_some() {
+            return Err("your party is wiped, and only a Retry can undo that".to_owned());
+        }
+        self.go_back(to, true)
+    }
+
+    /// The game goes back to its Run Checkpoint with this hash as a new
+    /// boot, for a Retry or a Rescue.
+    fn go_back(&mut self, hash: &str, rescue: bool) -> Result<(), String> {
+        let (seq, checkpoint) = self.engine.find_run_checkpoint(hash)?;
         let stored = self
             .engine
             .stored()
@@ -266,7 +297,7 @@ impl<G: PlayedGame> RunningGame<G> {
             frame: from.1,
             clock_ms: booted.clock_ms,
         };
-        let mut engine = self.engine.retry(stored, seq, checkpoint);
+        let mut engine = self.engine.go_back(stored, seq, checkpoint, rescue);
         engine.booted(booted);
         self.engine = engine;
         self.streamed = 0;
@@ -290,6 +321,8 @@ impl<G: PlayedGame> RunningGame<G> {
                 RunCommand::Nickname { pid, name } => self.engine.name_pokemon(pid, &name, &mut self.game),
                 RunCommand::OutOfSync { player, frame } => self.engine.out_of_sync(player, frame),
                 RunCommand::JoinCheckpoint { call } => self.engine.join_checkpoint(call),
+                RunCommand::JoinRescuePoint { call } => self.engine.join_rescue_point(call),
+                RunCommand::CallRescuePoint => self.engine.call_rescue_point(),
                 RunCommand::LinkDeath { pid, why } => self.engine.link_death(pid, why, &mut self.game),
                 RunCommand::LinkStanding(standing) => self.engine.link_standing(standing),
                 RunCommand::EndRun => self.engine.end_run(),
@@ -317,6 +350,11 @@ impl<G: PlayedGame> RunningGame<G> {
                 RunCommand::Retry { to } => {
                     if let Err(why) = self.retry(&to) {
                         self.engine.retry_failed(why);
+                    }
+                }
+                RunCommand::Rescue { to } => {
+                    if let Err(why) = self.rescue(&to) {
+                        self.engine.rescue_failed(why);
                     }
                 }
             }

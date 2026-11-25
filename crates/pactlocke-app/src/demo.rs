@@ -125,6 +125,8 @@ fn checkpoint(reason: CheckpointReason, frame: u64) -> RunEvent {
         hash: "demo".to_owned(),
         boot: 1,
         frame,
+        at_ms: 0,
+        area: None,
     }
 }
 

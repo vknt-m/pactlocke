@@ -26,6 +26,14 @@ use crate::{LiveGame, NewRun, Recorded, RunClock, RunEvent};
 /// at every big event, so a crash loses at most about this much.
 pub const SUSPEND_SLOT_EVERY_MS: i64 = 2 * 60 * 1000;
 
+/// How often a Rescue Point is called: by the Host in a Run with friends,
+/// by the Player's own app alone.
+pub const RESCUE_POINT_EVERY_MS: i64 = 4 * 60 * 1000;
+
+/// How many Rescue Points a Run offers and its Run file keeps, one every
+/// [`RESCUE_POINT_EVERY_MS`]. A new one overwrites the oldest.
+pub const RESCUE_POINTS_KEPT: usize = 10;
+
 /// How often the input stream is flushed to storage, so a crash loses at most this much.
 const FLUSH_EVERY_MS: i64 = 1000;
 
@@ -104,6 +112,16 @@ pub struct RunEngine {
     boot_plan: BootPlan,
     /// The checkpoint the game should be given at this frame boundary, and why.
     checkpoints_due: VecDeque<CheckpointReason>,
+    /// Parts of Rescue Points waiting for a quiet overworld moment, when
+    /// they go to `checkpoints_due`.
+    rescue_points_waiting: VecDeque<CheckpointReason>,
+    /// When this game last called a Rescue Point (or, before any, when the Run was opened).
+    rescue_point_called_ms: i64,
+    /// The Host's Rescue Points this game gave its part of, by call.
+    rescue_calls_joined: BTreeSet<u64>,
+    /// The events of the newest [`RESCUE_POINTS_KEPT`] Rescue Point parts
+    /// recorded, void or not, oldest first: the ones the Run file keeps.
+    rescue_window: VecDeque<u64>,
     /// Whether this boot started from a checkpoint (a suspend or a crash
     /// rebuild), so a battle under way is the one the log already decided.
     resumed_mid_game: bool,
@@ -145,6 +163,8 @@ pub struct RunEngine {
     latest_run_checkpoint: Option<String>,
     /// Retries this Player took (solo Runs spend the pool this way).
     retries_taken: u8,
+    /// Rescues this Player's game made.
+    rescues_taken: u32,
     /// Handed its Run over to the engine after a Retry: it records nothing more.
     retired: bool,
     /// The Sync Gates held in this boot.
@@ -308,6 +328,26 @@ impl RunEngine {
             .iter()
             .filter(|e| matches!(e.event, RunEvent::Retried { .. }));
         engine.retries_taken = u8::try_from(retries.count()).unwrap_or(u8::MAX);
+        let rescues = stored
+            .events
+            .iter()
+            .filter(|e| matches!(e.event, RunEvent::Rescued { .. }));
+        engine.rescues_taken = u32::try_from(rescues.count()).unwrap_or(u32::MAX);
+        engine.view.rescues = engine.rescues_taken;
+        // Every part kept, void or not, as the Run file prunes them.
+        let points: Vec<&Recorded> = stored.events.iter().filter(|e| is_rescue_point(&e.event)).collect();
+        if let Some(newest) = points.last() {
+            engine.rescue_point_called_ms = newest.at_ms;
+        }
+        engine.rescue_window = points
+            .iter()
+            .rev()
+            .take(RESCUE_POINTS_KEPT)
+            .rev()
+            .map(|e| e.seq)
+            .collect();
+        let window = engine.rescue_window.clone();
+        engine.view.rescue_points.retain(|p| window.contains(&p.seq));
         engine.view.retries_left = (engine.info.ruleset.retries > 0).then(|| engine.retries_left());
         engine
     }
@@ -327,6 +367,29 @@ impl RunEngine {
     /// Player's game is captured with it at this frame boundary.
     pub fn join_checkpoint(&mut self, call: u64) {
         self.checkpoints_due.push_back(CheckpointReason::Joined { call });
+    }
+
+    /// The Host's Rescue Point, the `call`th Run Checkpoint in the Run log:
+    /// this Player's game is captured with it at the next quiet overworld moment.
+    /// A call this game gave its part of already, or has waiting, is taken once.
+    pub fn join_rescue_point(&mut self, call: u64) {
+        let reason = CheckpointReason::JoinedRescuePoint { call };
+        if self.rescue_calls_joined.contains(&call) || self.rescue_points_waiting.contains(&reason) {
+            return;
+        }
+        self.rescue_points_waiting.push_back(reason);
+    }
+
+    /// The Host's app says a Rescue Point is due: this game calls one at the
+    /// next quiet overworld moment, unless it has one waiting or called one
+    /// lately (the Run log may not have it yet).
+    pub fn call_rescue_point(&mut self) {
+        let waiting = self.rescue_points_waiting.contains(&CheckpointReason::RescuePoint);
+        if waiting || self.clock.now_ms() - self.rescue_point_called_ms < RESCUE_POINT_EVERY_MS / 2 {
+            return;
+        }
+        self.rescue_point_called_ms = self.clock.now_ms();
+        self.rescue_points_waiting.push_back(CheckpointReason::RescuePoint);
     }
 
     /// The Run Checkpoint with this hash, as stored (the newest few are kept
@@ -369,9 +432,34 @@ impl RunEngine {
     /// once the game is back there: the Retry is recorded and this engine
     /// hands its Run (`stored`, from just before) to a new one for the next
     /// boot of the game. What was recorded after that checkpoint is void.
-    pub(crate) fn retry(&mut self, mut stored: crate::storage::StoredRun, to_seq: u64, to: StoredCheckpoint) -> Self {
+    /// With `rescue`, it is a Rescue instead, which spends no Retry.
+    pub(crate) fn go_back(
+        &mut self,
+        mut stored: crate::storage::StoredRun,
+        to_seq: u64,
+        to: StoredCheckpoint,
+        rescue: bool,
+    ) -> Self {
         let hash = to.hash();
-        self.record(RunEvent::Retried { to_seq, hash });
+        if rescue {
+            let (to_ms, area) = stored
+                .events
+                .iter()
+                .chain(&self.recorded_since)
+                .find_map(|e| match &e.event {
+                    RunEvent::Checkpoint { at_ms, area, .. } if e.seq == to_seq => Some((*at_ms, area.clone())),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            self.record(RunEvent::Rescued {
+                to_seq,
+                hash,
+                to_ms,
+                area,
+            });
+        } else {
+            self.record(RunEvent::Retried { to_seq, hash });
+        }
         self.flush();
         self.retired = true;
         stored.events.extend(self.stored_since(&stored));
@@ -382,6 +470,7 @@ impl RunEngine {
         }
         let mut engine = Self::reopened(&stored, storage, clock);
         engine.shared = std::mem::take(&mut self.shared);
+        engine.with_friends = self.with_friends;
         engine.save_memory = (!to.core.save_memory.is_empty()).then(|| to.core.save_memory.clone());
         engine.recent_checkpoints.push_back(to.clone());
         engine.boot_plan = BootPlan::Retry(to);
@@ -429,12 +518,16 @@ impl RunEngine {
         let checkpoint = self.run_checkpoint(reason, core);
         let hash = checkpoint.hash();
         let (boot, frame) = (self.boot, self.frame);
+        let at_ms = self.clock.now_ms();
+        let area = self.area_here.as_ref().map(|a| a.name.clone());
         self.record_with(
             RunEvent::Checkpoint {
                 reason,
                 hash,
                 boot,
                 frame,
+                at_ms,
+                area,
             },
             Stored::Checkpoint(&checkpoint),
         );
@@ -451,6 +544,11 @@ impl RunEngine {
     /// A Retry couldn't be made: the feed says why.
     pub fn retry_failed(&mut self, reason: String) {
         self.record(RunEvent::RetryFailed { reason });
+    }
+
+    /// A Rescue couldn't be made: the feed says why.
+    pub fn rescue_failed(&mut self, reason: String) {
+        self.record(RunEvent::RescueFailed { reason });
     }
 
     /// Every ROM patch active in this boot, by address.
@@ -644,6 +742,11 @@ impl RunEngine {
             run_checkpoints: BTreeMap::new(),
             latest_run_checkpoint: None,
             retries_taken: 0,
+            rescues_taken: 0,
+            rescue_points_waiting: VecDeque::new(),
+            rescue_point_called_ms: now,
+            rescue_window: VecDeque::new(),
+            rescue_calls_joined: BTreeSet::new(),
             retired: false,
             gates_held: BTreeSet::new(),
             at_gate: None,
@@ -795,6 +898,13 @@ impl RunEngine {
             if battle.is_none() && game.at_safe_overworld_point() {
                 self.pass_gates(game);
             }
+        }
+
+        if !self.with_friends && self.game_running {
+            self.call_rescue_point();
+        }
+        if battle.is_none() && self.game_running && self.quiet(game) {
+            self.checkpoints_due.extend(self.rescue_points_waiting.drain(..));
         }
 
         if battle.is_none() && self.quiet(game) {
@@ -1359,6 +1469,36 @@ impl RunEngine {
             self.retries_taken = self.retries_taken.saturating_add(1);
             self.latest_run_checkpoint = Some(hash.clone());
         }
+        if let RunEvent::Rescued { hash, .. } = &recorded.event {
+            self.rescues_taken = self.rescues_taken.saturating_add(1);
+            self.view.rescues = self.rescues_taken;
+            self.latest_run_checkpoint = Some(hash.clone());
+        }
+        if let RunEvent::Checkpoint {
+            reason: CheckpointReason::JoinedRescuePoint { call },
+            ..
+        } = &recorded.event
+        {
+            self.rescue_calls_joined.insert(*call);
+        }
+        if let RunEvent::Checkpoint { hash, at_ms, area, .. } = &recorded.event
+            && is_rescue_point(&recorded.event)
+        {
+            if !self.rescue_window.contains(&recorded.seq) {
+                self.rescue_window.push_back(recorded.seq);
+            }
+            while self.rescue_window.len() > RESCUE_POINTS_KEPT {
+                self.rescue_window.pop_front();
+            }
+            self.view.rescue_points.push(crate::RescuePointView {
+                seq: recorded.seq,
+                hash: hash.clone(),
+                at_ms: *at_ms,
+                area: area.clone(),
+            });
+            let window = &self.rescue_window;
+            self.view.rescue_points.retain(|p| window.contains(&p.seq));
+        }
         match &recorded.event {
             RunEvent::LevelCapSet { level, next, .. } => {
                 self.view.level_cap = Some(LevelCapView {
@@ -1420,17 +1560,22 @@ enum Stored<'a> {
     Suspend(&'a StoredCheckpoint),
 }
 
-/// The events that stand: a Retry voids everything recorded after the Run
-/// Checkpoint it went back to, though not the Retry itself.
+/// The events that stand: a Retry or a Rescue voids everything recorded
+/// after the Run Checkpoint it went back to, though not itself.
 pub(crate) fn standing(events: &[Recorded]) -> Vec<&Recorded> {
     let mut standing: Vec<&Recorded> = Vec::new();
     for recorded in events {
-        if let RunEvent::Retried { to_seq, .. } = recorded.event {
+        if let Some((to_seq, _)) = recorded.event.went_back() {
             standing.retain(|e| e.seq <= to_seq);
         }
         standing.push(recorded);
     }
     standing
+}
+
+/// Part of a Rescue Point: the Player's own call, or their part of the Host's.
+fn is_rescue_point(event: &RunEvent) -> bool {
+    matches!(event, RunEvent::Checkpoint { reason, .. } if reason.is_rescue_point())
 }
 
 /// Where a retired engine's writes would go: nowhere, since it records nothing.
