@@ -487,3 +487,77 @@ fn unlisted_gifts_of_different_species_are_not_linked() {
     assert_eq!(gifts.len(), 2, "{gifts:?}");
     assert!(gifts.iter().all(pactlocke_run::Link::pending), "{gifts:?}");
 }
+
+#[test]
+fn after_a_retry_a_link_that_breaks_again_closes_the_source_again() {
+    let mut table = Table::start(
+        &["Red", "Blue"],
+        Ruleset {
+            retries: 1,
+            ..soul_link()
+        },
+    );
+    both_play(&mut table, 100);
+    // A second Pokémon, so the Pidgey's Death doesn't wipe Red's party.
+    catches_on(&mut table, 0, route_2(), 0xA2);
+    table.walks_into(0, route_1());
+    table.meets_wild(0, PIDGEY);
+    table.catches(0, PIDGEY, 0xA1);
+    both_play(&mut table, 120);
+    table.saves(0);
+    both_play(&mut table, 40);
+    let (party, pc) = (table.game(0).party.clone(), table.game(0).pc.clone());
+    table.faints(0, 0xA1);
+    both_play(&mut table, 120);
+    assert_eq!(route_1_link(&table, 1).broken.as_deref(), Some("Red's PIDGEY died"));
+
+    table.votes(0, 1, true);
+    table.votes(1, 1, true);
+    // The fake's Pokémon aren't in its savestate: put them back as the Retry
+    // would. Red is back in the save menu, where no Shadow looks at the party.
+    table.happens(0, |g| {
+        g.party = party.clone();
+        g.pc = pc.clone();
+        g.safe_point = false;
+    });
+    both_play(&mut table, 300);
+    table.waits(1000);
+    assert_eq!(
+        table.apps[1].shadow_of(key(0)).boot(),
+        2,
+        "Blue's Shadow of Red followed the Retry"
+    );
+    let link = route_1_link(&table, 1);
+    assert!(link.pending() && link.broken.is_none(), "whole again: {link:?}");
+    assert!(
+        matches!(
+            link.member(&key(0)),
+            Some(Member::Caught {
+                pid: 0xA1,
+                judged: true,
+                dead: false,
+                ..
+            })
+        ),
+        "Blue's Shadow of Red still owns the Pidgey, as at the checkpoint: {link:?}"
+    );
+
+    // Red leaves the menu, and the same Pidgey dies again.
+    table.happens(0, |g| g.safe_point = true);
+    table.faints(0, 0xA1);
+    both_play(&mut table, 120);
+    assert_eq!(route_1_link(&table, 1).broken.as_deref(), Some("Red's PIDGEY died"));
+    // The Feed is newest first: the lines above the Retry's came after it.
+    let closed = "Route 1 is closed for you too: Red's PIDGEY died";
+    assert!(
+        feed(&table, 1)
+            .iter()
+            .take_while(|e| !e.starts_with("Retry: back to"))
+            .any(|e| e == closed),
+        "closed again after the Retry: {:?}",
+        feed(&table, 1)
+    );
+    table.walks_into(1, route_1());
+    table.meets_wild(1, RATTATA);
+    assert!(table.game(1).catches_blocked);
+}

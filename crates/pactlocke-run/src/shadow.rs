@@ -161,6 +161,8 @@ impl<G: PlayedGame> ShadowGame<G> {
             frame: from.at.frame,
             core: from.core.clone(),
             patches: shadow.patches.clone(),
+            owned: shadow.seen.owned.clone(),
+            fainted: shadow.seen.fainted.clone(),
         });
         shadow.look();
         Ok(shadow)
@@ -457,6 +459,8 @@ impl<G: PlayedGame> ShadowGame<G> {
                         frame,
                         core: self.game.core_mut().checkpoint(),
                         patches: self.patches.clone(),
+                        owned: self.seen.owned.clone(),
+                        fainted: self.seen.fainted.clone(),
                     });
                     while self.checkpoints.len() > CHECKPOINTS_KEPT {
                         self.checkpoints.pop_front();
@@ -545,8 +549,13 @@ impl<G: PlayedGame> ShadowGame<G> {
         self.items.clear();
         self.theirs.clear();
         self.ours.clear();
-        // What it saw after the checkpoint is undone with it.
-        self.seen = Seen::default();
+        // What it saw after the checkpoint is undone with it, and what it
+        // had seen by then stands, as it did the first time.
+        self.seen = Seen {
+            owned: kept.owned,
+            fainted: kept.fainted,
+            ..Seen::default()
+        };
         let now = self.last_arrival_ms.unwrap_or(0);
         for chunk in &next.chunks {
             self.receive(chunk, now);
@@ -651,6 +660,9 @@ struct Kept {
     frame: u64,
     core: Checkpoint,
     patches: BTreeMap<u32, Vec<u8>>,
+    /// The PIDs it had seen owned and fainted by then.
+    owned: std::collections::BTreeSet<u32>,
+    fainted: std::collections::BTreeSet<u32>,
 }
 
 /// The Player's boot after a Retry, before the Shadow follows it.
