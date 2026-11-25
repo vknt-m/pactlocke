@@ -90,9 +90,9 @@ Everyone needs Pactlocke (the same version) and their own copy of the same ROM.
 2. Pick your copy of the ROM when asked.
 3. Tick **Ready**.
 
-![Hosting a Lobby: the invite link, the Players and the Ruleset](docs/images/lobby.png)
+![The home screen: New Run, Join a Run and Open a ROM, and a table of Runs with their games, Players, Deaths and a Resume button each](docs/images/home.png)
 
-*The Host's Lobby: the invite link, who has joined, and the rules being picked.*
+*The home screen: start or join a Run, or pick up any of yours where you left it.*
 
 After the lock there's a 3-2-1 countdown and every game starts from a new game at the same moment. From then on:
 
