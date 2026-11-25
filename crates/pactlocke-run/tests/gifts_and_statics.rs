@@ -132,6 +132,26 @@ fn a_second_pokemon_from_the_same_gift_is_released() {
 }
 
 #[test]
+fn a_gift_alone_in_the_party_waits_to_be_released_until_another_pokemon_joins() {
+    let mut player = with_starter(rules(false, false));
+    // The starter is put in the PC, so the party is empty.
+    let starter = player.game.party.remove(0);
+    player.game.pc.push(pactlocke_game::StoredPokemon {
+        box_number: 1,
+        slot: 1,
+        pokemon: starter.clone(),
+    });
+    player.receives_gift(party_pokemon(ABRA, 0xAB, "ABRA"), PRIZE_AT + 0x20);
+    player.plays(30);
+    assert_eq!(player.party_pids(), [0xAB], "an empty party would break the game");
+
+    player.game.pc.clear();
+    player.game.party.push(starter);
+    player.plays(30);
+    assert_eq!(player.party_pids(), [STARTER], "released once it isn't the last one");
+}
+
+#[test]
 fn a_gift_sent_to_the_pc_is_found_and_released_from_there() {
     let mut player = with_starter(rules(false, false));
     player.receives_gift_in_pc(party_pokemon(ABRA, 0xAB, "ABRA"), PRIZE_AT + 0x20);
@@ -192,8 +212,9 @@ fn a_pokemon_lent_for_a_scene_is_neither_a_trade_nor_a_gift() {
 #[test]
 fn with_gifts_off_a_traded_in_pokemon_is_released() {
     let mut player = with_starter(rules(false, false));
+    player.game.party.push(party_pokemon(SNORLAX, 0x5A, "SNORLAX"));
     player.trades(0, party_pokemon(ABRA, 0xAB, "ABRA"));
-    assert!(player.party_pids().is_empty());
+    assert_eq!(player.party_pids(), [0x5A]);
 }
 
 #[test]

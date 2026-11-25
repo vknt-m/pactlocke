@@ -154,9 +154,12 @@ impl RunEngine {
         }
         loop {
             let party = game.party();
-            let in_party = party
-                .iter()
-                .position(|p| self.rules.to_release(p.pid) && !self.release_failed.contains(&p.pid));
+            // The game breaks with an empty party: the last Pokémon in it
+            // waits until another joins it (an Egg is no Pokémon here).
+            let last_one = party.iter().filter(|p| !p.is_egg).count() <= 1;
+            let in_party = party.iter().position(|p| {
+                self.rules.to_release(p.pid) && !self.release_failed.contains(&p.pid) && !(last_one && !p.is_egg)
+            });
             let (pokemon, changes) =
                 if let Some(slot) = in_party {
                     let slot_number = u8::try_from(slot).expect("a party has six slots");
