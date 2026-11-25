@@ -202,13 +202,18 @@ Another Player's catches and Deaths count only once your app has seen them happe
 <details>
 <summary><b>Sync Gates</b></summary>
 
-Every preset makes each gym leader, Elite Four member and the Champion a Sync Gate; the Host can untick any. Talking to the leader shows "Waiting for your partners to be ready..." and readies you up. You can walk away and your Ready stays. With a Pokémon over the level cap you can't ready up. When everyone is Ready the real battle starts, and a Run Checkpoint of every game is taken.
+Every preset makes each gym leader, Elite Four member and the Champion a Sync Gate; the Host can untick any. Talking to the leader shows "Waiting for your partners to be ready..." and readies you up. You can walk away and your Ready stays. With a Pokémon over the level cap you can't ready up. When everyone is Ready the real battle starts, and a Run Checkpoint of every game is taken. A gate a Player got past on their own lets the others go too, and if the app can't tell, everyone can vote to let it go.
 </details>
 
 <details>
-<summary><b>Retries and Run Checkpoints</b></summary>
+<summary><b>Retries, Rescues and Run Checkpoints</b></summary>
 
-Whenever any Player saves in-game, every Player's game is captured with it: a Run Checkpoint. Alone, **Retry** goes back to your latest one. With friends, any Player can start a Retry vote; everyone must say Yes, and the first No ends it. A Retry undoes everything since the checkpoint for everyone: catches, Encounters, Deaths and closed Areas.
+Whenever any Player saves in-game, every Player's game is captured with it: a Run Checkpoint. About every 4 minutes the app also takes a Rescue Point, a Run Checkpoint every game gives its part of at its next quiet moment on the overworld. The Run keeps the newest 10, about the last 40 minutes.
+
+- **Retry** (after a wipe, from the Run's shared pool): choose where to go back to, the latest Run Checkpoint or any Rescue Point, each shown with its time and every Player's Area. So a wipe moments after a save can go back further. Each Retry spends one, whichever point you choose.
+- **Rescue** (**Emulation › Rescue…**, free, any time): when a game is stuck, everyone goes back to a Rescue Point. No Retry is spent, but a wiped party can only be undone by a Retry.
+
+Alone, you choose and go. With friends, choosing a point starts a vote; everyone must say Yes, and the first No ends it. Either way, everything since the point is undone for everyone: catches, Encounters, Deaths and closed Areas.
 </details>
 
 <details>
@@ -248,7 +253,7 @@ A flag says who, what, when, and who saw it. Nothing happens automatically: the 
 | Graveyard | Every Player's Dead as icons; hover for the name and what killed it. |
 | Ruleset | Every rule, the level cap, Retries and Sync Gates. With friends, the Lobby is below it. |
 
-**Settings** (**Options › Settings**): your name and default speed, controls, sound (volume, mute while fast-forwarding, the sound of the game you watch, output device), video (scaling, filter, colour correction), network relays, data and logs.
+**Settings** (**Options › Settings**): your name and default speed, controls, sound (volume, mute while fast-forwarding, the sound of the game you watch, output device), video (scaling, filter, colour correction), UI scale and Text size, network relays, data and logs.
 
 **Where things are kept:** in a `data` folder next to the app, or your user data folder if that can't be written to.
 
