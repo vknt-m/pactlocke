@@ -4087,7 +4087,7 @@ dependencies = [
 
 [[package]]
 name = "pactlocke-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "cpal",
@@ -4109,7 +4109,7 @@ dependencies = [
 
 [[package]]
 name = "pactlocke-dev"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pactlocke-game",
  "serde_json",
@@ -4117,11 +4117,11 @@ dependencies = [
 
 [[package]]
 name = "pactlocke-emu"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "pactlocke-game"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pactlocke-emu",
  "pactlocke-mgba",
@@ -4133,7 +4133,7 @@ dependencies = [
 
 [[package]]
 name = "pactlocke-mgba"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cmake",
  "pactlocke-emu",
@@ -4142,7 +4142,7 @@ dependencies = [
 
 [[package]]
 name = "pactlocke-net"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "getrandom 0.3.4",
  "iroh",
@@ -4153,7 +4153,7 @@ dependencies = [
 
 [[package]]
 name = "pactlocke-randomizer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "crc32fast",
@@ -4167,7 +4167,7 @@ dependencies = [
 
 [[package]]
 name = "pactlocke-run"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ed25519-dalek 2.2.0",
  "log",
